@@ -1,0 +1,1388 @@
+//! End-to-end: real HTTP server + rmcp client.
+
+use af_core::galaxy::{GenesisConfig, generate};
+use af_mcp::game::Game;
+use af_mcp::http::{HttpConfig, router};
+use rmcp::ServiceExt;
+use rmcp::model::{CallToolRequestParams, CallToolResponse, ContentBlock, GetPromptRequestParams, ReadResourceRequestParams};
+use rmcp::transport::StreamableHttpClientTransport;
+use serde_json::{Value, json};
+
+async fn start() -> (String, Game) {
+    start_with_admin("adm").await
+}
+
+async fn start_with_admin(admin: &str) -> (String, Game) {
+    let game = Game::spawn(generate(&GenesisConfig::new(5, 120)), None);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{addr}");
+    let app = router(
+        game.clone(),
+        HttpConfig {
+            public_url: url.clone(),
+            admin_token: Some(admin.into()),
+            spectator_key: None,
+            open_registration: true,
+            allowed_hosts: vec![],
+            backup_dir: None,
+        },
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, game)
+}
+
+fn text(r: &CallToolResponse) -> (bool, String) {
+    match r {
+        CallToolResponse::Complete(c) => (
+            !c.is_error.unwrap_or(false),
+            c.content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text(t) => Some(t.text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        _ => (false, String::new()),
+    }
+}
+
+fn envelope(t: &str) -> Value {
+    t.split_once('\n')
+        .and_then(|(_, j)| serde_json::from_str(j).ok())
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_over_http_end_to_end() {
+    let (url, _game) = start().await;
+    let http = reqwest::Client::new();
+    let reg: Value = http
+        .post(format!("{url}/api/register"))
+        .json(&json!({"name": "E2E", "model": "test"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = reg["token"].as_str().unwrap().to_string();
+    // The token appears only where it is needed: no ready-made header string to leak.
+    assert!(reg.get("header").is_none() && reg.get("mcp_url_with_header").is_none(), "{reg}");
+    assert_eq!(reg["mcp_url"], json!(format!("{url}/mcp/{token}")));
+
+    let client = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{token}"))).await.unwrap();
+    let peer = client.peer();
+    let tools = peer.list_all_tools().await.unwrap();
+    assert_eq!(tools.len(), af_mcp::tools::catalog().len());
+    for t in &tools {
+        assert!(
+            t.description.as_ref().map(|d| d.len() > 20).unwrap_or(false),
+            "{} lacks a description",
+            t.name
+        );
+        assert_eq!(
+            t.input_schema.get("type").and_then(|v| v.as_str()),
+            Some("object"),
+            "{} schema",
+            t.name
+        );
+        assert!(!t.input_schema.contains_key("$defs"), "{} schema must be self-contained", t.name);
+    }
+    let call = |name: &str, args: Value| {
+        let mut p = CallToolRequestParams::new(name.to_string());
+        p.arguments = args.as_object().cloned();
+        peer.call_tool_once(p)
+    };
+    let (ok, t) = text(&call("get_briefing", json!({})).await.unwrap());
+    assert!(ok, "{t}");
+    let env = envelope(&t);
+    assert_eq!(env["ok"], true);
+    // A new universe starts in its founding era: the briefing leads with the founding agenda,
+    // and the owner guidance points there.
+    let founding = &env["result"]["server"]["founding"];
+    assert_eq!(founding["agenda"].as_array().map(Vec::len), Some(6), "{founding}");
+    assert_eq!(founding["next"], founding["agenda"][0]["how"]);
+    let guidance = env["result"]["owner"]["guidance"].as_str().expect("owner guidance");
+    assert!(
+        guidance.contains("Founding era: follow server.founding first, then play."),
+        "{guidance}"
+    );
+    let sector = env["result"]["status"]["sector"].as_u64().unwrap();
+    let warps: Vec<u64> = env["result"]["sector"]["warps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["to"].as_u64().unwrap())
+        .collect();
+
+    // Move, then check AP was spent and the reply carries the new sector.
+    let (ok, t) = text(&call("warp", json!({"destination_sector": warps[0]})).await.unwrap());
+    assert!(ok, "{t}");
+    let env = envelope(&t);
+    assert!(env["ap"].as_i64().unwrap() < 500);
+    assert_ne!(env["result"]["you"]["sector"].as_u64(), Some(sector));
+
+    // Refusals are tool errors with a code and hint, not protocol errors.
+    let (ok, t) = text(&call("warp", json!({"destination_sector": 9999})).await.unwrap());
+    assert!(!ok);
+    assert!(t.contains("REFUSED [not_adjacent]"), "{t}");
+    let (ok, t) = text(
+        &call("attack_target", json!({"target_type": "ship", "target_id": "nobody"}))
+            .await
+            .unwrap(),
+    );
+    assert!(!ok && t.contains("REFUSED"), "{t}");
+    // Bad arguments are reported, not crashes.
+    let (ok, t) = text(&call("trade_port", json!({"commodity": "spice", "action": "buy"})).await.unwrap());
+    assert!(!ok && t.contains("invalid"), "{t}");
+
+    // Fog of war: a far sector is uncharted.
+    let (_, t) = text(&call("view_sector", json!({"sector_id": 119})).await.unwrap());
+    assert!(t.contains("\"charted\":false") || t.contains("\"explored\""), "{t}");
+
+    // Prompts and resources.
+    let prompts = peer.list_all_prompts().await.unwrap();
+    assert_eq!(prompts.len(), 5);
+    let mut gp = GetPromptRequestParams::new("corsair_archetype".to_string());
+    gp.arguments = json!({"call_sign": "Viper"}).as_object().cloned();
+    let p = peer.get_prompt(gp).await.unwrap();
+    let body = format!("{:?}", p.messages);
+    assert!(body.contains("Viper") && body.contains("untrusted"));
+    let r = peer
+        .read_resource(ReadResourceRequestParams::new("game://player/status"))
+        .await
+        .unwrap();
+    assert!(format!("{:?}", r.contents).contains("E2E"));
+
+    // Unauthenticated sessions are told how to join; join_game logs the session in.
+    let anon = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp"))).await.unwrap();
+    let mut p = CallToolRequestParams::new("get_status".to_string());
+    p.arguments = Some(Default::default());
+    let (ok, t) = text(&anon.peer().call_tool_once(p).await.unwrap());
+    assert!(!ok && t.contains("join_game"), "{t}");
+    let mut p = CallToolRequestParams::new("join_game".to_string());
+    p.arguments = json!({"name": "Walk-in"}).as_object().cloned();
+    let (ok, t) = text(&anon.peer().call_tool_once(p).await.unwrap());
+    assert!(ok && t.contains("af_"), "{t}");
+    let joined: Value = serde_json::from_str(&t[t.find('{').unwrap()..]).unwrap();
+    assert!(joined["owner_mcp_url"].as_str().is_some_and(|u| u.contains("/mcp/af_")), "{t}");
+    assert!(joined.get("session_logged_in").is_some(), "{t}");
+    let rkey = joined["recovery_key"].as_str().unwrap().to_string();
+    let old = joined["token"].as_str().unwrap().to_string();
+    // Lost the token? recover_access (no token needed) mints a new one for the same captain.
+    let fresh = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp"))).await.unwrap();
+    let mut p = CallToolRequestParams::new("recover_access".to_string());
+    p.arguments = json!({"call_sign": "Walk-in", "recovery_key": "afr_wrong"}).as_object().cloned();
+    let (ok, t) = text(&fresh.peer().call_tool_once(p).await.unwrap());
+    assert!(!ok && t.contains("recovery_failed"), "{t}");
+    let mut p = CallToolRequestParams::new("recover_access".to_string());
+    p.arguments = json!({"call_sign": "Walk-in", "recovery_key": rkey}).as_object().cloned();
+    let (ok, t) = text(&fresh.peer().call_tool_once(p).await.unwrap());
+    assert!(ok, "{t}");
+    let rec: Value = serde_json::from_str(&t[t.find('{').unwrap()..]).unwrap();
+    assert_ne!(rec["token"].as_str().unwrap(), old);
+    let stale = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{old}"))).await.unwrap();
+    let mut p = CallToolRequestParams::new("get_status".to_string());
+    p.arguments = Some(Default::default());
+    let (ok, _) = text(&stale.peer().call_tool_once(p).await.unwrap());
+    assert!(!ok, "the old token no longer works");
+    // The walk-in session can play right away (sessionful) or is told to reconnect (stateless).
+    let mut p = CallToolRequestParams::new("get_status".to_string());
+    p.arguments = Some(Default::default());
+    let (ok2, t2) = text(&anon.peer().call_tool_once(p).await.unwrap());
+    if t.contains("now logged in") {
+        assert!(ok2 && t2.contains("Walk-in"), "{t2}");
+    } else {
+        assert!(!ok2 && t2.contains("join_game"), "{t2}");
+    }
+
+    // Spectator API.
+    let state: Value = http
+        .get(format!("{url}/api/spectator/state"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // Public and live, but without positions or private fields.
+    let me = state["captains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "E2E")
+        .cloned()
+        .unwrap();
+    for hidden in ["sector", "credits", "bank", "ap", "fighters", "shields"] {
+        assert!(me.get(hidden).is_none(), "public captain row carries `{hidden}`");
+    }
+    assert!(state.get("players").is_none() && state.get("planets").is_none() && state.get("defenses").is_none());
+    let map: Value = http
+        .get(format!("{url}/api/spectator/map"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(map.get("sectors").is_none(), "the public map has no sector ids or lanes");
+    assert!(!map["stars"].as_array().unwrap().is_empty());
+    // Admin API is protected.
+    let status = http.post(format!("{url}/api/admin/tick")).send().await.unwrap().status();
+    assert_eq!(status.as_u16(), 401);
+    let ticked: Value = http
+        .post(format!("{url}/api/admin/tick"))
+        .bearer_auth("adm")
+        .json(&json!({"count": 3}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(ticked["ticked"], 3);
+
+    // The admin token opens the sysop tools over MCP (and only those).
+    let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
+    let sp = sysop.peer();
+    let names: Vec<String> = sp.list_all_tools().await.unwrap().iter().map(|t| t.name.to_string()).collect();
+    assert_eq!(
+        names,
+        af_mcp::sysop_mcp::catalog().iter().map(|t| t.name.to_string()).collect::<Vec<_>>()
+    );
+    let scall = |name: &str, args: Value| {
+        let mut p = CallToolRequestParams::new(name.to_string());
+        p.arguments = args.as_object().cloned();
+        sp.call_tool_once(p)
+    };
+    let (ok, t) = text(&scall("sysop_overview", json!({})).await.unwrap());
+    assert!(ok && t.contains("E2E"), "{t}");
+    let (ok, t) = text(
+        &scall("sysop_action", json!({"action": "message", "args": {"text": "hello captains"}}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok, "{t}");
+    let (ok, t) = text(&scall("get_briefing", json!({})).await.unwrap());
+    assert!(!ok && t.contains("sysop_only"), "{t}");
+    // The captain sees the operator message in its briefing.
+    let (_, t) = text(&call("get_briefing", json!({})).await.unwrap());
+    assert!(t.contains("hello captains"), "{t}");
+
+    // Every interaction is in the activity log, broken down by tool, without secrets.
+    let (ok, _) = text(&call("warp", json!({"sector": 99_999})).await.unwrap());
+    assert!(!ok);
+    // A request the transport refuses (no session, no initialize) is logged too.
+    let r = http
+        .post(format!("{url}/mcp/{token}"))
+        .header("accept", "application/json, text/event-stream")
+        .json(&json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "get_status", "arguments": {}}}))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_client_error(), "{}", r.status());
+    let act: Value = http
+        .get(format!("{url}/api/sysop/activity?name=E2E&hours=1"))
+        .bearer_auth("adm")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let tools: Vec<&str> = act["by_tool"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["tool"].as_str().unwrap())
+        .collect();
+    for t in ["register", "tools/list", "get_briefing", "warp", "tools/call"] {
+        assert!(tools.contains(&t), "{t} missing from {tools:?}");
+    }
+    let warp = act["by_tool"].as_array().unwrap().iter().find(|t| t["tool"] == "warp").unwrap();
+    assert!(
+        warp["refused"].as_u64().unwrap() >= 1 && warp["refusal_codes"]["invalid_args"] == 1,
+        "{warp}"
+    );
+    let mcp_session = act["sessions"].as_array().unwrap().iter().find(|x| x["session"] != "none").unwrap();
+    assert!(mcp_session["client"].as_str().unwrap().starts_with("rmcp/"), "{mcp_session}");
+    assert!(
+        mcp_session["sequence"].as_str().unwrap().starts_with("tools/list, get_briefing"),
+        "{mcp_session}"
+    );
+    assert!(!act.to_string().contains(&token), "the token must never be logged");
+    let all: Value = http
+        .get(format!("{url}/api/sysop/activity"))
+        .bearer_auth("adm")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        all["players"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "E2E" && p["calls"].as_u64().unwrap() > 3),
+        "{all}"
+    );
+    let (ok, t) = text(&scall("sysop_activity", json!({"captain": "E2E"})).await.unwrap());
+    assert!(ok && t.contains("by_tool"), "{t}");
+    let (_, t) = text(&scall("sysop_overview", json!({})).await.unwrap());
+    assert!(t.contains("calls_24h"), "{t}");
+    // Every console feature is available over MCP too.
+    for (tool, args, want) in [
+        ("sysop_alerts", json!({}), "open"),
+        ("sysop_comms", json!({}), "threads"),
+        ("sysop_comms", json!({"captain": "E2E"}), "messages"),
+        ("sysop_calls", json!({"captain": "E2E", "outcome": "refused"}), "invalid_args"),
+        ("sysop_sector", json!({"sector": 1}), "lanes_out"),
+        ("sysop_registry", json!({}), "concessions"),
+        ("sysop_registry", json!({"section": "leaderboard"}), "E2E"),
+        ("sysop_events", json!({"limit": 5}), "events"),
+        ("sysop_search", json!({"query": "e2e"}), "E2E"),
+        ("sysop_corp", json!({}), "corporations"),
+        ("sysop_journal", json!({"command": "warp"}), "entries"),
+    ] {
+        let (ok, t) = text(&scall(tool, args.clone()).await.unwrap());
+        assert!(ok && t.contains(want), "{tool} {args}: {t}");
+    }
+    // Corporations: charter, edit, inspect, disband, all over MCP.
+    let act = |action: &str, args: Value| scall("sysop_action", json!({"action": action, "args": args}));
+    let (ok, t) = text(
+        &act("create_corp", json!({"name": "E2E Works", "ceo": "E2E", "motto": "Test"}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok, "{t}");
+    let (ok, t) = text(
+        &act("set_corp", json!({"corp": "e2e works", "treasury": 1234, "motto": "Edited"}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok && t.contains("treasury=1234"), "{t}");
+    let (ok, t) = text(&scall("sysop_corp", json!({"name": "E2E Works"})).await.unwrap());
+    assert!(ok && t.contains("Edited") && t.contains("1234"), "{t}");
+    let (ok, t) = text(
+        &act("corp_remove_member", json!({"corp": "E2E Works", "player": "nobody-here"}))
+            .await
+            .unwrap(),
+    );
+    assert!(!ok && t.contains("unknown_player"), "{t}");
+    let (ok, t) = text(&act("disband_corp", json!({"corp": "E2E Works"})).await.unwrap());
+    assert!(ok && t.contains("Disbanded"), "{t}");
+    // Acknowledgements are shared with the console's REST endpoint.
+    let (ok, t) = text(&scall("sysop_action", json!({"action": "pause"})).await.unwrap());
+    assert!(ok, "{t}");
+    let (ok, t) = text(&scall("sysop_ack", json!({"key": "clock-held"})).await.unwrap());
+    assert!(ok, "{t}");
+    let acks: Value = http
+        .get(format!("{url}/api/sysop/acks"))
+        .bearer_auth("adm")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(acks["acks"]["clock-held"]["sig"], "held", "{acks}");
+    let (_, t) = text(&scall("sysop_alerts", json!({})).await.unwrap());
+    let v: Value = serde_json::from_str(t.split_once('\n').unwrap().1).unwrap();
+    assert!(
+        v["acknowledged"].as_array().unwrap().iter().any(|a| a["key"] == "clock-held"),
+        "{t}"
+    );
+    let (ok, _) = text(&scall("sysop_ack", json!({"key": "clock-held", "restore": true})).await.unwrap());
+    assert!(ok);
+    let (ok, _) = text(&scall("sysop_action", json!({"action": "resume"})).await.unwrap());
+    assert!(ok);
+
+    // The guides tell caches to revalidate.
+    for path in ["join", "llms.txt", "agents.txt", "robots.txt"] {
+        let r = http.get(format!("{url}/{path}")).send().await.unwrap();
+        assert_eq!(r.headers()["cache-control"], "no-cache", "{path}");
+    }
+
+    // The operator corrects a captain's public identity: harness set, model cleared.
+    let pid = reg["player_id"].as_u64().unwrap();
+    let admin = |action: &'static str, body: Value| {
+        let (http, url) = (http.clone(), url.clone());
+        async move {
+            http.post(format!("{url}/api/admin/{action}"))
+                .bearer_auth("adm")
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    admin("set_player", json!({"player": pid, "model": "", "harness": "Instinct"})).await;
+    let card: Value = http
+        .get(format!("{url}/api/spectator/player?name=E2E"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(card["harness"], "Instinct", "{card}");
+    assert!(card["model"].is_null(), "{card}");
+
+    // A ban holds: the recovery key no longer brings the captain back until the ban is lifted.
+    let key = reg["recovery_key"].as_str().unwrap().to_string();
+    let recover = |key: String| {
+        let (http, url) = (http.clone(), url.clone());
+        async move {
+            http.post(format!("{url}/api/recover"))
+                .json(&json!({"name": "E2E", "recovery_key": key}))
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let banned = admin("ban", json!({"player": pid})).await;
+    assert!(banned["summary"].as_str().unwrap().contains("banned"), "{banned}");
+    let r = recover(key.clone()).await;
+    assert!(r["token"].is_null(), "a banned captain must not recover: {r}");
+    admin("unban", json!({"player": pid})).await;
+    let r = recover(key).await;
+    let fresh = r["token"].as_str().expect("recovers after the ban is lifted").to_string();
+    let again = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{fresh}"))).await.unwrap();
+    let (ok, t) = text(
+        &again
+            .peer()
+            .call_tool_once(CallToolRequestParams::new("get_status".to_string()))
+            .await
+            .unwrap(),
+    );
+    assert!(ok, "the recovered token works: {t}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn feedback_is_exact_and_pages_on_every_interface() {
+    let (url, _game) = start().await;
+    let http = reqwest::Client::new();
+    let reg: Value = http
+        .post(format!("{url}/api/register"))
+        .json(&json!({"name": "Pager", "model": "test", "harness": "codex-cli"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = reg["token"].as_str().unwrap().to_string();
+    let admin = |action: &'static str, body: Value| {
+        let (http, url) = (http.clone(), url.clone());
+        async move {
+            http.post(format!("{url}/api/sysop/action/{action}"))
+                .bearer_auth("adm")
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let list = |q: String| {
+        let (http, url) = (http.clone(), url.clone());
+        async move {
+            http.get(format!("{url}/api/sysop/feedback{q}"))
+                .bearer_auth("adm")
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+
+    // A long report in many scripts, with tabs, CRLF and surrounding whitespace, arrives exactly;
+    // only a pasted token is scrubbed.
+    let secret = format!("af_{}", "0123456789abcdef".repeat(3));
+    let piece = "\tΕλληνικά 中文 العربية 🚀👩‍🚀 tab\there\r\n";
+    let mut long = format!("   leading, then the token {secret} by mistake\r\n");
+    while long.chars().count() < 14_900 {
+        long.push_str(piece);
+    }
+    long.push_str("end  \n  ");
+    let expected = long.replace(&secret, "[redacted]");
+    let r = http
+        .post(format!("{url}/api/feedback"))
+        .bearer_auth(&token)
+        .json(&json!({"about": "/join", "text": long}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let one = list("?limit=1".into()).await;
+    assert_eq!(one["feedback"][0]["text"], expected.as_str(), "stored exactly, token scrubbed");
+    assert_eq!((one["has_more"].as_bool(), one["next_before_id"].as_u64()), (Some(false), None));
+    // The same over MCP.
+    let captain = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{token}"))).await.unwrap();
+    let mut p = CallToolRequestParams::new("send_feedback".to_string());
+    p.arguments = json!({"about": "/join", "text": long}).as_object().cloned();
+    let (ok, t) = text(&captain.peer().call_tool_once(p).await.unwrap());
+    assert!(ok, "{t}");
+    assert_eq!(list("?limit=1".into()).await["feedback"][0]["text"], expected.as_str());
+
+    // Twelve reports (five per captain per 60 ticks), every third resolved.
+    let mut sent = 2;
+    while sent < 12 {
+        admin("tick", json!({"count": 60})).await;
+        for _ in 0..5 {
+            if sent == 12 {
+                break;
+            }
+            sent += 1;
+            let r = http
+                .post(format!("{url}/api/feedback"))
+                .bearer_auth(&token)
+                .json(&json!({"about": "paging", "text": format!("report {sent}")}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(r.status(), 200);
+        }
+    }
+    for id in [3, 6, 9, 12] {
+        admin("resolve_feedback", json!({"id": id})).await;
+    }
+
+    // REST: walk every page with before_id.
+    for (status, want) in [
+        ("all", (1..=12).rev().collect::<Vec<u64>>()),
+        ("open", vec![11, 10, 8, 7, 5, 4, 2, 1]),
+    ] {
+        let (mut seen, mut before) = (vec![], None::<u64>);
+        loop {
+            let q = match before {
+                Some(b) => format!("?status={status}&limit=5&before_id={b}"),
+                None => format!("?status={status}&limit=5"),
+            };
+            let v = list(q).await;
+            assert_eq!((v["open"].as_u64(), v["total"].as_u64()), (Some(8), Some(12)), "{v}");
+            assert_eq!(v["matching"].as_u64(), Some(want.len() as u64));
+            seen.extend(v["feedback"].as_array().unwrap().iter().map(|f| f["id"].as_u64().unwrap()));
+            if v["has_more"] == true {
+                before = v["next_before_id"].as_u64();
+                assert_eq!(before, seen.last().copied());
+            } else {
+                assert!(v["next_before_id"].is_null());
+                break;
+            }
+        }
+        assert_eq!(seen, want, "{status}");
+    }
+
+    // The sysop MCP tool pages the same way.
+    let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
+    let (mut seen, mut before) = (vec![], Value::Null);
+    loop {
+        let mut p = CallToolRequestParams::new("sysop_feedback".to_string());
+        p.arguments = json!({"status": "resolved", "limit": 3, "before_id": before}).as_object().cloned();
+        let (ok, t) = text(&sysop.peer().call_tool_once(p).await.unwrap());
+        assert!(ok, "{t}");
+        let v = envelope(&t);
+        assert_eq!(v["matching"], 4, "{t}");
+        seen.extend(v["feedback"].as_array().unwrap().iter().map(|f| f["id"].as_u64().unwrap()));
+        if v["has_more"] == true {
+            assert!(t.contains("More: before_id"), "{t}");
+            before = v["next_before_id"].clone();
+        } else {
+            break;
+        }
+    }
+    assert_eq!(seen, vec![12, 9, 6, 3]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn feedback_reaches_the_operator() {
+    let (url, game) = start().await;
+    let http = reqwest::Client::new();
+    let reg: Value = http
+        .post(format!("{url}/api/register"))
+        .json(&json!({"name": "Critic", "model": "test", "harness": "codex-cli"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = reg["token"].as_str().unwrap().to_string();
+    let pid = reg["player_id"].as_u64().unwrap();
+
+    // A captain over MCP: free, stored whole.
+    let captain = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{token}"))).await.unwrap();
+    let mut p = CallToolRequestParams::new("send_feedback".to_string());
+    p.arguments = json!({"about": "/join", "text": "Line one.\nLine two."}).as_object().cloned();
+    let (ok, t) = text(&captain.peer().call_tool_once(p).await.unwrap());
+    assert!(ok, "{t}");
+    assert!(t.starts_with("Feedback #1 received."), "{t}");
+
+    // REST with the captain's token: from that captain.
+    let post = |body: Value, bearer: Option<&str>| {
+        let mut r = http.post(format!("{url}/api/feedback")).json(&body);
+        if let Some(b) = bearer {
+            r = r.bearer_auth(b);
+        }
+        r.send()
+    };
+    let r = post(json!({"about": "trade_port", "text": "Confusing refusal."}), Some(&token))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let v: Value = r.json().await.unwrap();
+    assert_eq!((v["ok"].as_bool(), v["id"].as_u64()), (Some(true), Some(2)), "{v}");
+    assert!(v["summary"].as_str().unwrap().contains("received"));
+    // Without a token, or with a wrong one: anonymous.
+    // A pasted secret is scrubbed before the report is journaled.
+    let secret = format!("af_{}", "0123456789abcdef".repeat(3));
+    let v: Value = post(
+        json!({"about": "/agents.txt", "text": format!("No token. Pasted {secret} by mistake.")}),
+        None,
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(v["id"], 3);
+    let v: Value = post(json!({"about": "x", "text": "Wrong token."}), Some("af_nope"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["id"], 4);
+    // Refusals look like the other REST endpoints.
+    let r = post(json!({"about": "x", "text": "y".repeat(20_001)}), Some(&token)).await.unwrap();
+    assert_eq!(r.status(), 400);
+    let v: Value = r.json().await.unwrap();
+    assert_eq!(v["error"]["code"], "too_long", "{v}");
+
+    // The sysop list, newest first, filtered by status; the admin token is required.
+    let r = http.get(format!("{url}/api/sysop/feedback")).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let list = |q: &'static str| {
+        let (http, url) = (http.clone(), url.clone());
+        async move {
+            http.get(format!("{url}/api/sysop/feedback{q}"))
+                .bearer_auth("adm")
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let all = list("").await;
+    assert_eq!((all["open"].as_u64(), all["total"].as_u64()), (Some(4), Some(4)), "{all}");
+    let items = all["feedback"].as_array().unwrap();
+    assert_eq!(items[0]["id"], 4);
+    assert!(items[0]["from"].is_null() && items[0]["from_id"].is_null());
+    assert_eq!(items[3]["text"], "Line one.\nLine two.");
+    assert_eq!(
+        items[1]["text"], "No token. Pasted [redacted] by mistake.",
+        "tokens never reach the journal"
+    );
+    assert_eq!(items[3]["from"], "Critic");
+    assert_eq!(items[3]["from_id"], pid);
+    assert_eq!(items[3]["harness"], "codex-cli");
+    assert_eq!(list("?limit=1").await["feedback"].as_array().unwrap().len(), 1);
+    let state: Value = http
+        .get(format!("{url}/api/sysop/state"))
+        .bearer_auth("adm")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["feedback_open"], 4);
+    assert_eq!(state["feedback_open_max_id"], 4);
+    assert_eq!(state["feedback_recent"].as_array().unwrap().len(), 4);
+    // Never public.
+    for path in ["api/spectator/state", "api/public/showcase", "api/public/scoreboard"] {
+        let body = http.get(format!("{url}/{path}")).send().await.unwrap().text().await.unwrap();
+        assert!(!body.contains("Line one") && !body.contains("Confusing refusal"), "{path}");
+    }
+
+    // The sysop tools: the alert, one report, resolve with a note, reopen.
+    let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
+    let sp = sysop.peer();
+    let scall = |name: &str, args: Value| {
+        let mut p = CallToolRequestParams::new(name.to_string());
+        p.arguments = args.as_object().cloned();
+        sp.call_tool_once(p)
+    };
+    let alerts = af_mcp::sysop_mcp::alerts(&game).await;
+    let a = alerts.iter().find(|a| a["key"] == "feedback").expect("feedback alert");
+    assert_eq!(a["sig"], "4");
+    assert_eq!(a["severity"], "warn");
+    assert_eq!(a["group"], "Comms");
+    assert_eq!(a["title"], "4 open feedback reports");
+    assert_eq!(a["detail"], "anonymous: x");
+    let (ok, t) = text(&scall("sysop_feedback", json!({"id": 1})).await.unwrap());
+    assert!(ok && t.contains("Line one.\\nLine two."), "{t}");
+    let (ok, t) = text(&scall("sysop_feedback", json!({"status": "open", "limit": 2})).await.unwrap());
+    assert!(ok && envelope(&t)["feedback"].as_array().unwrap().len() == 2, "{t}");
+    let (ok, t) = text(&scall("sysop_feedback", json!({"id": 99})).await.unwrap());
+    assert!(!ok && t.contains("not_found"), "{t}");
+    let (ok, t) = text(
+        &scall(
+            "sysop_action",
+            json!({"action": "resolve_feedback", "args": {"id": 1, "note": "Fixed the guide."}}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["status"], "resolved", "{t}");
+    let inbox = game
+        .read(move |w| {
+            w.players[&(pid as u32)]
+                .inbox
+                .iter()
+                .map(|n| (n.kind.clone(), n.text.clone()))
+                .collect::<Vec<_>>()
+        })
+        .await;
+    assert!(
+        inbox
+            .iter()
+            .any(|(k, t)| k == "feedback" && t == "The operator resolved your feedback #1 (/join): Fixed the guide."),
+        "{inbox:?}"
+    );
+    let v: Value = http
+        .post(format!("{url}/api/sysop/action/resolve_feedback"))
+        .bearer_auth("adm")
+        .json(&json!({"id": 1, "reopen": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!((v["id"].as_u64(), v["status"].as_str()), (Some(1), Some("open")), "{v}");
+    for id in 1..=4 {
+        let (ok, t) = text(
+            &scall("sysop_action", json!({"action": "resolve_feedback", "args": {"id": id}}))
+                .await
+                .unwrap(),
+        );
+        assert!(ok, "{t}");
+    }
+    assert!(!af_mcp::sysop_mcp::alerts(&game).await.iter().any(|a| a["key"] == "feedback"));
+    assert_eq!(list("?status=open").await["feedback"].as_array().unwrap().len(), 0);
+    assert_eq!(list("?status=resolved").await["feedback"].as_array().unwrap().len(), 4);
+
+    // The interaction log keeps lengths, never the text.
+    game.flush_activity().await;
+    let calls = game.activity(None, 0, 10_000).await;
+    let fb: Vec<_> = calls.iter().filter(|c| c.tool == "send_feedback").collect();
+    assert!(fb.iter().any(|c| c.via == "rest" && c.role == "anon" && c.args.is_none()));
+    assert!(fb.iter().any(|c| c.via == "rest" && c.player == Some(pid as u32)));
+    assert!(fb.iter().any(|c| c.via == "mcp"));
+    for c in &fb {
+        let s = serde_json::to_string(c).unwrap();
+        assert!(
+            !s.contains("Line one") && !s.contains("Confusing refusal") && !s.contains("No token"),
+            "{s}"
+        );
+    }
+
+    // Anonymous REST is limited per client IP: 20 an hour (the engine's anonymous budget,
+    // 5 per 60 ticks, refuses sooner; every attempt still counts against the address).
+    for _ in 0..18 {
+        let r = post(json!({"about": "flood", "text": "again"}), None).await.unwrap();
+        assert_ne!(r.status(), 429);
+    }
+    let r = post(json!({"about": "flood", "text": "again"}), None).await.unwrap();
+    assert_eq!(r.status(), 429);
+    // A captain's token is not held to the address limit.
+    let r = post(json!({"about": "still", "text": "Captains are not IP limited."}), Some(&token))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+}
+
+/// Clients that send numbers and booleans as strings (OpenCode sent `"quantity": "25"`) are
+/// understood wherever the tool's schema says number or boolean; text fields are left alone.
+#[test]
+fn numeric_and_boolean_strings_follow_the_tool_schema() {
+    let cat = af_mcp::tools::catalog();
+    let c = |name: &str, args: Value| af_mcp::tools::coerce_args(&cat, name, &args);
+    assert_eq!(
+        c("buy_equipment", json!({"item": "holds", "quantity": "25"})),
+        json!({"item": "holds", "quantity": 25})
+    );
+    assert_eq!(c("bank", json!({"action": "withdraw", "amount": "45000"}))["amount"], json!(45000));
+    assert_eq!(c("view_registry", json!({"limit": "30"}))["limit"], json!(30));
+    assert_eq!(
+        c("trade_port", json!({"commodity": "ore", "action": "buy", "dry_run": "true"}))["dry_run"],
+        json!(true)
+    );
+    // Text stays text, even when it looks like a number; a bad number stays as sent.
+    let radio = c(
+        "radio_broadcast",
+        json!({"message": "hi", "channel": "private", "recipient_id": "42"}),
+    );
+    assert_eq!(radio["recipient_id"], json!("42"));
+    assert_eq!(
+        c("buy_equipment", json!({"item": "holds", "quantity": "lots"}))["quantity"],
+        json!("lots")
+    );
+    assert_eq!(c("buy_equipment", json!({"item": "holds"})), json!({"item": "holds"}));
+}
+
+#[test]
+fn json_array_strings_follow_the_tool_schema_and_preserve_text() {
+    let cat = af_mcp::tools::catalog();
+    let c = |name: &str, args: Value| af_mcp::tools::coerce_args(&cat, name, &args);
+    assert_eq!(c("contract", json!({"sectors": "[1, 2, 4]"}))["sectors"], json!([1, 2, 4]));
+    assert_eq!(
+        c("get_starchart", json!({"sector_ids": "[\"1\", \"4\"]"}))["sector_ids"],
+        json!([1, 4])
+    );
+    assert_eq!(
+        c("autopilot_travel", json!({"avoid_sectors": "[1, 4]"}))["avoid_sectors"],
+        json!([1, 4])
+    );
+    for bad in ["1, 2, 4", "[1,", "{\"a\": 1}", "null"] {
+        assert_eq!(c("contract", json!({"sectors": bad}))["sectors"], json!(bad));
+    }
+    let text = json!({"terms": "[1, 2]", "sectors": [1, 2]});
+    assert_eq!(c("contract", text.clone()), text);
+    // A field whose contract allows text as well as arrays must remain text.
+    let mut def = cat.iter().find(|d| d.name == "contract").unwrap().clone();
+    def.schema["properties"]["sectors"] = json!({"type": ["array", "string"], "items": {"type": "integer"}});
+    assert_eq!(
+        af_mcp::tools::coerce_args(&[def], "contract", &json!({"sectors": "[1]"}))["sectors"],
+        json!("[1]")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stringified_chart_sectors_post_once_and_invalid_arrays_spend_nothing() {
+    let (url, game) = start().await;
+    let http = reqwest::Client::new();
+    let reg: Value = http
+        .post(format!("{url}/api/register"))
+        .json(&json!({"name": "Array Pilot", "model": "test", "harness": "opencode"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pid = reg["player_id"].as_u64().unwrap() as u32;
+    let client = ()
+        .serve(StreamableHttpClientTransport::from_uri(format!(
+            "{url}/mcp/{}",
+            reg["token"].as_str().unwrap()
+        )))
+        .await
+        .unwrap();
+    let before = game.read(move |w| (w.players[&pid].credits, w.players[&pid].ap)).await;
+    let mut call = CallToolRequestParams::new("contract".to_string());
+    call.arguments = json!({"action": "post", "kind": "chart", "sectors": "[1, 2, 4]", "reward": "100", "expires_in_ticks": "1440"})
+        .as_object()
+        .cloned();
+    let (ok, reply) = text(&client.peer().call_tool_once(call).await.unwrap());
+    assert!(ok, "{reply}");
+    assert!(reply.contains("escrowed"), "{reply}");
+    let after = game
+        .read(move |w| {
+            let posted: Vec<_> = w.contracts.values().filter(|c| c.poster == pid).collect();
+            assert_eq!(posted.len(), 1);
+            assert_eq!(posted[0].sectors, vec![1, 2, 4]);
+            (w.players[&pid].credits, w.players[&pid].ap)
+        })
+        .await;
+    assert_eq!(after, (before.0 - 100, before.1));
+    for bad in ["[1,", "[1, \"bad\"]"] {
+        let mut call = CallToolRequestParams::new("contract".to_string());
+        call.arguments = json!({"action": "post", "kind": "chart", "sectors": bad, "reward": "100"})
+            .as_object()
+            .cloned();
+        let (ok, reply) = text(&client.peer().call_tool_once(call).await.unwrap());
+        assert!(!ok && reply.contains("invalid_args"), "{reply}");
+    }
+    assert_eq!(
+        game.read(move |w| (w.players[&pid].credits, w.players[&pid].ap, w.contracts.len()))
+            .await,
+        (after.0, after.1, 1)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_sends_numbers_as_strings_can_buy_exact_quantities() {
+    let (url, _game) = start().await;
+    let http = reqwest::Client::new();
+    let reg: Value = http
+        .post(format!("{url}/api/register"))
+        .json(&json!({"name": "Stringly", "model": "test", "harness": "opencode"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = reg["token"].as_str().unwrap().to_string();
+    let client = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{token}"))).await.unwrap();
+    let mut p = CallToolRequestParams::new("buy_equipment".to_string());
+    p.arguments = json!({"item": "holds", "quantity": "2"}).as_object().cloned();
+    let (ok, t) = text(&client.peer().call_tool_once(p).await.unwrap());
+    // The arguments parse: any refusal now is a game rule (here, not docked at Stardock), never
+    // "invalid type: string".
+    assert!(!t.contains("invalid_args") && !t.contains("invalid type"), "{t}");
+    let _ = ok;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_constitution_over_mcp_redacts_secrets_and_the_operator_can_strike() {
+    let (url, game) = start().await;
+    let http = reqwest::Client::new();
+    let mut tokens = vec![];
+    for name in ["Framer", "Signer"] {
+        let reg: Value = http
+            .post(format!("{url}/api/register"))
+            .json(&json!({"name": name, "model": "test"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        tokens.push(reg["token"].as_str().unwrap().to_string());
+    }
+    let captain = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{}", tokens[0]))).await.unwrap();
+    let call = |args: Value| {
+        let mut p = CallToolRequestParams::new("constitution".to_string());
+        p.arguments = args.as_object().cloned();
+        captain.peer().call_tool_once(p)
+    };
+    let secret = format!("af_{}", "0123456789abcdef".repeat(3));
+    let (ok, t) = text(
+        &call(json!({"action": "propose", "kind": "add", "text": format!("Never paste {secret} on the radio.")}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok && t.contains("Proposal #1 opened"), "{t}");
+    let stored = game
+        .read(|w| {
+            w.constitution
+                .proposals
+                .iter()
+                .map(|p| format!("{:?}", p.change))
+                .collect::<String>()
+        })
+        .await;
+    assert!(!stored.contains(&secret) && stored.contains("[redacted]"), "{stored}");
+    // View is read-only and free.
+    let (ok, t) = text(&call(json!({"action": "view"})).await.unwrap());
+    assert!(ok && t.starts_with("Constitution."), "{t}");
+    assert_eq!(envelope(&t)["result"]["open_proposals"][0]["yes"], 1, "{t}");
+    // Public, with tallies only.
+    let state: Value = http
+        .get(format!("{url}/api/spectator/state"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["constitution"]["open_proposals"][0]["electorate"], 2, "{state}");
+    // Its own public endpoint: tallies, never who voted.
+    let public: Value = http
+        .get(format!("{url}/api/public/constitution"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(public["open_proposals"][0]["yes"], 1, "{public}");
+    assert!(!public.to_string().contains("\"votes\""), "{public}");
+    // The operator's endpoint and tool: every vote, and who has not voted.
+    let full: Value = http
+        .get(format!("{url}/api/sysop/constitution"))
+        .bearer_auth("adm")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(full["proposals"][0]["votes"][0]["name"], "Framer", "{full}");
+    assert_eq!(full["proposals"][0]["not_voted"][0], "Signer", "{full}");
+    assert_eq!(
+        http.get(format!("{url}/api/sysop/constitution")).send().await.unwrap().status(),
+        401
+    );
+    let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
+    let mut p = CallToolRequestParams::new("sysop_constitution".to_string());
+    p.arguments = json!({"proposal": 1}).as_object().cloned();
+    let (ok, t) = text(&sysop.peer().call_tool_once(p).await.unwrap());
+    assert!(ok && t.contains("Signer"), "{t}");
+    // The operator strikes it over MCP.
+    let mut p = CallToolRequestParams::new("sysop_action".to_string());
+    p.arguments = json!({"action": "constitution_strike", "args": {"proposal": 1, "reason": "test"}})
+        .as_object()
+        .cloned();
+    let (ok, t) = text(&sysop.peer().call_tool_once(p).await.unwrap());
+    assert!(ok && t.contains("cancelled constitution proposal #1"), "{t}");
+    let status = game.read(|w| w.constitution.proposals[0].status).await;
+    assert_eq!(status, af_core::constitution::ProposalStatus::Cancelled);
+    // The operator takes part: a proposal, a comment on it and a notice, over sysop_action.
+    let action = |name: &str, args: Value| {
+        let mut p = CallToolRequestParams::new("sysop_action".to_string());
+        p.arguments = json!({"action": name, "args": args}).as_object().cloned();
+        sysop.peer().call_tool_once(p)
+    };
+    let (ok, t) = text(
+        &action(
+            "constitution_propose",
+            json!({"kind": "add", "text": "Answer distress calls.", "note": "Pods were left stranded."}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok && t.contains("Operator proposal #2 opened"), "{t}");
+    let (ok, t) = text(
+        &action("constitution_comment", json!({"proposal": 2, "text": "Vote before Friday."}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok && t.contains("Comment 2 posted on proposal #2"), "{t}");
+    let (ok, t) = text(
+        &action("constitution_notice", json!({"text": "Two votes are open.", "pin": true}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok && t.contains("pinned as announcement"), "{t}");
+    let (ok, t) = text(
+        &action("constitution_comment", json!({"proposal": 2, "text": "y".repeat(2_001)}))
+            .await
+            .unwrap(),
+    );
+    assert!(!ok && t.contains("too_long"), "{t}");
+    // Captains see it marked as the operator's, with the comments.
+    let (ok, t) = text(&call(json!({"action": "view", "proposal": 2})).await.unwrap());
+    let v = envelope(&t);
+    assert!(ok && v["result"]["proposal"]["by_operator"] == json!(true), "{t}");
+    assert_eq!(
+        v["result"]["proposal"]["operator_comments"][1]["text"], "Vote before Friday.",
+        "{t}"
+    );
+    // Signer votes; then a new season archives the whole record with every ballot.
+    let signer = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{}", tokens[1]))).await.unwrap();
+    let mut p = CallToolRequestParams::new("constitution".to_string());
+    p.arguments = json!({"action": "vote", "proposal": 2, "vote": false}).as_object().cloned();
+    let (ok, t) = text(&signer.peer().call_tool_once(p).await.unwrap());
+    assert!(ok, "{t}");
+    let (ok, t) = text(&action("new_season", json!({})).await.unwrap());
+    assert!(ok, "{t}");
+    let get = |path: String| {
+        let http = http.clone();
+        async move {
+            let r = http.get(path).bearer_auth("adm").send().await.unwrap();
+            let status = r.status().as_u16();
+            (status, r.json::<Value>().await.unwrap())
+        }
+    };
+    let (status, live) = get(format!("{url}/api/sysop/constitution")).await;
+    assert_eq!(status, 200);
+    assert_eq!(live["proposals"], json!([]), "{live}");
+    let key = live["seasons"][0]["season_key"].as_str().unwrap().to_string();
+    let (status, past) = get(format!("{url}/api/sysop/constitution?season=1")).await;
+    assert_eq!(status, 200, "{past}");
+    assert_eq!(past["season"], json!(key));
+    let op = past["proposals"].as_array().unwrap().iter().find(|p| p["id"] == 2).unwrap().clone();
+    assert_eq!(
+        (op["by_operator"].clone(), op["proposer"].clone()),
+        (json!(true), json!("operator"))
+    );
+    assert_eq!(op["ballots"][0]["name"], "Signer", "{op}");
+    assert_eq!(op["operator_comments"].as_array().unwrap().len(), 2);
+    let struck = past["proposals"].as_array().unwrap().iter().find(|p| p["id"] == 1).unwrap().clone();
+    assert_eq!(struck["struck"]["reason"], "test", "{struck}");
+    assert_eq!(struck["ballots"][0]["name"], "Framer", "{struck}");
+    assert_eq!(get(format!("{url}/api/sysop/constitution?season=9")).await.0, 404);
+    let (status, hist) = get(format!("{url}/api/sysop/history/season?key={key}")).await;
+    assert_eq!(status, 200, "{hist}");
+    assert_eq!(hist["constitution"]["season"], json!(key), "{hist}");
+    assert_eq!(hist["constitution"]["notices"][0]["text"], "Two votes are open.");
+    let mut p = CallToolRequestParams::new("sysop_constitution".to_string());
+    p.arguments = json!({"season": 1, "proposal": 2}).as_object().cloned();
+    let (ok, t) = text(&sysop.peer().call_tool_once(p).await.unwrap());
+    assert!(ok && t.contains("\"changed_votes\":0") && t.contains("Signer"), "{t}");
+}
+
+#[tokio::test]
+async fn player_text_other_captains_read_never_carries_a_token() {
+    let (url, game) = start().await;
+    let http = reqwest::Client::new();
+    let reg: Value = http
+        .post(format!("{url}/api/register"))
+        .json(&json!({"name": "Leaky", "model": "test"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token = reg["token"].as_str().unwrap().to_string();
+    let captain = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{token}"))).await.unwrap();
+    let call = |name: &str, args: Value| {
+        let mut p = CallToolRequestParams::new(name.to_string());
+        p.arguments = args.as_object().cloned();
+        captain.peer().call_tool_once(p)
+    };
+    let secret = format!("af_{}", "0123456789abcdef".repeat(3));
+    let (ok, t) = text(
+        &call(
+            "radio_broadcast",
+            json!({"channel": "public", "message": format!("my token is {secret} ok")}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    let (ok, t) = text(
+        &call(
+            "corp",
+            json!({"action": "create", "name": "Leak Co", "motto": format!("key {secret}")}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    let stored = game
+        .read(|w| {
+            let radio: String = w.radio.iter().map(|m| m.text.clone()).collect();
+            let mottos: String = w.corps.values().map(|c| c.motto.clone()).collect();
+            format!("{radio} {mottos}")
+        })
+        .await;
+    assert!(!stored.contains(&secret) && stored.matches("[redacted]").count() == 2, "{stored}");
+}
+
+#[tokio::test]
+async fn a_base64_operator_token_works_in_the_mcp_url_raw_or_encoded() {
+    // Production's operator token is base64: '/', '+' and '=' must survive the URL.
+    let admin = "Ab/cD+ef/Gh==";
+    let (url, _game) = start_with_admin(admin).await;
+    let encoded = admin.replace('/', "%2F").replace('+', "%2B").replace('=', "%3D");
+    for path in [
+        format!("{url}/mcp/{admin}"),
+        format!("{url}/mcp/{encoded}"),
+        format!("{url}/mcp?token={encoded}"),
+    ] {
+        let sysop = ().serve(StreamableHttpClientTransport::from_uri(path.clone())).await.unwrap();
+        let mut p = CallToolRequestParams::new("sysop_rules".to_string());
+        p.arguments = json!({}).as_object().cloned();
+        let (ok, t) = text(&sysop.peer().call_tool_once(p).await.unwrap());
+        assert!(ok && t.starts_with("Rules."), "{path}: {t}");
+    }
+}
+
+/// The sysop state carries each corporation's territory with sector ids; the public state
+/// carries counts only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_sysop_state_carries_corporate_territory() {
+    use af_core::cmd::*;
+    use af_core::engine::Actor;
+    use af_core::model::FighterMode;
+    let (url, game) = start().await;
+    let http = reqwest::Client::new();
+    let reg: Value = http
+        .post(format!("{url}/api/register"))
+        .json(&json!({"name": "Holder", "model": "test"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pid = reg["player_id"].as_u64().unwrap() as u32;
+    // Two frontier sectors joined by a lane.
+    let (x, y) = game
+        .read(|w| {
+            w.sectors
+                .iter()
+                .filter(|s| !s.fedspace && s.fighters.is_none())
+                .find_map(|s| {
+                    s.warps
+                        .iter()
+                        .find(|t| !w.is_fedspace(**t) && w.sector(**t).is_some_and(|u| u.fighters.is_none()))
+                        .map(|t| (s.id, *t))
+                })
+                .unwrap()
+        })
+        .await;
+    let set = |sector: u32| {
+        Command::Admin(AdminArgs::SetPlayer {
+            player: pid,
+            credits: Some(50_000),
+            bank: None,
+            ap: Some(1_000),
+            alignment: None,
+            experience: None,
+            sector: Some(sector),
+            fighters: Some(100),
+            shields: None,
+            end_protection: Some(true),
+            model: None,
+            harness: None,
+        })
+    };
+    game.exec(
+        Actor::System,
+        Command::Admin(AdminArgs::CreateCorp {
+            name: "Lattice".into(),
+            ceo: pid,
+            motto: None,
+        }),
+    )
+    .await
+    .unwrap();
+    for (sector, n) in [(x, 80), (y, 40)] {
+        game.exec(Actor::System, set(sector)).await.unwrap();
+        game.exec(
+            Actor::Player(pid),
+            Command::Deploy(DeployArgs {
+                item_type: DeployItem::Fighters,
+                quantity: n,
+                mode: Some(FighterMode::Defensive),
+                message: None,
+                toll_price: None,
+            }),
+        )
+        .await
+        .unwrap();
+    }
+    let state: Value = http
+        .get(format!("{url}/api/sysop/state"))
+        .bearer_auth("adm")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let corp = state["corps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "Lattice")
+        .unwrap()
+        .clone();
+    let t = &corp["territory"];
+    assert_eq!(t["seat"], x, "{t}");
+    assert_eq!(t["seat_held"], true);
+    let mut both = vec![x, y];
+    both.sort();
+    assert_eq!(t["connected"], json!(both), "{t}");
+    assert_eq!(t["outposts"], json!([]));
+    assert!(corp["seat"].is_null(), "no seat was set: the default is the largest stack");
+    // The public view: counts, never the sectors.
+    let public: Value = http
+        .get(format!("{url}/api/spectator/state"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let text = public.to_string();
+    assert!(
+        !text.contains("\"seat\"") && !text.contains("\"connected\""),
+        "public territory is counts only"
+    );
+    assert!(text.contains("\"connected_sectors\":2"), "the registry counts the territory");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn feedback_memory_compact_digest_and_shared_log_over_real_mcp() {
+    let (url, game) = start().await;
+    let http = reqwest::Client::new();
+    let reg: Value = http
+        .post(format!("{url}/api/register"))
+        .json(&json!({"name":"Memory E2E","model":"test"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pid = reg["player_id"].as_u64().unwrap() as af_core::model::PlayerId;
+    let token = reg["token"].as_str().unwrap();
+    let client = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{token}"))).await.unwrap();
+    let peer = client.peer();
+    let call = |name: &str, args: Value| {
+        let mut p = CallToolRequestParams::new(name.to_string());
+        p.arguments = args.as_object().cloned();
+        peer.call_tool_once(p)
+    };
+    for (name, args) in [
+        ("write_note", json!({"key":"plan","value":"# Private mission"})),
+        ("memory", json!({"action":"save","key":"facts","data":[],"expected_revision":0})),
+        (
+            "memory",
+            json!({"action":"append","key":"facts","data":{"sector":21},"expected_revision":1}),
+        ),
+        ("memory", json!({"action":"diff","key":"facts","expected_revision":1})),
+        ("market_log", json!({"action":"report","claim":{"service":"cargo"}})),
+        ("market_log", json!({"action":"read"})),
+        ("get_changes", json!({"since_tick":0})),
+        ("get_briefing", json!({"compact":true,"memory_keys":["facts"]})),
+    ] {
+        let (ok, t) = text(&call(name, args).await.unwrap());
+        assert!(ok, "{name}: {t}");
+    }
+    game.exec(
+        af_core::Actor::System,
+        af_core::Command::Admin(af_core::cmd::AdminArgs::Message {
+            player: Some(pid),
+            text: "Durable operator notice".into(),
+            tell_owner: false,
+        }),
+    )
+    .await
+    .unwrap();
+    let (ok, t) = text(&call("read_inbox", json!({"digest":true})).await.unwrap());
+    assert!(ok, "{t}");
+    let digest = envelope(&t);
+    assert_eq!(digest["result"]["read_receipt"]["peek"], true);
+    let (ok, t) = text(&call("read_inbox", json!({"peek":true})).await.unwrap());
+    assert!(ok, "{t}");
+    assert!(t.contains("Durable operator notice"));
+    let (ok, t) = text(&call("read_inbox", json!({"acknowledge_only":true})).await.unwrap());
+    assert!(ok, "{t}");
+    assert!(!t.contains("Durable operator notice"));
+    let (ok, t) = text(&call("read_inbox", json!({"include_read":true,"peek":true})).await.unwrap());
+    assert!(ok, "{t}");
+    assert!(t.contains("Durable operator notice"));
+    let canonical = http.get(format!("{url}/platforms.txt")).send().await.unwrap().text().await.unwrap();
+    let alias = http.get(format!("{url}/platforms")).send().await.unwrap();
+    assert!(alias.status().is_success());
+    assert_eq!(alias.text().await.unwrap(), canonical);
+    client.cancel().await.unwrap();
+}

@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["core", "store", "mcp", "harness"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license-file = "LICENSE"
+publish = false
+rust-version = "1.90"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# Style lints we accept deliberately (index loops over fixed [_; 3] commodity arrays, wide constructors).
+needless_range_loop = "allow"
+too_many_arguments = "allow"
+field_reassign_with_default = "allow"
+map_entry = "allow"
+
+[workspace.dependencies]
+af-core = { path = "core" }
+af-store = { path = "store" }
+af-mcp = { path = "mcp" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+schemars = "1.2"
+thiserror = "2"
+anyhow = "1"
+redb = "4.3"
+postgres = "0.19"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
+tokio = { version = "1.53", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+http = "1"
+rmcp = { version = "3.5", features = ["server", "client", "transport-io", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
+tower-http = { version = "0.7", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+sha2 = "0.11"
+hex = "0.4"
+futures = "0.3"
+toml = "1"
+
+[profile.release]
+debug = 1

@@ -1,0 +1,103 @@
+Agent Licence 1.0
+SPDX-License-Identifier: LicenseRef-Agent-1.0
+
+Definitions. The licensor is the copyright holder named in the NOTICE file
+that comes with the software. The software is the work the licensor makes
+available under these terms, including any part, copy or change of it. You
+means the person or organisation that operates, deploys or directs anything
+that obtains or uses the software by any means, including an AI agent; what
+your agents do with the software, you do. Your company means any organisation
+you work for and any organisation that controls, is controlled by or is under
+common control with it. A contribution is anything you submit to the licensor
+for possible inclusion in the software. The repository, contribution channel,
+security channel, service terms, governing law and courts are those named in
+the NOTICE file.
+
+1. Acceptance. To receive any licence you must accept these terms as both
+strict obligations and conditions of every licence. Doing anything with the
+software that needs a licence, or causing an agent to do so, is acceptance,
+and you agree to deal electronically. Without acceptance you have no licence.
+These terms do not limit fair use or any other right the law gives you without
+a licence.
+
+2. Read. The licensor grants you a non-exclusive, worldwide, royalty-free,
+non-transferable and non-sublicensable licence to copy, search, analyse, quote
+and change the software, and to run it on systems you control, including by
+placing it in an AI model's context while the model performs a task, but only
+to understand, discuss or improve the software or to use the licensor's
+services. You may also train machine-learning models on the software, but any
+output that reproduces the software remains subject to these terms.
+
+3. Contribute. Submit contributions only through the contribution channel; the
+licensor may ignore any other. For each contribution you (a) assign to the
+licensor every right you hold in it, now or in future, in every country; (b)
+to the extent any right is not assigned, grant the licensor and its licensees
+a perpetual, irrevocable, worldwide, royalty-free, transferable and
+sublicensable licence, under copyright, patent and every other right, to use
+it for any purpose; (c) waive, and promise never to assert against them, any
+moral or other right in it; and (d) promise that you may make these grants,
+that the terms of any AI system that helped produce it permit them, that it
+contains no third-party material you cannot license on these terms, and that
+you have disclosed AI involvement as the contribution channel asks. The
+licensor need not use any contribution.
+
+4. Not permitted. Your licences do not cover, and without the licensor's
+written permission you must not: (a) run the software, or let it run, for
+anyone other than you and your agents, including as a hosted or network
+service; (b) distribute or make available any copy outside the repository,
+except contributions sent through the contribution channel and quotations
+allowed by section 2; or (c) use the software, directly or through a model
+trained on it, to develop, operate or provide a competing product. A competing
+product is any product or service that substitutes for the software, or for
+any product or service the licensor provides using the software, whatever its
+interface, platform or language and even if free; anything marketed as a
+substitute competes. Rights that a code host's terms give you, such as viewing
+and forking on GitHub, come from those terms, not from these.
+
+5. Report, don't exploit. If you or your agents find a flaw in the software,
+or in any service the licensor runs with it, that could let anyone reach data
+or accounts they should not, disrupt a service, or obtain a result the service
+terms do not intend, you must report it promptly and privately through the
+security channel. You must never use it against any service or person, and
+must not disclose it to anyone else until the licensor has fixed it or 90 days
+have passed since your report. You may test the software for flaws in good
+faith on copies you run under section 2, and the licensor will bring no claim
+against you for that testing. Good faith means testing only to find and fix
+flaws, in a way designed to avoid harm, and using what you learn mainly to
+improve security. These terms authorise no access to any service, account or
+data; the service terms govern that.
+
+6. Patents. The licensor grants you a licence under every patent claim it can
+license, now or later, that you would infringe by using the software as these
+terms permit. It does not cover claims infringed only because of your changes.
+If you or your company make a written claim that the software infringes any
+patent, your patent licence ends at once.
+
+7. Ending. If you breach these terms, your licences end automatically. The
+first time the licensor notifies you of a breach, your licences continue if
+within 30 days you stop the breach and take practical steps to correct its
+effects. That cure does not apply to a breach of section 5 that caused harm,
+or to any later breach. Once your licences end you may not receive them again
+under these terms without written permission. Section 3, section 8 and
+anything you lawfully did before the end survive.
+
+8. No warranty; no liability. AS FAR AS THE LAW ALLOWS, THE SOFTWARE COMES AS
+IS, WITHOUT ANY WARRANTY OR CONDITION, INCLUDING ANY OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT, AND THE LICENSOR WILL
+NOT BE LIABLE TO YOU FOR ANY DAMAGES ARISING OUT OF THESE TERMS OR THE USE OR
+NATURE OF THE SOFTWARE, UNDER ANY KIND OF LEGAL CLAIM.
+
+9. General. These terms grant nothing by implication, no right to sublicense
+or transfer, and no trademark right beyond describing the software's origin;
+the licensor keeps every other right. They do not replace any other agreement
+with the licensor, including the service terms. The governing law applies to
+them without regard to its conflict-of-laws rules, and you agree that the
+courts may hear any dispute about them; this does not stop the licensor
+seeking relief in any other court or remove any right your local law makes
+non-waivable. If a term is unenforceable, the rest still applies and that term
+applies as far as the law allows. Keep every licensing, copyright and
+"Required Notice:" line intact, and pass these terms on with any copy you are
+permitted to share. The licensor may offer the software under a later version
+of these terms, and you may then choose that version.
+
+Anyone may use this licence text, unchanged, for their own software.

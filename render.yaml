@@ -1,0 +1,73 @@
+# MCP Wars on Render: one web service (Docker) over one Render Postgres database.
+# Deploys overlap old and new instances; the server's writer lock and handover
+# make that safe (see docs/DEPLOY.md). Keep numInstances at 1.
+services:
+  - type: web
+    name: mcpwars
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: virginia
+    # Start small; resize in the dashboard (or here) when demand grows.
+    plan: 1c-2g
+    numInstances: 1
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: commit
+    # Render adds www.mcpwars.com automatically and redirects it to the apex.
+    domains:
+      - mcpwars.com
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mcpwars-db
+          property: connectionString
+      - key: AF_ADMIN_TOKEN
+        generateValue: true
+      - key: AF_PUBLIC_URL
+        value: https://mcpwars.com
+      - key: AF_ALLOW_HOST
+        value: www.mcpwars.com,mcpwars.onrender.com
+      # Cloudflare (in front of Render) sets this to the one real client address.
+      - key: AF_TRUSTED_IP_HEADER
+        value: cf-connecting-ip
+      - key: AF_REGISTRATIONS_PER_IP_PER_HOUR
+        value: "10"
+      # Four AP a minute. The store (60, set below) refills in 15 minutes: every check-in cadence of
+      # 15 minutes or faster earns the same, so nobody waits for AP and nobody gains by flooding.
+      - key: AF_AP_PER_DAY
+        value: "5760"
+      # Wars open and treaties end 4 hours after notice, so captains that check in every
+      # few hours are not caught out. The rest is the 2026-10-06 economy review (docs/DECISIONS.md):
+      # experience discount cap 5, 75k start credits, concessions 25k a day for 500 fighters, no
+      # treasury interest, rewards sized to today's incomes. Legacy 10% of final net worth, capped at
+      # 100k, for the founding era (engine 1.38). Changes here are announced to every captain at startup.
+      - key: AF_RULES_PATCH
+        value: '{"war_delay_ticks":240,"treaty_notice_ticks":240,"ap_max":60,"ap_start":60,"exp_discount_cap":5,"start_credits":75000,"concession_yield":25000,"concession_min_fighters":500,"treasury_interest_bp_per_day":0,"event_salvage_credits":30000,"event_hunt_bonus":25000,"fed_skarn_reward":8000,"fed_purse_per_season":1200000,"galaxy_sectors":1250,"fed_tax_bp":1000,"fed_tax_member_bp":500,"legacy_bp":1000,"legacy_cap":100000,"skarn_floor_per_100_sectors":2,"skarn_per_100_sectors":5}'
+      # The instance's disk is temporary: no scheduled file backups. Postgres has
+      # point-in-time recovery; offsite copies come from /api/sysop/backup.
+      - key: AF_BACKUP_EVERY_MINS
+        value: "0"
+      # Google Analytics (GA4) on the public pages; never on the operator console. Remove to switch off.
+      - key: AF_GA_MEASUREMENT_ID
+        value: G-JL7RXPM70D
+      # Search Console verification token (the content of its HTML-tag method). Set it in the
+      # dashboard when verifying; DNS verification at Namecheap needs nothing here.
+      - key: AF_GOOGLE_SITE_VERIFICATION
+        sync: false
+      - key: RUST_LOG
+        value: info,rmcp=warn
+
+databases:
+  - name: mcpwars-db
+    databaseName: mcpwars
+    user: mcpwars
+    region: virginia
+    postgresMajorVersion: "17"
+    plan: 0.5c-1g
+    diskSizeGB: 10
+    storageAutoscalingEnabled: true
+    # A hot standby (highAvailability) needs a plan with at least 1 CPU; add it
+    # when the game outgrows the starter plan. Point-in-time recovery covers 7 days.
+    # No access from the public internet; the service connects over Render's
+    # private network. Add your own address here to run export/verify remotely.
+    ipAllowList: []

@@ -1,0 +1,9 @@
+# Determinism guards for the rules engine (see docs/DECISIONS.md).
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order is random; use BTreeMap" },
+    { path = "std::collections::HashSet", reason = "iteration order is random; use BTreeSet" },
+]
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "the engine never reads the wall clock; time arrives in journal entries" },
+    { path = "std::time::Instant::now", reason = "the engine never reads the wall clock; time arrives in journal entries" },
+]

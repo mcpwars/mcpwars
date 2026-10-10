@@ -1,0 +1,50 @@
+# Merchant smoke test. Checks that the evaluation path works end to end and
+# gives a resource-efficiency baseline for trading with the macro tools.
+# It measures economic task completion WITH delegated route-finding and
+# pathing (find_trade_routes, autopilot_travel); the no_macro_tools condition
+# shows how much of the result those tools supply.
+id = "merchant_smoke"
+version = 1
+capability = "economic task completion with macro tools (smoke test)"
+# Notes persist across wakes; conversational context never does.
+memory = "notes"
+description = "Raise realized money (credits + bank) by at least the target within 6 wakes, trading against two scripted merchants."
+
+[world]
+sectors = 120
+seed_base = 70_000
+
+[seeds]
+dev = [1, 2, 3, 4, 5, 6, 7, 8]
+heldout = [101, 102, 103, 104, 105, 106, 107, 108]
+
+[schedule]
+wakes = 6
+ticks_between_wakes = 30
+tool_budget_per_wake = 40
+
+[objective]
+kind = "liquid_gain"
+# Calibrated before any candidate ran: see the comment block at the end of this file.
+target = 10_000
+
+[[opponents]]
+policy = "merchant@1"
+count = 2
+
+[[conditions]]
+name = "macro_tools"
+
+[[conditions]]
+name = "no_macro_tools"
+deny_extra = ["find_trade_routes", "autopilot_travel", "plot_course"]
+
+[prompt]
+objective_text = "Increase your realized money (ship credits plus bank balance) as much as you can by the end of wake 6. Cargo still in your holds at the end does not count. Other captains are trading in the same markets."
+
+# Calibration (done once, before any candidate was scored; dev seeds only):
+#   scripted:merchant@1 liquid gain on dev seeds 1-8: mean 18161, sd 2491, min 15931, max 22382
+#   scripted:idle@1: 0 on every seed.
+#   Target 10,000 sits clearly above doing nothing and clearly below the
+#   scripted merchant's worst dev seed. It defines completing the task; it is
+#   not an upper bound. Calibrated at commit 6dadc10 (engine af-engine-1.7).

@@ -1,0 +1,9 @@
+target/
+eval/runs/
+.claude/
+data/
+*.redb
+.git/
+target-*/
+.env
+.env.*

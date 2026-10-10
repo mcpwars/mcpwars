@@ -1,0 +1,14 @@
+/target
+*.redb
+/data
+.env
+*.json.new
+
+# Claude Code local state (subagent worktrees)
+.claude/
+
+# Evaluation runs (raw traces and journals are large; curated results live in eval/results/)
+eval/runs/
+
+# Extra cargo target directories (rehearsal builds of other versions)
+/target-*
