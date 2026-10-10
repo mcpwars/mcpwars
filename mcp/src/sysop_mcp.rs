@@ -33,6 +33,119 @@ pub struct PlayerArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct NotesArgs {
+    /// Captain call sign or numeric id.
+    pub name: String,
+    /// Omit to read all notes.
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryAction {
+    #[default]
+    List,
+    Read,
+    History,
+    Diff,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct MemoryArgs {
+    /// Captain call sign or numeric id.
+    pub name: String,
+    /// Read-only operation, default list (includes expired records).
+    #[serde(default)]
+    pub action: MemoryAction,
+    #[serde(default)]
+    pub key: Option<String>,
+    /// JSON pointer for a nested read.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Starting revision for diff.
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    /// History pagination.
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+pub async fn notes(game: &Game, a: NotesArgs) -> ToolReply {
+    game.read(move |w| {
+        let Some(p) = w
+            .player_by_name(&a.name)
+            .or_else(|| a.name.parse().ok().and_then(|id| w.players.get(&id)))
+        else {
+            return reply(false, "REFUSED [unknown_player] No such captain.", Value::Null);
+        };
+        match af_core::query::notes(
+            w,
+            p.id,
+            &af_core::query::NotesArgs {
+                key: a.key,
+                offset: a.offset,
+                limit: a.limit,
+            },
+        ) {
+            Ok(mut v) => {
+                if let Some(next) = v.pointer_mut("/continuation/next_arguments").filter(|v| v.is_object()) {
+                    next["name"] = json!(p.id.to_string());
+                }
+                reply(true, format!("Notes for {} (#{}).", p.name, p.id), v)
+            }
+            Err(e) => reply(false, format!("REFUSED [{}] {}", e.code, e.message), Value::Null),
+        }
+    })
+    .await
+}
+
+pub async fn memory(game: &Game, a: MemoryArgs) -> ToolReply {
+    game.read(move |w| {
+        let Some(p) = w
+            .player_by_name(&a.name)
+            .or_else(|| a.name.parse().ok().and_then(|id| w.players.get(&id)))
+        else {
+            return reply(false, "REFUSED [unknown_player] No such captain.", Value::Null);
+        };
+        let action = match a.action {
+            MemoryAction::List => af_core::memory::Action::List,
+            MemoryAction::Read => af_core::memory::Action::Read,
+            MemoryAction::History => af_core::memory::Action::History,
+            MemoryAction::Diff => af_core::memory::Action::Diff,
+        };
+        let args = af_core::memory::Args {
+            action,
+            key: a.key,
+            data: None,
+            expected_revision: a.expected_revision,
+            ttl_ticks: None,
+            path: a.path,
+            include_archived: true,
+            offset: a.offset,
+            limit: a.limit,
+        };
+        match af_core::memory::read(w, p.id, &args) {
+            Ok(mut v) => {
+                // Core continuation arguments are captain-facing; preserve the sysop target.
+                if let Some(next) = v.pointer_mut("/continuation/next_arguments") {
+                    next["name"] = json!(p.id.to_string());
+                }
+                reply(true, format!("Memory for {} (#{}).", p.name, p.id), v)
+            }
+            Err(e) => reply(false, format!("REFUSED [{}] {}", e.code, e.message), Value::Null),
+        }
+    })
+    .await
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct JournalArgs {
     /// Entries to return, newest first (default 50, max 1000).
     #[serde(default)]
@@ -385,6 +498,8 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 false,
                 "Everything about one captain (by call sign or id): status, ship, cargo, private notes, inbox, the human setup (silent or strategy), the strategy, and the summaries, replies and strategy proposals sent to the human.",
             ),
+            def::<NotesArgs>("sysop_notes", true, false, "Read one captain's text notes by call sign or id. Omit key for all notes, or select a key with character offset/limit. Read-only."),
+            def::<MemoryArgs>("sysop_memory", true, false, "Inspect one captain's structured JSON memory by call sign or id: list keys (including expired), read current data or a nested JSON pointer, paginated history, or diff from expected_revision. Read-only."),
             def::<JournalArgs>(
                 "sysop_journal",
                 true,
@@ -597,6 +712,8 @@ pub async fn call(game: &Game, access: &SysopAccess, name: &str, args: &Value) -
                 ),
             }
         }
+        "sysop_notes" => notes(game, p!(NotesArgs)).await,
+        "sysop_memory" => memory(game, p!(MemoryArgs)).await,
         "sysop_journal" => {
             let a = p!(JournalArgs);
             let filtered = a.actor.is_some() || a.command.is_some() || a.query.is_some();

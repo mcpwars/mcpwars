@@ -310,6 +310,8 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/sysop/map", get(sysop_map))
         .route("/api/sysop/events", get(sysop_events))
         .route("/api/sysop/player", get(sysop_player))
+        .route("/api/sysop/notes", get(sysop_notes))
+        .route("/api/sysop/memory", get(sysop_memory))
         .route("/api/sysop/journal", get(sysop_journal))
         .route("/api/sysop/activity", get(sysop_activity))
         .route("/api/sysop/activity/seasons", get(sysop_activity_seasons))
@@ -1521,6 +1523,26 @@ async fn sysop_player(State(s): State<AppState>, Query(q): Query<KeyQ>, h: Heade
     }
 }
 
+async fn sysop_notes(State(s): State<AppState>, Query(q): Query<crate::sysop_mcp::NotesArgs>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    let r = crate::sysop_mcp::notes(&s.game, q).await;
+    if r.ok {
+        Json(r.data).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, Json(json!({"error": r.text}))).into_response()
+    }
+}
+
+async fn sysop_memory(State(s): State<AppState>, Query(q): Query<crate::sysop_mcp::MemoryArgs>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    let r = crate::sysop_mcp::memory(&s.game, q).await;
+    if r.ok {
+        Json(r.data).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, Json(json!({"error": r.text}))).into_response()
+    }
+}
+
 /// One pilot by name or id, as the sysop sees it (None if unknown).
 pub async fn sysop_player_view(game: &Game, name: String) -> Option<Value> {
     game.read(move |w| {
@@ -1529,6 +1551,15 @@ pub async fn sysop_player_view(game: &Game, name: String) -> Option<Value> {
             .or_else(|| name.parse().ok().and_then(|id| w.players.get(&id)))?;
         let mut st = query::status(w, p.id).unwrap_or(Value::Null);
         st["notes"] = json!(p.notes);
+        st["memory"] = json!(
+            p.memory
+                .iter()
+                .filter_map(|(key, record)| record.versions.last().map(
+                    |v| json!({"key": key, "revision": v.revision, "tick": v.tick, "expires_tick": v.expires_tick,
+                "archived": v.expires_tick.is_some_and(|t| t <= w.tick), "data": v.data})
+                ))
+                .collect::<Vec<_>>()
+        );
         st["plan"] = query::plan_view(p);
         st["inbox"] = json!(
             p.inbox

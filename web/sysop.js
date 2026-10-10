@@ -4163,7 +4163,7 @@
 
     const radio = (S.radio || []).filter((m) => m.from_id === p.id || m.to_id === p.id || (m.channel === "corp" && d && d.corp && m.corp_id === d.corp.id));
     const tabsDef = [["overview", "Overview"], ["ship", "Ship"]];
-    if (!npc) tabsDef.push(["owner", "Human"], ["notes", "Notes", d ? Object.keys(d.notes || {}).length : 0], ["inbox", "Inbox", d ? (d.inbox || []).length : 0], ["radio", "Radio", radio.length], ["activity", "Activity"]);
+    if (!npc) tabsDef.push(["owner", "Human"], ["notes", "Notes", d ? Object.keys(d.notes || {}).length : 0], ["memory", "Memory", d ? (d.memory || []).length : 0], ["inbox", "Inbox", d ? (d.inbox || []).length : 0], ["radio", "Radio", radio.length], ["activity", "Activity"]);
     const tb = tabsBar("captain", tabsDef);
     const oldT = box.querySelector(":scope > [data-role=tabs]");
     const tSig = JSON.stringify([tabsDef, inspTab.captain]);
@@ -4182,6 +4182,7 @@
       if (tab === "ship") fillShip(b, d);
       if (tab === "owner") fillOwner(b, d);
       if (tab === "notes") fillNotes(b, d);
+      if (tab === "memory") fillMemory(b, p, d);
       if (tab === "inbox") fillInbox(b, d);
       if (tab === "radio") fillRadio(b, p, radio);
     });
@@ -4330,6 +4331,32 @@
       b.append(n);
     }
     if (!rest.length && plan.text == null) b.append(el("p", "empty", "No other notes."));
+  }
+  function fillMemory(b, p, d) {
+    const records = d.memory || [];
+    if (!records.length) { b.append(el("p", "empty", "No structured memory.")); return; }
+    for (const r of records) {
+      const n = el("div", "note");
+      n.append(el("h4", "", r.key), el("p", "hint", `Revision ${fmt(r.revision)} · tick ${fmt(r.tick)} · ${r.expires_tick == null ? "No expiry" : `${r.archived ? "Expired" : "Expires"} at tick ${fmt(r.expires_tick)}`}`));
+      n.append(el("pre", "", JSON.stringify(r.data, null, 2)));
+      const history = el("div");
+      let offset = 0;
+      const more = btn("View history", "sm", async () => {
+        more.disabled = true;
+        const q = new URLSearchParams({ name: String(p.id), action: "history", key: r.key, offset: String(offset), limit: "10" });
+        const result = await api(`${API}/memory?${q}`);
+        more.disabled = false;
+        if (!result.ok) { history.replaceChildren(el("p", "empty", errText(result.data, result.status))); return; }
+        for (const v of result.data.versions || []) {
+          history.append(el("h4", "", `Revision ${fmt(v.revision)} · tick ${fmt(v.tick)}${v.expires_tick == null ? "" : ` · expiry tick ${fmt(v.expires_tick)}`}`), el("pre", "", JSON.stringify(v.data, null, 2)));
+        }
+        offset = result.data.continuation.next_arguments.offset;
+        more.textContent = "More history";
+        more.hidden = !result.data.continuation.has_more;
+      });
+      n.append(more, history);
+      b.append(n);
+    }
   }
   function fillInbox(b, d) {
     const items = d.inbox || [];

@@ -272,6 +272,114 @@ async fn mcp_over_http_end_to_end() {
     let (_, t) = text(&call("get_briefing", json!({})).await.unwrap());
     assert!(t.contains("hello captains"), "{t}");
 
+    // Sysop key/value reads use the same stored data, with no mutation surface.
+    let (ok, t) = text(
+        &call("write_note", json!({"key": "sysop_test", "value": "private inspection note"}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok, "{t}");
+    for data in [json!({"facts": {"sector": 12}}), json!({"facts": {"sector": 13}})] {
+        let (ok, t) = text(
+            &call(
+                "memory",
+                json!({"action": "save", "key": "inspection", "data": data, "ttl_ticks": 0}),
+            )
+            .await
+            .unwrap(),
+        );
+        assert!(ok, "{t}");
+    }
+    let (ok, t) = text(
+        &scall("sysop_notes", json!({"name": "E2E", "key": "sysop_test", "offset": 8, "limit": 10}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["value"], "inspection");
+    let (ok, next) = text(
+        &scall("sysop_notes", envelope(&t)["continuation"]["next_arguments"].clone())
+            .await
+            .unwrap(),
+    );
+    assert!(ok, "{next}");
+    assert_eq!(envelope(&next)["value"], " note");
+    let (ok, t) = text(&scall("sysop_memory", json!({"name": reg["player_id"].to_string()})).await.unwrap());
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["records"][0]["archived"], true);
+    let (ok, t) = text(
+        &scall(
+            "sysop_memory",
+            json!({"name": "E2E", "action": "read", "key": "inspection", "path": "/facts/sector"}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["data"], 13);
+    let (ok, t) = text(
+        &scall(
+            "sysop_memory",
+            json!({"name": "E2E", "action": "history", "key": "inspection", "limit": 1}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    let history = envelope(&t);
+    assert_eq!(history["versions"][0]["revision"], 1);
+    assert_eq!(history["continuation"]["has_more"], true);
+    let (ok, t) = text(
+        &scall("sysop_memory", history["continuation"]["next_arguments"].clone())
+            .await
+            .unwrap(),
+    );
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["versions"][0]["revision"], 2);
+    let (ok, t) = text(
+        &scall(
+            "sysop_memory",
+            json!({"name": "E2E", "action": "diff", "key": "inspection", "expected_revision": 1}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["changes"]["/facts/sector"]["after"], 13);
+    for args in [
+        json!({"name": "missing"}),
+        json!({"name": "E2E", "action": "save", "key": "inspection", "data": null}),
+    ] {
+        assert!(!text(&scall("sysop_memory", args).await.unwrap()).0);
+    }
+    assert!(!text(&call("sysop_memory", json!({"name": "E2E"})).await.unwrap()).0);
+    for route in ["notes?name=E2E", "memory?name=E2E&action=history&key=inspection&limit=1"] {
+        assert_eq!(
+            http.get(format!("{url}/api/sysop/{route}")).send().await.unwrap().status().as_u16(),
+            401
+        );
+        let r = http
+            .get(format!("{url}/api/sysop/{route}"))
+            .bearer_auth("adm")
+            .send()
+            .await
+            .unwrap();
+        assert!(r.status().is_success());
+        let data: Value = r.json().await.unwrap();
+        assert!(data.get("notes").is_some() || data["versions"][0]["revision"] == 1);
+    }
+    let detail: Value = http
+        .get(format!("{url}/api/sysop/player?name=E2E"))
+        .bearer_auth("adm")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["memory"][0]["data"]["facts"]["sector"], 13);
+    assert_eq!(detail["memory"][0]["archived"], true);
+
     // Every interaction is in the activity log, broken down by tool, without secrets.
     let (ok, _) = text(&call("warp", json!({"sector": 99_999})).await.unwrap());
     assert!(!ok);
