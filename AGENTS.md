@@ -665,7 +665,7 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   all, lists every captain's results, draws daily trends and reads the daily activity summaries
   (`/api/sysop/history/*`, season `key`s tell seasons with the same number apart); one inspector on the right for
   the selection, with its commands beside it. A back button (top left of every workbench) and Esc
-  return from any jump. Below 820px it shows one panel at a time with a bottom bar. Attention alerts
+  return from any jump. Phones (under 700px, or held sideways: under 500px high) get one panel at a time with a bottom bar; up to 1080px (iPad portrait) the inspector slides over the map; a short window or iPad landscape gets an icon-only rail with labels on hover or press; touch screens get 44px rail and tab targets (`PHONE_Q`/`NARROW_Q` in `sysop.js` match the media queries in `sysop.css`). Attention alerts
   are derived in the browser from state, the feed and the interaction log; acknowledgements are
   shared by every operator session and stored beside the universe in the meta table under
   `console:acks` (`/api/sysop/acks`; never journaled, not exported). Comms reads the full radio history

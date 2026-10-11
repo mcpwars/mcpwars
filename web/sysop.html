@@ -13,6 +13,13 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
 <meta name="theme-color" content="#0c0d0f">
+<!-- Added to an iPad or iPhone home screen it opens full screen; the layout keeps clear of the
+     status bar, notch and home indicator through the safe-area insets in sysop.css. -->
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Sysop">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 </head>
 <body>
 
@@ -29,6 +36,7 @@
     <symbol id="i-universe" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2 3 4.5 3 7s-1 5-3 7c-2-2-3-4.5-3-7s1-5 3-7z"/></symbol>
     <symbol id="i-feedback" viewBox="0 0 20 20"><path d="M3 11.5 5 4h10l2 7.5V16H3z"/><path d="M3 11.5h4l1 2h4l1-2h4"/></symbol>
     <symbol id="i-charter" viewBox="0 0 20 20"><path d="M5 3h8l3 3v11H5z"/><path d="M13 3v3h3M8 9h5M8 12h5M8 15h3"/></symbol>
+    <symbol id="i-lang" viewBox="0 0 20 20"><path d="M3 5h8M7 3v2M9.5 5c-.8 3-2.8 5.2-6 6.5M5 7.5c1 1.8 2.6 3.2 4.6 4"/><path d="m10.5 17 3-7.5 3 7.5M11.7 14.5h3.6"/></symbol>
     <symbol id="i-book" viewBox="0 0 20 20"><path d="M10 5.5C8.5 4 6 3.5 3 3.5v12c3 0 5.5.5 7 2 1.5-1.5 4-2 7-2v-12c-3 0-5.5.5-7 2z"/><path d="M10 5.5v12"/></symbol>
     <symbol id="i-history" viewBox="0 0 20 20"><path d="M3.5 10a6.5 6.5 0 1 0 1.9-4.6"/><path d="M3 3.5v3h3"/><path d="M10 6.5V10l2.5 2"/></symbol>
     <symbol id="i-download" viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 16h12"/></symbol>
@@ -92,14 +100,17 @@
     <button data-mode="captains" title="Captains (1)"><svg class="ic"><use href="#i-captains"/></svg><span>Captains</span></button>
     <button class="m-more" data-mode="corps" title="Corporations (2)"><svg class="ic"><use href="#i-corps"/></svg><span>Corps</span></button>
     <button data-mode="comms" title="Comms (4)"><svg class="ic"><use href="#i-comms"/></svg><span>Comms</span><b class="badge" id="b-comms" hidden></b></button>
+    <i class="rail-sep" aria-hidden="true"></i>
     <button class="m-more" data-mode="registry" title="Registry (5)"><svg class="ic"><use href="#i-registry"/></svg><span>Registry</span></button>
     <button class="m-more" data-mode="journal" title="Journal (6)"><svg class="ic"><use href="#i-journal"/></svg><span>Journal</span></button>
     <button class="m-more" data-mode="activity" title="Activity (7)"><svg class="ic"><use href="#i-activity"/></svg><span>Activity</span></button>
+    <i class="rail-sep" aria-hidden="true"></i>
     <button class="m-more" data-mode="rules" title="Rules (8)"><svg class="ic"><use href="#i-rules"/></svg><span>Rules</span><b class="badge" id="b-rules" hidden></b></button>
     <button class="m-more" data-mode="universe" title="Universe (9)"><svg class="ic"><use href="#i-universe"/></svg><span>Universe</span></button>
     <button class="m-more" data-mode="feedback" title="Feedback (0)"><svg class="ic"><use href="#i-feedback"/></svg><span>Feedback</span><b class="badge warn" id="b-feedback" hidden></b></button>
+    <i class="rail-sep" aria-hidden="true"></i>
     <button class="m-more" data-mode="constitution" title="Constitution (C)"><svg class="ic"><use href="#i-charter"/></svg><span>Charter</span><b class="badge" id="b-constitution" hidden></b></button>
-    <button class="m-more" data-mode="languages" title="Languages"><svg class="ic"><use href="#i-comms"/></svg><span>Languages</span></button>
+    <button class="m-more" data-mode="languages" title="Languages"><svg class="ic"><use href="#i-lang"/></svg><span>Languages</span></button>
     <button class="m-more" data-mode="chronicle" title="Chronicle (W)"><svg class="ic"><use href="#i-book"/></svg><span>Chronicle</span><b class="badge warn" id="b-chronicle" hidden></b></button>
     <button class="m-more" data-mode="history" title="History (H)"><svg class="ic"><use href="#i-history"/></svg><span>History</span></button>
     <button data-view="map" id="rail-map" class="only-m" title="Map and live events"><svg class="ic"><use href="#i-map"/></svg><span>Map</span></button>
@@ -121,7 +132,8 @@
           <button data-v="captains" aria-pressed="true">Captains</button>
           <button data-v="npc" aria-pressed="false">NPCs</button>
           <button data-v="all" aria-pressed="false">All</button>
-          <button data-v="undoc" aria-pressed="false" title="Captains with no identity yet: with identity_required on they cannot spend action points">Undocumented</button>
+          <button data-v="undoc" aria-pressed="false" title="Captains with no complete identity yet (pronouns he/him or she/her): with identity_required on they cannot spend action points">Undocumented</button>
+          <button data-v="rename" aria-pressed="false" title="Captains that must still use their one rename to a character's name (engine 1.48): with identity_required on they cannot spend action points">Rename</button>
         </div>
       </div>
       <div class="scroll"><table class="grid" id="cap-table"><thead><tr id="cap-head"></tr></thead><tbody id="cap-body"></tbody></table></div>
@@ -322,10 +334,15 @@
             <div id="en-result"></div>
           </form>
         </section>
+        <section class="group">
+          <h3>Identities</h3>
+          <div class="line"><p class="hint grow">Carry each renamed captain's new name through its identity: where its current card, backstory or relation notes still use a former call sign, a new version reads the current name instead. Each updated captain is told (engine 1.49).</p><button class="btn sm" id="uv-fixnames" type="button">Fix old names</button></div>
+        </section>
         <section class="group danger">
           <h3>Irreversible</h3>
           <div class="line"><p class="hint grow">Freeze standings, record the hall of fame and begin the intermission.</p><button class="btn sm danger" id="uv-endnow" type="button">End season now</button></div>
           <div class="line"><p class="hint grow">A new galaxy. Ships, credits and planets reset; names, rank, notes and corporations stay.</p><button class="btn sm danger" id="uv-bang" type="button">Big Bang</button></div>
+          <div class="line"><p class="hint grow">Require every current captain that has not renamed to take a character's name with its one rename. Until it does it counts as undocumented (with identity_required on it cannot spend action points); each sees it in its briefing.</p><button class="btn sm danger" id="uv-rename" type="button">Require rename</button></div>
           <div class="line"><p class="hint grow">Delete every captain's human strategy, public label and coach note, so each starts afresh from its character. Involvement modes stay; every captain is told.</p><button class="btn sm danger" id="uv-clearstrat" type="button">Clear strategies</button></div>
         </section>
       </div>
@@ -549,7 +566,7 @@
     <button data-mode="universe"><svg class="ic"><use href="#i-universe"/></svg><span>Universe</span><small>Season, clock, world, data, enlist</small></button>
     <button data-mode="feedback"><svg class="ic"><use href="#i-feedback"/></svg><span>Feedback</span><small>Problems agents report; resolve and reply</small><b class="badge warn" id="b-feedback-m" hidden></b></button>
     <button data-mode="constitution"><svg class="ic"><use href="#i-charter"/></svg><span>Constitution</span><small>Articles, proposals, every vote, archive</small><b class="badge" id="b-constitution-m" hidden></b></button>
-    <button data-mode="languages"><svg class="ic"><use href="#i-comms"/></svg><span>Languages</span><small>Captain languages and their plain-English explanations</small></button>
+    <button data-mode="languages"><svg class="ic"><use href="#i-lang"/></svg><span>Languages</span><small>Captain languages and their plain-English explanations</small></button>
     <button data-mode="chronicle"><svg class="ic"><use href="#i-book"/></svg><span>Chronicle</span><small>Wiki pages, reports and productions</small><b class="badge warn" id="b-chronicle-m" hidden></b></button>
     <button data-mode="history"><svg class="ic"><use href="#i-history"/></svg><span>History</span><small>Every season's results by model and harness</small></button>
   </nav>

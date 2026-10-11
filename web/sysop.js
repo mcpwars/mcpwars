@@ -384,8 +384,12 @@
   }
   for (const id of ["insp", "al-list", "alert-chip", "cap-enlist"]) $(id).addEventListener("click", markJump, true);
 
-  // Phones: one panel at a time (workbench, map, or inspector), chosen from the bottom bar.
-  const mobile = () => matchMedia("(max-width: 820px)").matches;
+  // Phones (portrait, or held sideways): one panel at a time (workbench, map, or inspector),
+  // chosen from the bottom bar. Keep these queries equal to the ones in sysop.css.
+  const PHONE_Q = matchMedia("(max-width: 700px), (max-height: 500px) and (max-width: 1000px)");
+  // Tablets and narrow windows: the inspector slides over the map instead of taking a column.
+  const NARROW_Q = matchMedia("(max-width: 1080px)");
+  const mobile = () => PHONE_Q.matches;
   let mview = "work", mviewBefore = "work";
   function setMView(v) {
     if (v === "insp" && mview !== "insp") mviewBefore = mview;
@@ -398,6 +402,46 @@
   }
   const MORE_MODES = ["corps", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "chronicle", "history"];
   $("rail-map").addEventListener("click", () => { setMView("map"); map.redraw(); });
+  // Rail labels: a mouse hover shows the workbench and its shortcut beside the icon; on a
+  // compact rail (a short window, an iPad held sideways), whose labels are hidden, a press or
+  // keyboard focus shows the label too. The native title tooltip would double it, so it moves.
+  const railTip = el("div", "rail-tip");
+  railTip.hidden = true;
+  railTip.setAttribute("aria-hidden", "true");
+  document.body.append(railTip);
+  let railTipT = 0;
+  const railCompact = (b) => { const sp = b.querySelector(":scope > span"); return !mobile() && !!sp && sp.offsetWidth <= 1; };
+  function showRailTip(b, always) {
+    if (mobile() || !(always || railCompact(b))) return;
+    clearTimeout(railTipT);
+    const r = b.getBoundingClientRect();
+    railTip.textContent = b.dataset.tip;
+    railTip.style.left = `${Math.round(r.right + 8)}px`;
+    railTip.style.top = `${Math.round(r.top + r.height / 2)}px`;
+    railTip.hidden = false;
+  }
+  const hideRailTip = (ms) => { clearTimeout(railTipT); railTipT = setTimeout(() => { railTip.hidden = true; }, ms || 0); };
+  for (const b of document.querySelectorAll("#rail button")) {
+    b.dataset.tip = b.title || b.textContent.trim();
+    b.removeAttribute("title");
+    b.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") showRailTip(b, true); });
+    b.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") hideRailTip(); });
+    b.addEventListener("pointerdown", (e) => { if (e.pointerType !== "mouse") showRailTip(b); });
+    b.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") hideRailTip(900); });
+    b.addEventListener("pointercancel", () => hideRailTip());
+    b.addEventListener("focus", () => { if (b.matches(":focus-visible")) showRailTip(b); });
+    b.addEventListener("blur", () => hideRailTip());
+    b.addEventListener("click", () => { if (!b.matches(":hover")) hideRailTip(900); });
+  }
+  $("rail").addEventListener("scroll", () => hideRailTip(), { passive: true });
+  // Rotating an iPad or phone, or resizing a window, can cross a layout: keep the inspector
+  // and the visible panel in step with the selection.
+  const relayout = () => {
+    $("app").classList.toggle("insp-open", NARROW_Q.matches && !!sel);
+    if (mobile()) setMView(sel && mview === "insp" ? "insp" : mview === "insp" ? "work" : mview);
+    requestAnimationFrame(() => map.redraw());
+  };
+  for (const q of [PHONE_Q, NARROW_Q]) { if (q.addEventListener) q.addEventListener("change", relayout); else q.addListener(relayout); }
   // Phones: the modes that do not fit the bottom bar live in a bottom sheet.
   const sheet = $("more");
   $("rail-more").addEventListener("click", () => {
@@ -426,7 +470,7 @@
     syncFocus(o.pan);
     markSelected();
     renderDock();
-    if (window.matchMedia("(max-width: 1080px)").matches) $("app").classList.toggle("insp-open", !!sel);
+    if (NARROW_Q.matches) $("app").classList.toggle("insp-open", !!sel);
     if (sel && !(o.stay && mobile())) setMView("insp");
     else if (mview === "insp") setMView(mviewBefore === "insp" ? "work" : mviewBefore);
   }
@@ -584,6 +628,25 @@
   // Captains
   // ======================================================================
   let capScope = store.get("capScope", "captains"), capQ = "", capSort = store.get("capSort", { k: "name", d: 1 });
+  // Identities (engine 1.46 to 1.48) from /identities: pronouns (every character is male or
+  // female), the mandatory one-time rename (`rename_required`) and former names. The state's
+  // player rows only say `documented`, which is false while a rename is pending.
+  let idData = null, idAt = 0, idBusy = false, idErr = null;
+  const idRow = (pid) => (idData && Array.isArray(idData.identities) ? idData.identities.find((r) => r.player_id === pid) || null : null);
+  // "male", "female" or null, the way the engine reads pronouns (identity::gender).
+  function genderOf(pronouns) {
+    const k = String(pronouns || "").toLowerCase().replace(/[^a-z]/g, "");
+    if (["hehim", "he", "him", "hehimhis", "male", "man"].includes(k)) return "male";
+    if (["sheher", "she", "her", "sheherhers", "female", "woman"].includes(k)) return "female";
+    return null;
+  }
+  const renamePending = (p) => { const r = idRow(p.id); return !!(r && r.rename_required); };
+  // Undocumented for want of an identity (not merely waiting on its rename).
+  const noIdentity = (p) => {
+    if (p.kind === "npc" || p.documented !== false) return false;
+    const r = idRow(p.id);
+    return !(r && r.rename_required && r.current && genderOf(r.current.pronouns));
+  };
   const seenTicks = (p) => (p.kind === "npc" || !isNum(p.last_action_tick) ? null : Math.max(0, S.tick - p.last_action_tick));
   const flagsOf = (p) => {
     const f = [];
@@ -596,7 +659,8 @@
     if (p.coached) f.push(["coached", "", "Has a coaching human"]);
     if (p.aggressor && p.kind !== "npc") f.push(["aggr", "warn", "Aggressor"]);
     if (p.kind !== "npc" && !p.has_plan) f.push(["no plan", "warn", "No plan written yet (mandatory)"]);
-    if (p.kind !== "npc" && p.documented === false) f.push(["undoc", S.identity_required ? "warn" : "info", S.identity_required ? "Undocumented: no identity yet, so it cannot spend action points" : "Undocumented: no identity yet (identity_required is off)"]);
+    if (noIdentity(p)) f.push(["undoc", S.identity_required ? "warn" : "info", S.identity_required ? "Undocumented: no complete identity yet (pronouns he/him or she/her), so it cannot spend action points" : "Undocumented: no complete identity yet (identity_required is off)"]);
+    if (p.kind !== "npc" && renamePending(p)) f.push(["rename", S.identity_required ? "warn" : "info", `Rename required: must use its one rename to a character's name sharing no word with "${p.name}"${S.identity_required ? "; until then it cannot spend action points" : ""}`]);
     return f;
   };
   const COLS = [
@@ -605,9 +669,13 @@
       const w = el("span", "who");
       const ident = p.kind === "npc" ? `npc ${p.npc || ""}` : [p.model, p.harness].filter(Boolean).join(" · ");
       w.append(dot(p.name, p.kind === "npc" && p.npc), el("span", "nm", p.name));
+      const ir = p.kind === "npc" ? null : idRow(p.id);
+      const g = ir && ir.current ? genderOf(ir.current.pronouns) : null;
+      if (g) { const gd = el("span", `gd ${g}`, g === "male" ? "M" : "F"); gd.title = `${g === "male" ? "Male" : "Female"} (${ir.current.pronouns})`; gd.setAttribute("aria-label", gd.title); w.append(gd); }
       td.append(w);
       // On narrow screens the flags ride on this second line instead of their own column.
-      const fl = flagsOf(p).filter((f) => f[1]);
+      // (A pending rename has its own line below, so it is not repeated here.)
+      const fl = flagsOf(p).filter((f) => f[1] && f[0] !== "rename");
       // Last seen and corporation ride here too while their own columns are hidden (narrow
       // workbench), so they are always visible.
       const sn = p.kind === "npc" ? null : seenTicks(p);
@@ -618,13 +686,20 @@
         line.append(document.createTextNode(ident));
         td.append(line);
       }
+      const former = ir ? ir.former_names || [] : [];
+      if (ir && (ir.rename_required || former.length)) {
+        const rn = el("div", "ident rn");
+        if (ir.rename_required) rn.append(tag("rename required", S.identity_required ? "warn" : "info", flagsOf(p).find((f) => f[0] === "rename")?.[2] || "Rename required"));
+        if (former.length) { const fm = el("span", "former", `formerly ${former.join(", ")}`); fm.title = `Former call signs: ${former.join(", ")}`; rn.append(fm); }
+        td.append(rn);
+      }
       if (seenTxt || p.corp) {
         const meta = el("div", "cap-meta");
         if (seenTxt) meta.append(el("span", "seen-inline", seenTxt));
         if (p.corp) { const ci = el("span", "corp-inline", p.corp); ci.title = p.corp; meta.append(ci); }
         td.append(meta);
       }
-      td.title = [p.name, p.identity && `${p.identity.age}, of ${p.identity.homeworld}`, p.model && `model ${p.model}`, p.harness && `on ${p.harness}`].filter(Boolean).join(" · ");
+      td.title = [p.name, g && (ir.current.pronouns || g), former.length && `formerly ${former.join(", ")}`, p.identity && `${p.identity.age}, of ${p.identity.homeworld}`, p.model && `model ${p.model}`, p.harness && `on ${p.harness}`].filter(Boolean).join(" · ");
       return td;
     } },
     { k: "sector", label: "Sector", n: true, get: (p) => p.sector },
@@ -676,10 +751,10 @@
     }));
   }
   function capRows() {
-    let rows = S.players.filter((p) => capScope === "all" || (capScope === "npc" ? p.kind === "npc" : capScope === "undoc" ? p.kind !== "npc" && p.documented === false : p.kind !== "npc"));
+    let rows = S.players.filter((p) => capScope === "all" || (capScope === "npc" ? p.kind === "npc" : capScope === "undoc" ? noIdentity(p) : capScope === "rename" ? p.kind !== "npc" && renamePending(p) : p.kind !== "npc"));
     if (capQ) {
       const q = capQ.toLowerCase();
-      rows = rows.filter((p) => [p.name, p.model, p.harness, p.corp, String(p.sector), p.npc, `#${p.id}`].some((v) => v && String(v).toLowerCase().includes(q)));
+      rows = rows.filter((p) => [p.name, p.model, p.harness, p.corp, String(p.sector), p.npc, `#${p.id}`, ...((idRow(p.id) || {}).former_names || [])].some((v) => v && String(v).toLowerCase().includes(q)));
     }
     const col = COLS.find((c) => c.k === capSort.k) || COLS[0];
     return rows.sort((a, b) => {
@@ -695,11 +770,15 @@
     const rows = capRows();
     const caps = captains().length;
     $("cap-count").textContent = `${rows.length} of ${capScope === "npc" ? S.players.length - caps : capScope === "all" ? S.players.length : caps}`;
-    const undoc = captains().filter((p) => p.documented === false).length;
+    if (!idBusy && Date.now() - idAt > 30000) loadIdentities();
+    const undoc = captains().filter(noIdentity).length;
     const ub = document.querySelector('#cap-scope button[data-v="undoc"]');
     if (ub) ub.textContent = undoc ? `Undocumented ${undoc}` : "Undocumented";
+    const pend = captains().filter(renamePending).length;
+    const rb = document.querySelector('#cap-scope button[data-v="rename"]');
+    if (rb) rb.textContent = pend ? `Rename ${pend}` : "Rename";
     const body = $("cap-body");
-    const sig = JSON.stringify([capSort, capScope, rows.map((p) => [p.id, p.identity && p.identity.version, p.sector, p.ap, p.credits, p.net_worth, p.bank, p.alignment, p.corp, p.ship, p.model, p.harness, seenTicks(p), flagsOf(p).map((f) => f[0]).join()])]);
+    const sig = JSON.stringify([capSort, capScope, rows.map((p) => [p.id, p.identity && p.identity.version, p.sector, p.ap, p.credits, p.net_worth, p.bank, p.alignment, p.corp, p.ship, p.model, p.harness, seenTicks(p), flagsOf(p).map((f) => f[0]).join(), JSON.stringify(idRow(p.id) && [idRow(p.id).current && idRow(p.id).current.pronouns, idRow(p.id).former_names])])]);
     if (sig === capSig) { markSelected(); return; }
     capSig = sig;
     const frag = document.createDocumentFragment();
@@ -719,7 +798,7 @@
       frag.append(tr);
     }
     if (!rows.length) {
-      const tr = el("tr", "empty"); const td = el("td", "", capQ ? "No captain matches that filter." : capScope === "undoc" ? "Every captain has written its identity." : "No captains yet.");
+      const tr = el("tr", "empty"); const td = el("td", "", capQ ? "No captain matches that filter." : capScope === "undoc" ? "Every captain has written its identity." : capScope === "rename" ? (idData ? "No captain has a rename pending." : "Loading identities…") : "No captains yet.");
       td.colSpan = COLS.length; tr.append(td); frag.append(tr);
     }
     body.replaceChildren(frag);
@@ -1247,7 +1326,7 @@
     if (on) $("cv-q").focus();
     else if (cvQ) { $("cv-q").value = ""; cvQ = ""; cmTarget = null; renderComms(); }
   });
-  if (matchMedia("(max-width: 820px)").matches) setComposer(false);
+  if (mobile()) setComposer(false);
   function updateCmPlaceholder() {
     const to = $("cm-to");
     const name = to.value && to.selectedIndex >= 0 ? to.options[to.selectedIndex].text : null;
@@ -2010,7 +2089,8 @@
     for (const c of d.characters || []) {
       const k = c.card || {};
       const g = c.game || {};
-      const head = `${c.call_sign}${c.card ? ` · ${k.age}${k.pronouns ? `, ${k.pronouns}` : ""}, of ${k.homeworld}` : " · undocumented"} · ${plural((c.log || []).length, "log line")} · ${plural((c.moments || []).length, "moment")}`;
+      const cp = playerByName(c.call_sign);
+      const head = `${c.call_sign}${c.card ? ` · ${k.age}${k.gender ? `, ${k.gender}` : k.pronouns ? `, ${k.pronouns}` : ""}, of ${k.homeworld}` : " · undocumented"}${cp && renamePending(cp) ? " · rename required" : ""} · ${plural((c.log || []).length, "log line")} · ${plural((c.moments || []).length, "moment")}`;
       const parts = [];
       parts.push(facts([
         ["Trade", k.trade || "–", { t: 1 }], ["Corporation", g.corp || "–", { t: 1 }],
@@ -2482,7 +2562,7 @@
         m.append(captainLink(c.name));
         m.append(c.approved_revision ? tag(`approved r${c.approved_revision}`, "ok") : tag("not approved", ""));
         li.append(m);
-        if (c.character) li.append(document.createTextNode(`${c.character.age}, of ${c.character.homeworld}. ${c.character.bio || ""}`));
+        if (c.character) li.append(document.createTextNode(`${c.character.age}${c.character.gender ? `, ${c.character.gender}` : ""}, of ${c.character.homeworld}. ${c.character.bio || ""}`));
         else li.append(el("span", "muted", "No identity on record."));
         ul.append(li);
       }
@@ -2527,7 +2607,7 @@
       const k = c.card || {};
       n.append(el("h4", "", c.name));
       n.append(facts([
-        ["Age", fmt(k.age)], ["Pronouns", k.pronouns || "–", { t: 1 }], ["Homeworld", k.homeworld || "–", { t: 1 }], ["Trade", k.trade || "–", { t: 1 }],
+        ["Age", fmt(k.age)], ["Gender", k.gender || genderOf(k.pronouns) || "–", { t: 1 }], ["Pronouns", k.pronouns || "–", { t: 1 }], ["Homeworld", k.homeworld || "–", { t: 1 }], ["Trade", k.trade || "–", { t: 1 }],
         ["Approved", c.approved_revision ? `revision ${c.approved_revision}${c.approved_current ? " (current)" : " (older)"}` : "not yet", { t: 1, cls: c.approved_current ? "" : "warn-t" }],
         ["Appearance", k.appearance || "–", { t: 1 }], ["Voice", k.voice || "–", { t: 1 }],
       ], true));
@@ -4649,6 +4729,24 @@
     if (!await confirmDlg({ title: "Clear every human strategy?", body: ["Deletes every captain's human strategy, public label and coach note, so each starts afresh from its character. Involvement modes stay. Every captain is told. Journaled; the old strategies are not restored."], ok: "Clear strategies", typed: "clear strategies" })) return;
     await act("clear_strategies", { confirm: "clear strategies" }, "Clear strategies");
   }
+  // Engine 1.48: every current captain that has not renamed must use its one rename to a
+  // character's name; until then it counts as undocumented.
+  async function requireRename() {
+    if (!idData) loadIdentities();
+    const pend = captains().filter((p) => { const r = idRow(p.id); return !(r && isNum(r.renamed_tick)); }).length;
+    if (!await confirmDlg({ title: "Require every captain to rename?", body: [`Every current captain that has not used its one rename (${idData ? plural(pend, "captain") : "count loading"}) must take a character's name, sharing no word with its old call sign. Until it does it counts as undocumented${S.identity_required ? " and cannot spend action points (identity_required is on)" : ""}. Each of them sees the requirement in its briefing. Journaled; the console cannot lift it again.`], ok: "Require rename", typed: "require rename" })) return;
+    if (await act("require_rename", {}, "Require rename")) { idAt = 0; loadIdentities(); }
+  }
+  $("uv-rename").addEventListener("click", requireRename);
+  // Engine 1.49: identities of captains who renamed earlier still name their old call sign.
+  async function fixOldNames() {
+    if (!idData) loadIdentities();
+    const renamed = idData ? (idData.identities || []).filter((r) => (r.former_names || []).length).length : null;
+    if (!await confirmDlg({ title: "Carry new names through identities?", body: [`For each captain that has renamed${renamed === null ? "" : ` (${plural(renamed, "captain")})`}, a former call sign left in its current card, backstory or relation notes becomes its current name, as a new identity version; earlier versions keep the original. Each updated captain is told, and any leftover word of an old name gets it a notice to revise. Journaled.`], ok: "Fix old names", danger: false })) return;
+    const d = await act("fix_old_names", {}, "Fix old names");
+    if (d) { idAt = 0; loadIdentities(); }
+  }
+  $("uv-fixnames").addEventListener("click", fixOldNames);
   $("uv-clearstrat").addEventListener("click", clearStrategies);
   $("uv-endnow").addEventListener("click", endSeason);
   $("uv-bang").addEventListener("click", bigBang);
@@ -4882,8 +4980,11 @@
     }
     const d = det && det.d;
     const npc = p.kind === "npc";
-    const sub = npc ? `NPC ${p.npc || ""} · ${(p.ship || "").replace(/_/g, " ")}` : [p.model || p.kind, p.harness && `on ${p.harness}`, p.rank, p.corp].filter(Boolean).join(" · ");
+    const irH = npc ? null : idRow(p.id);
+    const gH = irH && irH.current ? genderOf(irH.current.pronouns) : null;
+    const sub = npc ? `NPC ${p.npc || ""} · ${(p.ship || "").replace(/_/g, " ")}` : [gH, p.model || p.kind, p.harness && `on ${p.harness}`, p.rank, p.corp].filter(Boolean).join(" · ");
     const tags = flagsOf(p).map(([t, k, title]) => tag(t, k, title));
+    if (irH && (irH.former_names || []).length) tags.push(tag(`formerly ${irH.former_names.join(", ")}`, "", "Former call signs (the one rename is used)"));
     if (p.label) tags.unshift(tag(`“${p.label}”`, "", "Public label"));
     region(box, "head", head({ kind: npc ? "NPC" : "Captain", title: p.name, titleDot: dot(p.name, npc && p.npc), id: `#${p.id}`, sub, tags }));
 
@@ -4971,7 +5072,7 @@
         b.append(section("Character", box));
       } else if (p.documented === false) {
         const none = el("p", S.identity_required ? "md-status due" : "md-status");
-        none.append(`Undocumented: no identity yet${S.identity_required ? ", so it cannot spend action points" : ""}. See the `, go, ".");
+        none.append(`${renamePending(p) ? "Rename required and no" : "Undocumented: no"} identity yet${S.identity_required ? ", so it cannot spend action points" : ""}. See the `, go, ".");
         b.append(section("Character", none));
       }
     }
@@ -5047,7 +5148,6 @@
   // ---------- identity (engine 1.46): the human character the captain plays ----------
   // Every version, former names and the one rename, from /identities (refetched after 15 s
   // while the tab is open, and when an identity is filed or a captain renamed).
-  let idData = null, idAt = 0, idBusy = false, idErr = null;
   function loadIdentities() {
     if (idBusy) return;
     idBusy = true;
@@ -5056,7 +5156,8 @@
       idAt = Date.now();
       if (r.ok && r.data && Array.isArray(r.data.identities)) { idData = r.data; idErr = null; }
       else if (r.status !== 401) idErr = r.status === 404 ? "This server keeps no identities (engine 1.46 or later)." : errText(r.data, r.status);
-      if (sel && sel.kind === "captain" && inspTab.captain === "identity") buildInspector();
+      if (sel && sel.kind === "captain") buildInspector();
+      if (mode === "captains") { capSig = ""; renderCaptains(); }
     });
   }
   function idQuote(text, empty) { return text ? el("blockquote", "fb-text", text) : el("p", "empty", empty); }
@@ -5134,16 +5235,22 @@
     const cur = row.current;
     const vs = row.versions || [];
     const req = !!(idData && idData.required);
+    const gender = cur ? genderOf(cur.pronouns) : null;
+    const gate = req ? " Until then it cannot spend action points (identity_required is on)." : " identity_required is off, so it can still spend action points.";
     b.append(el("p", row.documented ? "md-status" : "md-status due", row.documented
       ? `Documented: version ${cur ? cur.version : "–"} of ${vs.length}.`
-      : `Undocumented: no identity yet.${req ? " It cannot spend action points until it writes one (identity_required is on)." : " identity_required is off, so it can still spend action points."}`));
+      : row.rename_required && cur && gender
+        ? `Rename required: it must use its one rename (identity action=set name=…) to a character's name sharing no word with "${p.name}".${gate}`
+        : cur && !gender
+          ? `Incomplete: pronouns "${cur.pronouns || ""}" are not he/him or she/her (every character is male or female, engine 1.47). It must file them again${row.rename_required ? " and use its mandatory rename" : ""}.${gate}`
+          : `Undocumented: no identity yet${row.rename_required ? ", and its rename is required" : ""}.${gate}`));
     const former = row.former_names || [];
     const rename = isNum(row.renamed_tick)
       ? `Used at tick ${fmt(row.renamed_tick)}${former.length ? `: formerly ${former.join(", ")}` : ""}. The call sign is fixed now.`
-      : "Not used: one change of call sign is still available.";
+      : row.rename_required ? "Required and not yet used: the operator asked every captain to take a character's name." : "Not used: one change of call sign is still available.";
     if (cur) {
       b.append(section("Character", facts([
-        ["Name", cur.name, { t: 1 }], ["Age", fmt(cur.age)], ["Pronouns", cur.pronouns || "–", { t: 1 }],
+        ["Name", cur.name, { t: 1 }], ["Age", fmt(cur.age)], ["Gender", gender || "not he/him or she/her", { t: 1, cls: gender ? "" : "warn-t" }], ["Pronouns", cur.pronouns || "–", { t: 1 }],
         ["Homeworld", cur.homeworld || "–", { t: 1 }], ["Trade", cur.trade || "–", { t: 1 }],
         ["Written", `tick ${fmt(cur.tick)}${cur.at_ms ? ` · ${ago(cur.at_ms)}` : ""}`, { t: 1 }], ["Season", `${fmt(cur.season)}${cur.epoch ? ` · epoch ${cur.epoch}` : ""}`],
       ], true)));
@@ -5157,7 +5264,7 @@
       bs.append(el("p", "hint", "Private: other captains, its human and the public never see it. Captains are told the operator can read backstories."), markdown(cur.backstory || ""));
       b.append(section("Backstory (private)", bs));
     }
-    b.append(section("Call sign", facts([["Now", p.name, { t: 1 }], ["Rename", rename, { t: 1 }]], true)));
+    b.append(section("Call sign", facts([["Now", p.name, { t: 1 }], ["Rename", rename, { t: 1, cls: row.rename_required ? "warn-t" : "" }], former.length ? ["Former names", former.join(", "), { t: 1 }] : undefined].filter(Boolean), true)));
     // The diary and the timeline come from the story bible (the full log, private lines included).
     const ch = idBible && idBible.d ? (idBible.d.characters || []).find((c) => c.call_sign === p.name) : null;
     const story = idBible && idBible.err ? el("p", "empty", idBible.err) : !ch ? el("p", "empty", idBible && idBible.d ? "No story recorded." : "Loading…") : null;
@@ -6216,6 +6323,9 @@
       { t: "Open production pitches", run: () => { setMode("chronicle"); setChView("productions"); } },
       { t: "Open reported Chronicle pages", run: () => { setMode("chronicle"); setChView("pages"); setChFilter("reported"); } },
       { t: "Show undocumented captains", run: () => { setMode("captains"); const b = document.querySelector('#cap-scope button[data-v="undoc"]'); if (b) b.click(); } },
+      { t: "Show captains with a rename pending", run: () => { setMode("captains"); const b = document.querySelector('#cap-scope button[data-v="rename"]'); if (b) b.click(); } },
+      { t: "Require every captain to rename…", run: requireRename },
+      { t: "Carry new names through identities…", run: fixOldNames },
       { t: "Compare models", run: () => { setMode("history"); hiSetBy("model"); hiSetView("compare"); } },
       { t: "Compare harnesses", run: () => { setMode("history"); hiSetBy("harness"); hiSetView("compare"); } },
       { t: "Fit the galaxy", r: "F", run: () => map.fit() },
