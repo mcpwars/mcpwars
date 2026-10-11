@@ -694,3 +694,60 @@ fn a_rename_carries_the_new_name_through_the_identity_and_the_operator_fixes_old
     );
     assert!(s.w.players[&b].inbox.iter().any(|n| n.kind == "identity"));
 }
+
+#[test]
+fn first_names_are_unique_and_the_operator_can_grant_another_rename() {
+    let mut s = Sim::new();
+    let a = s.join("BorzoiDetour").unwrap();
+    let b = s.join("BorzoiMerge").unwrap();
+    s.identity(
+        a,
+        identity::Args {
+            name: Some("Tavian Rooke".into()),
+            ..full("Pell")
+        },
+    )
+    .unwrap();
+    let r = s
+        .identity(
+            b,
+            identity::Args {
+                name: Some("Tavian Rusk".into()),
+                ..full("Pell")
+            },
+        )
+        .unwrap_err();
+    assert_eq!(r.code, "name_taken");
+    s.identity(
+        b,
+        identity::Args {
+            name: Some("Oskar Rusk".into()),
+            ..full("Pell")
+        },
+    )
+    .unwrap();
+    s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::AllowRename {
+            player: b,
+            reason: Some("test".into()),
+        }),
+    )
+    .unwrap();
+    assert!(!identity::documented(&s.w, b));
+    s.identity(
+        b,
+        identity::Args {
+            action: identity::Action::Set,
+            name: Some("Lukas Morrow".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(identity::documented(&s.w, b));
+    assert_eq!(
+        s.w.identities[&b].former_names,
+        vec!["BorzoiMerge".to_string(), "Oskar Rusk".to_string()]
+    );
+    s.replays();
+}

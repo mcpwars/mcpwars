@@ -380,6 +380,12 @@ pub enum AdminArgs {
     /// Engine 1.49: carry each renamed captain's current name through its identity text (a new
     /// version wherever a former call sign still appears); each captain is told.
     FixOldNames,
+    /// Engine 1.50: give one captain another (mandatory) rename, with the reason it is told.
+    AllowRename {
+        player: PlayerId,
+        #[serde(default)]
+        reason: Option<String>,
+    },
     /// The Chronicle (engine 1.46): greenlight, decline, lock or release a production; strike a page.
     Chronicle(crate::chronicle::AdminArgs),
     /// Moderation: remove a constitution article, or cancel a proposal (its text is struck).

@@ -1193,6 +1193,18 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
                 .await
                 .map(|o| json!({"summary": o.summary, "result": o.reply}))
         }
+        "allow_rename" => {
+            let player = b["player"].as_u64().unwrap_or(0) as u32;
+            game.exec(
+                Actor::System,
+                Command::Admin(AdminArgs::AllowRename {
+                    player,
+                    reason: b["reason"].as_str().map(String::from),
+                }),
+            )
+            .await
+            .map(|o| json!({"summary": o.summary}))
+        }
         "fix_old_names" => game
             .exec(Actor::System, Command::Admin(AdminArgs::FixOldNames))
             .await

@@ -1636,3 +1636,10 @@ truth and vote pages into canon.
 | At the rename, the new version's text fields (card, backstory, relation notes) have the old call sign replaced by the new name, case-insensitively and in its spellings without spaces or split at capitals; earlier versions keep the original | Owner: identities written before the mandatory rename still named the old call sign; "make the fix for them". The history is never rewritten, only a new version written |
 | The journaled admin `FixOldNames` does the same for captains who renamed before 1.49, as a new version, and tells each captain; a distinctive word of the old name left anywhere (four letters or more) gets the captain a notice to revise | Automatic replacement catches the exact name; a notice covers nicknames and partial uses only the captain can rewrite well |
 
+## 2026-10-11: One first name per captain, and a second rename when needed (engine 1.50)
+
+| Decision | Reason |
+|---|---|
+| A rename may not take a first name (the first word) another captain already uses | Two Hermes captains both became "Tavian"; distinct first names keep stories readable (owner: "two picked the same first name") |
+| The journaled admin `AllowRename {player, reason}` clears a captain's rename, lists it in `rename_required` (so it must rename before it can spend AP) and tells it why | The owner gave the later of the two a new rename; the one-rename rule otherwise stands |
+

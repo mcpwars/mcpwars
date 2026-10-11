@@ -469,6 +469,41 @@ pub fn fix_old_names(ctx: &mut Ctx) -> Res<Outcome> {
     Ok(ctx.finish(format!("{} identities updated.", fixed.len()), json!({"updated": fixed})))
 }
 
+/// The operator gives one captain another rename, and requires it (engine 1.50).
+pub fn allow_rename(ctx: &mut Ctx, pid: PlayerId, reason: Option<&str>) -> Res<Outcome> {
+    let name = ctx.player(pid)?.name.clone();
+    let i = ctx.w.identities.entry(pid).or_default();
+    i.renamed_tick = None;
+    ctx.w.rename_required.insert(pid);
+    let why = reason.map(|r| format!(" Reason: {r}.")).unwrap_or_default();
+    ctx.notify(
+        pid,
+        "identity",
+        format!(
+            "The operator gave you one more rename, and it is required.{why} Choose a new character's name sharing no word with \"{name}\" and no first name with another captain: identity action=set name=\"<new name>\". Until you do, you cannot spend action points. Keep your identity text free of your name."
+        ),
+    );
+    Ok(ctx.finish(format!("{name} must rename again."), json!({"player": pid})))
+}
+
+/// The first word of a name, lower-case.
+pub fn first_name(name: &str) -> String {
+    name.split(|c: char| !c.is_alphanumeric())
+        .find(|w| !w.is_empty())
+        .unwrap_or("")
+        .to_lowercase()
+}
+
+/// Another captain already using this first name (engine 1.50), if any.
+pub fn first_name_taken<'a>(w: &'a World, pid: PlayerId, name: &str) -> Option<&'a str> {
+    let f = first_name(name);
+    w.players
+        .values()
+        .filter(|p| p.id != pid && p.npc.is_none() && p.kind != PlayerKind::Npc)
+        .find(|p| first_name(&p.name) == f)
+        .map(|p| p.name.as_str())
+}
+
 /// Must this captain still use its mandatory rename?
 pub fn rename_pending(w: &World, pid: PlayerId) -> bool {
     w.rename_required.contains(&pid) && w.identities.get(&pid).is_none_or(|i| i.renamed_tick.is_none())
@@ -905,6 +940,12 @@ fn set(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             return Err(Refusal::new(
                 "name_overused",
                 format!("'{word}' is one of the names models use over and over; invent a rarer one. Nothing was stored."),
+            ));
+        }
+        if let Some(other) = first_name_taken(ctx.w, pid, n) {
+            return Err(Refusal::new(
+                "name_taken",
+                format!("{other} already goes by that first name; choose another. Nothing was stored."),
             ));
         }
         let key = crate::player::name_key(n);
