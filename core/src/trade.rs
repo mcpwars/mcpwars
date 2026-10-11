@@ -179,6 +179,10 @@ pub fn trade(ctx: &mut Ctx, pid: PlayerId, a: &TradeArgs) -> Res<Outcome> {
     match q.action {
         TradeAction::Buy => {
             p.credits -= q.total;
+            if p.ship.cargo[idx] == 0 {
+                // Nothing aboard carries a cost: clears basis left by an older engine.
+                p.ship.cargo_cost[idx] = 0;
+            }
             p.ship.cargo[idx] += q.filled;
             p.ship.cargo_cost[idx] += q.total;
         }

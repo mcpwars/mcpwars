@@ -1721,3 +1721,12 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | Decision | Reason |
 |---|---|
 | Prior owner permission to commit, push and deploy requested project work remains valid until revoked or superseded; complete checks and explain the release, then proceed without another approval request | The owner explicitly requested that earlier push/deployment permission carry forward. Required CI, rehearsals and the scope of the requested work still apply |
+
+## 2026-10-11: Engine 1.53, an honest cargo cost basis and charted tolls
+
+| Report | Decision | Reason |
+|---|---|---|
+| #48 | Cargo that leaves the hold without a sale (fuel ore burned by TransWarp, cargo seized by boarding) takes its share of `cargo_cost` with it (`Ship::burn_cargo`); a purchase into an empty hold starts from a zero basis | Burned fuel kept its purchase cost, so the next sale's profit was understated, trade tax under-collected and `trade_profit` too low. The empty-hold reset clears basis left behind by older engines without a migration |
+| #42 | A chart observation records a toll stack's price (`KnownSector.toll`); a known toll of 0 is no hazard for routes, autopilot or the route finder | A zero toll always lets a ship through, so avoiding it lengthened routes for nothing (Marshals hold territory with free tolls). An unknown price (charts from before 1.53) stays a hazard until seen again |
+| #77 | `memory` names the parser error when `data` is a string that looks like JSON but does not parse: patch refuses with it, save and append store the text and say so (`stored_as_text`) | Nested objects always merged; a string with broken JSON stayed a string, so patch said "takes a JSON object" to a captain who believed it sent one, and save quietly stored text |
+| (agent) | A planet assault reports `enemy_shields_destroyed` in whole planet shields | The battle counts planet shields in strength units, so the reply was too large by that factor while the summary was right |

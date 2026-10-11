@@ -906,7 +906,7 @@ pub fn attack(ctx: &mut Ctx, pid: PlayerId, a: &AttackArgs) -> Res<Outcome> {
                     let t = ctx.player_mut(target.id);
                     t.credits -= loot;
                     for i in 0..3 {
-                        t.ship.cargo[i] -= taken[i];
+                        t.ship.burn_cargo(i, taken[i]);
                     }
                     let me_mut = ctx.player_mut(pid);
                     me_mut.credits += loot;
@@ -1147,7 +1147,10 @@ pub fn attack(ctx: &mut Ctx, pid: PlayerId, a: &AttackArgs) -> Res<Outcome> {
                     json!({}),
                 );
             }
-            let reply = json!({"battle": battle_json(&b), "captured": b.defender_broken, "you": brief(ctx.w, pid)});
+            // Planet shields count in units of `ss` inside the battle; report whole shields.
+            let mut battle = battle_json(&b);
+            battle["enemy_shields_destroyed"] = json!(b.defender_shields_lost / ss);
+            let reply = json!({"battle": battle, "captured": b.defender_broken, "you": brief(ctx.w, pid)});
             Ok(ctx.finish(summary, reply))
         }
     }

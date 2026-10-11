@@ -341,20 +341,25 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         ));
     }
     let mut data = a.data.clone().ok_or_else(|| Refusal::new("invalid_args", "data is required."))?;
-    // Some clients send JSON as a string; a string patch would otherwise replace the whole record.
-    if let Some(parsed) = data
-        .as_str()
-        .filter(|s| s.trim_start().starts_with(['{', '[']))
-        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-    {
-        data = parsed;
+    // Some clients send JSON as a string; a string patch would otherwise replace the whole
+    // record. A string that looks like JSON but does not parse is named with the parser's error
+    // (engine 1.53), so the sender can fix the text.
+    let mut not_json = None;
+    if let Some(text) = data.as_str().filter(|s| s.trim_start().starts_with(['{', '['])) {
+        match serde_json::from_str::<Value>(text) {
+            Ok(parsed) => data = parsed,
+            Err(e) => not_json = Some(format!("data is a string that is not valid JSON ({e})")),
+        }
     }
     if a.action == Action::Patch && !data.is_object() {
+        let why = not_json.as_deref().unwrap_or("data is not a JSON object");
         return Err(Refusal::new(
             "invalid_args",
-            "patch takes a JSON object of fields to merge (null removes a field). Nothing was saved.",
+            format!(
+                "patch takes a JSON object of fields to merge (nested objects merge too; null removes a field), but {why}. Nothing was saved."
+            ),
         )
-        .hint("Use save with expected_revision to replace the whole record."));
+        .hint("Send data as a JSON object, or as a string holding valid JSON. save with expected_revision replaces the whole record."));
     }
     if a.action == Action::Patch {
         let mut next = old.unwrap().data.clone();
@@ -402,8 +407,12 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     p.memory_revisions.insert(k.clone(), next_revision);
     let fields: Option<Vec<String>> = v.data.as_object().map(|o| o.keys().cloned().collect());
     p.memory.entry(k.clone()).or_default().versions.push(v);
-    Ok(ctx.finish(
-        format!("Saved private memory '{k}' revision {}.", next_revision),
-        json!({"key": k, "revision": next_revision, "fields": fields}),
-    ))
+    let mut reply = json!({"key": k, "revision": next_revision, "fields": fields});
+    let mut summary = format!("Saved private memory '{k}' revision {}.", next_revision);
+    if let Some(why) = not_json {
+        // Saved as sent, but say so: the sender probably meant structured data.
+        summary.push_str(&format!(" Stored as text: {why}."));
+        reply["stored_as_text"] = json!(why);
+    }
+    Ok(ctx.finish(summary, reply))
 }

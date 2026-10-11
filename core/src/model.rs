@@ -336,6 +336,18 @@ pub struct Ship {
 pub const COLONISTS_PER_HOLD: i64 = 25;
 
 impl Ship {
+    /// Remove `n` units of commodity `i` that leave the hold without a sale (burned, seized),
+    /// taking their share of the purchase cost so the rest keeps an honest basis.
+    pub fn burn_cargo(&mut self, i: usize, n: i64) {
+        let have = self.cargo[i];
+        let n = n.clamp(0, have);
+        let basis = (self.cargo_cost[i] as i128 * n as i128 / have.max(1) as i128) as i64;
+        self.cargo_cost[i] -= basis;
+        self.cargo[i] -= n;
+        if self.cargo[i] == 0 {
+            self.cargo_cost[i] = 0;
+        }
+    }
     pub fn colonist_holds(&self) -> i64 {
         (self.colonists + COLONISTS_PER_HOLD - 1) / COLONISTS_PER_HOLD
     }
@@ -379,6 +391,9 @@ pub struct KnownSector {
     pub planets: Vec<PlanetId>,
     /// Hostile/owned fighters seen here: (owner, count, mode).
     pub fighters: Option<(PlayerId, i64, FighterMode)>,
+    /// The toll a toll stack charged when seen (engine 1.53; None before, or for other modes).
+    #[serde(default)]
+    pub toll: Option<i64>,
     /// Owner of armid mines seen here.
     pub mines: Option<PlayerId>,
     /// Owner of an armed planet (citadel 2+) seen here.

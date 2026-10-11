@@ -7252,6 +7252,18 @@ fn memory_accepts_json_strings_and_patches_merge_only_objects() {
         assert_eq!(err.code, "invalid_args");
     }
     assert_eq!(s.w.state_hash(), before, "a refused patch changes nothing");
+    // Feedback #77: nested objects merge; broken JSON text is named with the parser's error.
+    let nested = args(Action::Patch, serde_json::json!(r#"{"route":{"from":3,"legs":[{"to":9}]}}"#), 2);
+    s.run(Actor::Player(a), Command::Memory(nested)).unwrap();
+    let broken = r#"{"route":{"from":4,}}"#;
+    let err = s
+        .run(Actor::Player(a), Command::Memory(args(Action::Patch, serde_json::json!(broken), 3)))
+        .unwrap_err();
+    assert!(err.message.contains("not valid JSON"), "{}", err.message);
+    let out = s
+        .run(Actor::Player(a), Command::Memory(args(Action::Save, serde_json::json!(broken), 3)))
+        .unwrap();
+    assert!(out.reply["stored_as_text"].as_str().unwrap().contains("not valid JSON"));
     replay_matches(&s);
 }
 
@@ -7615,4 +7627,113 @@ fn route_finder_counts_stardock_as_a_market() {
     // Every charted port counts and none is skipped as hazardous: Stardock is among the sources.
     assert_eq!(out["ports_charted"], ports, "{}", out["ports_charted"]);
     assert_eq!(out["ports_skipped_as_hazardous"], 0);
+}
+
+#[test]
+fn cargo_basis_follows_fuel_burned_by_transwarp() {
+    let mut s = Sim::new(37, 200).without_founding();
+    let a = s.join("Basis");
+    let home = s.p(a).sector;
+    let is_port = |x: &Sector, t: PortTrade| x.port.as_ref().is_some_and(|p| !p.stardock && p.trades[0] == t);
+    let seller =
+        s.w.sectors
+            .iter()
+            .find(|x| x.id != home && is_port(x, PortTrade::Sells))
+            .unwrap()
+            .id;
+    let buyer = s.w.sectors.iter().find(|x| x.id != home && is_port(x, PortTrade::Buys)).unwrap().id;
+    let dist = af_core::path::real_distance(&s.w, seller, home).unwrap() as i64;
+    let ore = dist * s.w.rules.transwarp_ore_per_hop;
+    {
+        let p = s.w.players.get_mut(&a).unwrap();
+        p.sector = seller;
+        p.ship.transwarp = true;
+        p.ship.holds = 500;
+        p.credits = 1_000_000;
+        p.ap = 10_000;
+    }
+    let start = s.w.clone();
+    let start_len = s.journal.len();
+    let trade = |s: &mut Sim, action: TradeAction, quantity: i64| {
+        s.run(
+            Actor::Player(a),
+            Command::Trade(TradeArgs {
+                contraband: false,
+                commodity: Commodity::FuelOre,
+                action,
+                quantity: Some(quantity),
+                dry_run: false,
+            }),
+        )
+        .unwrap()
+    };
+    let jump_home = |s: &mut Sim| {
+        s.run(Actor::Player(a), Command::Transwarp(TranswarpArgs { destination_sector: home }))
+            .unwrap();
+    };
+    let go = |s: &mut Sim, to: SectorId| sysop_set(s, a, 1_000_000, to);
+
+    // Fuel burned to the last unit takes its purchase cost with it.
+    trade(&mut s, TradeAction::Buy, ore);
+    jump_home(&mut s);
+    assert_eq!(s.p(a).ship.cargo[0], 0);
+    assert_eq!(s.p(a).ship.cargo_cost[0], 0, "burned fuel leaves no stale basis");
+
+    // So the next round trip is measured against what it cost, and taxed on that.
+    go(&mut s, seller);
+    let paid = trade(&mut s, TradeAction::Buy, 10).reply["trade"]["total_credits"]
+        .as_i64()
+        .unwrap();
+    go(&mut s, buyer);
+    let before = s.p(a).credits;
+    let out = trade(&mut s, TradeAction::Sell, 10);
+    let got = out.reply["trade"]["total_credits"].as_i64().unwrap();
+    assert_eq!(out.reply["profit"].as_i64().unwrap(), got - paid);
+    let net = out.reply["taxes"]["net_profit"].as_i64().unwrap_or(got - paid);
+    assert_eq!(s.p(a).credits - before - paid, net, "reported net profit is the cash result");
+
+    // A partial burn keeps the basis of the fuel left in the hold.
+    go(&mut s, seller);
+    let paid = trade(&mut s, TradeAction::Buy, ore + 3).reply["trade"]["total_credits"]
+        .as_i64()
+        .unwrap();
+    jump_home(&mut s);
+    assert_eq!(s.p(a).ship.cargo[0], 3);
+    let left = paid - paid * ore / (ore + 3);
+    assert_eq!(s.p(a).ship.cargo_cost[0], left);
+    go(&mut s, buyer);
+    let out = trade(&mut s, TradeAction::Sell, 3);
+    let got = out.reply["trade"]["total_credits"].as_i64().unwrap();
+    assert_eq!(out.reply["profit"].as_i64().unwrap(), got - left);
+    assert_eq!(s.p(a).ship.cargo_cost[0], 0);
+
+    let mut replay = start;
+    for e in &s.journal[start_len..] {
+        let _ = apply(&mut replay, e);
+    }
+    assert_eq!(replay.state_hash(), s.w.state_hash(), "replay diverged");
+}
+
+#[test]
+fn charts_remember_tolls_and_a_free_toll_is_no_hazard() {
+    // Feedback #42: a toll stack charging nothing lets everyone through, so routes need not avoid it.
+    let mut s = Sim::new(41, 200).without_founding();
+    let a = s.join("Toll Keeper");
+    let b = s.join("Traveller");
+    let sid = s.w.sectors.iter().find(|x| !x.fedspace && x.port.is_none()).unwrap().id;
+    let set = |s: &mut Sim, price: Option<i64>| {
+        s.w.sector_mut(sid).unwrap().fighters = Some(FighterStack {
+            owner: a,
+            count: 100,
+            mode: FighterMode::Toll,
+            shares: Default::default(),
+            toll_price: price,
+        });
+        af_core::knowledge::observe(&mut s.w, b, sid, false);
+        let k = s.p(b).knowledge[&sid].clone();
+        (k.toll, af_core::knowledge::known_hazard(&s.w, b, &k))
+    };
+    let cap = 100 * s.w.rules.toll_per_fighter;
+    assert_eq!(set(&mut s, None), (Some(cap), true), "a priced toll stays a hazard");
+    assert_eq!(set(&mut s, Some(0)), (Some(0), false), "a free toll is passable");
 }

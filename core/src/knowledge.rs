@@ -54,6 +54,11 @@ pub fn observe(w: &mut World, pid: PlayerId, sid: SectorId, visited: bool) {
     let port = sector.port.as_ref().map(|p| port_intel(w, p));
     let planets = sector.planets.clone();
     let fighters = sector.fighters.as_ref().map(|f| (f.owner, f.count, f.mode));
+    let toll = sector
+        .fighters
+        .as_ref()
+        .filter(|f| f.mode == FighterMode::Toll)
+        .map(|f| f.toll(w.rules.toll_per_fighter));
     let mines = sector.armid.as_ref().map(|m| m.owner);
     let planet_guard = sector
         .planets
@@ -76,6 +81,7 @@ pub fn observe(w: &mut World, pid: PlayerId, sid: SectorId, visited: bool) {
     k.port = port;
     k.planets = planets;
     k.fighters = fighters;
+    k.toll = toll;
     k.mines = mines;
     k.planet_guard = planet_guard;
     k.density = Some(dens);
@@ -178,7 +184,7 @@ pub fn known_hazard(w: &World, pid: PlayerId, k: &KnownSector) -> bool {
     use crate::diplomacy::at_peace;
     if let Some((owner, _, mode)) = k.fighters
         && !at_peace(w, owner, pid)
-        && !(mode == FighterMode::Toll && crate::diplomacy::toll_exempt(w, owner, pid))
+        && !(mode == FighterMode::Toll && (k.toll == Some(0) || crate::diplomacy::toll_exempt(w, owner, pid)))
     {
         return true;
     }

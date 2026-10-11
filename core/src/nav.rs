@@ -292,7 +292,8 @@ pub fn transwarp(ctx: &mut Ctx, pid: PlayerId, a: &TranswarpArgs) -> Res<Outcome
     ctx.require_ap(pid, rules.ap_transwarp)?;
     let sec = ctx.w.sector(dest).unwrap();
     let safe = sec.fighters.as_ref().map(|f| ctx.w.friendly(f.owner, pid)).unwrap_or(false) || beacon || sec.fedspace;
-    ctx.player_mut(pid).ship.cargo[0] -= ore;
+    let pm = ctx.player_mut(pid);
+    pm.ship.burn_cargo(0, ore);
     let h = hop(ctx, pid, dest, rules.ap_transwarp, !safe);
     let mut summary = format!("TransWarp jump to sector {dest} ({dist} hops, {ore} ore).");
     if !safe {
