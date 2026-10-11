@@ -22,6 +22,10 @@ const HANDOFF_CHANNEL: &str = "af_handoff";
 
 const SCHEMA_SQL: &str = "
 SET client_min_messages = warning;
+CREATE TABLE IF NOT EXISTS af_private_archive (seq BIGINT NOT NULL, ordinal BIGINT NOT NULL, player BIGINT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, row_data BYTEA NOT NULL, PRIMARY KEY (seq, ordinal));
+CREATE INDEX IF NOT EXISTS af_private_archive_player ON af_private_archive (player, seq, ordinal);
+CREATE INDEX IF NOT EXISTS af_private_archive_key ON af_private_archive (player, kind, key, seq, ordinal);
+CREATE INDEX IF NOT EXISTS af_private_archive_key_only ON af_private_archive (player, key, seq, ordinal);
 CREATE TABLE IF NOT EXISTS af_meta (key TEXT PRIMARY KEY, value BYTEA NOT NULL);
 CREATE TABLE IF NOT EXISTS af_journal (seq BIGINT PRIMARY KEY, entry BYTEA NOT NULL);
 CREATE TABLE IF NOT EXISTS af_checkpoints (seq BIGINT PRIMARY KEY, hash TEXT NOT NULL);
@@ -31,6 +35,20 @@ CREATE INDEX IF NOT EXISTS af_activity_at ON af_activity (at_ms);
 CREATE INDEX IF NOT EXISTS af_activity_player ON af_activity (player, at_ms);
 CREATE TABLE IF NOT EXISTS af_activity_daily (day TEXT NOT NULL, player BIGINT NOT NULL, row_data BYTEA NOT NULL, PRIMARY KEY (day, player));
 ";
+
+fn private_insert(tx: &mut postgres::Transaction<'_>, rows: &[crate::private_archive::ArchiveRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let stmt=tx.prepare("INSERT INTO af_private_archive (seq,ordinal,player,kind,key,row_data) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (seq,ordinal) DO NOTHING")?;
+    for r in rows {
+        tx.execute(
+            &stmt,
+            &[&seq_i64(r.seq), &seq_i64(r.ordinal), &seq_i64(r.player), &r.kind, &r.key, &r.data],
+        )?;
+    }
+    Ok(())
+}
 
 /// SQL shared by the writer's connection and the interaction-log connections.
 mod sql {
@@ -289,7 +307,7 @@ impl Backend for PgBackend {
         Ok(())
     }
 
-    fn append(&self, seq: u64, entry: &[u8], checkpoint: Option<&str>) -> Result<()> {
+    fn append(&self, seq: u64, entry: &[u8], checkpoint: Option<&str>, private: &[crate::private_archive::ArchiveRow]) -> Result<()> {
         self.writable()?;
         let mut c = self.client();
         let mut tx = c.transaction()?;
@@ -304,8 +322,54 @@ impl Backend for PgBackend {
         if let Some(h) = checkpoint {
             tx.execute("INSERT INTO af_checkpoints (seq, hash) VALUES ($1, $2)", &[&seq_i64(seq), &h])?;
         }
+        private_insert(&mut tx, private)?;
         tx.commit()?;
         Ok(())
+    }
+
+    fn private_insert(&self, rows: &[crate::private_archive::ArchiveRow]) -> Result<()> {
+        self.writable()?;
+        let mut c = self.client();
+        let mut tx = c.transaction()?;
+        private_insert(&mut tx, rows)?;
+        tx.commit()?;
+        Ok(())
+    }
+    fn private_query(&self, q: &crate::private_archive::ArchiveQuery) -> Result<Vec<crate::private_archive::ArchiveRow>> {
+        let player = q.player.map(seq_i64);
+        let seq = seq_i64(q.after_seq);
+        let ordinal = seq_i64(q.after_ordinal);
+        let limit = q.limit.min(i64::MAX as usize) as i64;
+        let mut sql =
+            String::from("SELECT seq, ordinal, player, kind, key, row_data FROM af_private_archive WHERE (seq,ordinal) > ($1,$2)");
+        let mut params: Vec<&(dyn postgres::types::ToSql + Sync)> = vec![&seq, &ordinal];
+        if let Some(p) = &player {
+            params.push(p);
+            sql.push_str(&format!(" AND player = ${}", params.len()));
+        }
+        if let Some(k) = &q.kind {
+            params.push(k);
+            sql.push_str(&format!(" AND kind = ${}", params.len()));
+        }
+        if let Some(k) = &q.key {
+            params.push(k);
+            sql.push_str(&format!(" AND key = ${}", params.len()));
+        }
+        params.push(&limit);
+        sql.push_str(&format!(" ORDER BY seq,ordinal LIMIT ${}", params.len()));
+        Ok(self
+            .client()
+            .query(&sql, &params)?
+            .into_iter()
+            .map(|r| crate::private_archive::ArchiveRow {
+                seq: r.get::<_, i64>(0) as u64,
+                ordinal: r.get::<_, i64>(1) as u64,
+                player: r.get::<_, i64>(2) as u64,
+                kind: r.get(3),
+                key: r.get(4),
+                data: r.get(5),
+            })
+            .collect())
     }
 
     fn last_seq(&self) -> Result<u64> {

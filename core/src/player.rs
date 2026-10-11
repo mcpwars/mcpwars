@@ -336,6 +336,7 @@ pub fn new_player(
         next_notice: 1,
         notes: BTreeMap::new(),
         memory: BTreeMap::new(),
+        memory_revisions: BTreeMap::new(),
         plan_tick: None,
         last_action_tick: tick,
         last_combat_tick: 0,

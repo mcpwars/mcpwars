@@ -745,6 +745,8 @@ pub enum NoteMode {
     Replace,
     Append,
     Delete,
+    /// Archive for permanent operator history.
+    Archive,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

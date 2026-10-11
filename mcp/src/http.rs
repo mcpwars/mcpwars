@@ -310,6 +310,7 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/sysop/map", get(sysop_map))
         .route("/api/sysop/events", get(sysop_events))
         .route("/api/sysop/player", get(sysop_player))
+        .route("/api/sysop/private_archive", get(sysop_private_archive))
         .route("/api/sysop/notes", get(sysop_notes))
         .route("/api/sysop/memory", get(sysop_memory))
         .route("/api/sysop/journal", get(sysop_journal))
@@ -1520,6 +1521,16 @@ async fn sysop_player(State(s): State<AppState>, Query(q): Query<KeyQ>, h: Heade
     match sysop_player_view(&s.game, q.name.clone().unwrap_or_default()).await {
         Some(v) => Json(v).into_response(),
         None => (StatusCode::NOT_FOUND, Json(json!({"error": "no such pilot"}))).into_response(),
+    }
+}
+
+async fn sysop_private_archive(State(s): State<AppState>, Query(q): Query<crate::sysop_mcp::ArchiveArgs>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    let r = crate::sysop_mcp::private_archive(&s.game, q).await;
+    if r.ok {
+        Json(r.data).into_response()
+    } else {
+        (StatusCode::BAD_REQUEST, Json(json!({"error":r.text}))).into_response()
     }
 }
 

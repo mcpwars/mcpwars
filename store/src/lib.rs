@@ -8,6 +8,8 @@
 //! * `checkpoints`: world hash after every `CHECKPOINT_EVERY`-th entry, written
 //!   in the same transaction as that entry.
 //! * `snapshots`: periodic `{hash, world}` snapshots (latest few kept).
+//! * `private_archive`: permanent full private versions and archive events, outside World,
+//!   committed with the journal and copied by export/import. Never pruned.
 //! * `activity`: the raw interaction log (telemetry, pruned after a retention period, not
 //!   exported).
 //! * `activity_daily`: one summary row per UTC day and captain, kept forever and copied by
@@ -27,6 +29,7 @@
 
 pub mod backend;
 pub mod pg;
+pub mod private_archive;
 mod redb_backend;
 
 use std::path::{Path, PathBuf};
@@ -280,6 +283,20 @@ impl Store {
             let rows = self.b.daily_query(&day, &day, None, usize::MAX)?;
             dest.b.daily_replace(&day, &rows)?;
         }
+        let mut cursor = private_archive::ArchiveQuery {
+            limit: PAGE,
+            ..Default::default()
+        };
+        loop {
+            let rows = self.b.private_query(&cursor)?;
+            let Some(last) = rows.last() else { break };
+            cursor.after_seq = last.seq;
+            cursor.after_ordinal = last.ordinal;
+            dest.b.private_insert(&rows)?;
+        }
+        if let Some(marker) = self.b.meta_get("private_archive_backfilled")? {
+            dest.b.meta_put(&[("private_archive_backfilled", &marker)])?;
+        }
         // The universe keys go last: a copy cut short has no genesis and is not a universe.
         let mut meta = vec![];
         for k in UNIVERSE_KEYS {
@@ -341,7 +358,71 @@ impl Store {
 
     /// Durably append one journal entry, plus its world-hash checkpoint when given.
     pub fn append(&self, e: &Entry, checkpoint: Option<&str>) -> Result<()> {
-        self.b.append(e.seq, &serde_json::to_vec(e)?, checkpoint)
+        self.b.append(e.seq, &serde_json::to_vec(e)?, checkpoint, &[])
+    }
+
+    /// The archive and journal commit together before any successful reply.
+    pub fn append_with_private(&self, e: &Entry, checkpoint: Option<&str>, rows: &[private_archive::ArchiveRow]) -> Result<()> {
+        self.b.append(e.seq, &serde_json::to_vec(e)?, checkpoint, rows)
+    }
+
+    pub fn private_archive(&self, q: &private_archive::ArchiveQuery) -> Result<Vec<private_archive::ArchiveRow>> {
+        self.b.private_query(q)
+    }
+
+    /// One-time historical index. Journal rows are never altered or discarded.
+    /// An interrupted backfill retries safely because archive row identities are immutable.
+    pub fn backfill_private(&self, w: &World) -> Result<()> {
+        if self.b.meta_get("private_archive_backfilled")?.is_some() {
+            return Ok(());
+        }
+        let mut projection = private_archive::Capture::default();
+        let mut after = 0;
+        loop {
+            let page = self.b.entries_page(after, PAGE)?;
+            if page.is_empty() {
+                break;
+            }
+            let mut rows = vec![];
+            for (seq, data) in page {
+                after = seq;
+                // Unrelated historical commands can have obsolete schemas. Parse only private
+                // commands, resets and ticks, preserving all original journal bytes.
+                let v: serde_json::Value = serde_json::from_slice(&data)?;
+                let typ = v["cmd"]["type"].as_str().unwrap_or("");
+                let action = v["cmd"]["args"]["action"].as_str().unwrap_or("");
+                if matches!(typ, "note" | "memory" | "tick")
+                    || (typ == "admin" && matches!(action, "fresh_start" | "clear_notes" | "remove_player"))
+                {
+                    let e: Entry = serde_json::from_value(v)?;
+                    rows.extend(projection.legacy_step(&e)?);
+                }
+            }
+            self.b.private_insert(&rows)?;
+        }
+        // Seed complete extant records too, including private state predating an imported base.
+        let mut rows = vec![];
+        for p in w.players.values().filter(|p| p.npc.is_none()) {
+            for (kind, k, body) in p.notes.iter().map(|(k, v)| ("note", k, serde_json::json!({"text":v}))).chain(
+                p.memory
+                    .iter()
+                    .map(|(k, r)| ("memory", k, serde_json::json!({"versions":r.versions}))),
+            ) {
+                let ordinal = 1_000_000 + rows.len() as u64;
+                let data = serde_json::json!({"seq":w.seq,"ordinal":ordinal,"player":p.id,"name":p.name,"kind":kind,"key":k,"tick":w.tick,"epoch":w.archive.epoch,"season":w.season.number,"reason":"upgrade_snapshot","body":body});
+                rows.push(private_archive::ArchiveRow {
+                    seq: w.seq,
+                    ordinal,
+                    player: u64::from(p.id),
+                    kind: kind.into(),
+                    key: k.clone(),
+                    data: serde_json::to_vec(&data)?,
+                });
+            }
+        }
+        self.b.private_insert(&rows)?;
+        self.b.meta_put(&[("private_archive_backfilled", b"true")])?;
+        Ok(())
     }
 
     /// Append interaction-log rows (telemetry; never part of the journal or replay).

@@ -41,7 +41,10 @@ pub trait Backend: Send {
     fn meta_put(&self, pairs: &[(&str, &[u8])]) -> Result<()>;
     /// Durably append entry `seq` (which must be last + 1) and, if given, its
     /// checkpoint hash, in one transaction.
-    fn append(&self, seq: u64, entry: &[u8], checkpoint: Option<&str>) -> Result<()>;
+    fn append(&self, seq: u64, entry: &[u8], checkpoint: Option<&str>, private: &[crate::private_archive::ArchiveRow]) -> Result<()>;
+    /// Append-only permanent private history. Backfill is idempotent.
+    fn private_insert(&self, rows: &[crate::private_archive::ArchiveRow]) -> Result<()>;
+    fn private_query(&self, q: &crate::private_archive::ArchiveQuery) -> Result<Vec<crate::private_archive::ArchiveRow>>;
     fn last_seq(&self) -> Result<u64>;
     fn journal_len(&self) -> Result<u64>;
     /// Up to `limit` journal rows with seq > `after`, in order.

@@ -77,6 +77,70 @@ pub struct MemoryArgs {
     pub limit: Option<usize>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+pub struct ArchiveArgs {
+    /// Captain call sign or numeric id. Numeric ids also work after captain removal.
+    pub name: String,
+    /// note or memory. Omit for both.
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub after_seq: u64,
+    #[serde(default)]
+    pub after_ordinal: u64,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+pub async fn private_archive(game: &Game, a: ArchiveArgs) -> ToolReply {
+    if a.kind.as_deref().is_some_and(|k| !matches!(k, "note" | "memory")) {
+        return reply(false, "REFUSED [invalid_args] kind must be note or memory.", Value::Null);
+    }
+    let name = a.name.clone();
+    let pid = game
+        .read(move |w| {
+            w.player_by_name(&name)
+                .map(|p| u64::from(p.id))
+                .or_else(|| name.parse::<u32>().ok().map(u64::from))
+        })
+        .await;
+    let Some(pid) = pid else {
+        return reply(
+            false,
+            "REFUSED [unknown_player] Use a captain call sign or numeric id.",
+            Value::Null,
+        );
+    };
+    let limit = a.limit.unwrap_or(20).clamp(1, 100);
+    let q = af_store::private_archive::ArchiveQuery {
+        player: Some(pid),
+        kind: a.kind.clone(),
+        key: a.key.clone(),
+        after_seq: a.after_seq,
+        after_ordinal: a.after_ordinal,
+        limit: limit + 1,
+    };
+    match game.private_archive(q).await {
+        Ok(mut rows) => {
+            let more = rows.len() > limit;
+            rows.truncate(limit);
+            let last = rows.last().map(|r| (r.seq, r.ordinal)).unwrap_or((a.after_seq, a.after_ordinal));
+            let events: Result<Vec<Value>, _> = rows.iter().map(|r| serde_json::from_slice(&r.data)).collect();
+            match events {
+                Ok(events) => reply(
+                    true,
+                    format!("Permanent private archive for captain #{pid}."),
+                    json!({"player":pid,"events":events,"continuation":{"has_more":more,"next_arguments":{"name":pid.to_string(),"kind":a.kind,"key":a.key,"after_seq":last.0,"after_ordinal":last.1,"limit":limit}}}),
+                ),
+                Err(_) => reply(false, "Archive record could not be decoded.", Value::Null),
+            }
+        }
+        Err(e) => reply(false, format!("Archive unavailable: {e}"), Value::Null),
+    }
+}
+
 pub async fn notes(game: &Game, a: NotesArgs) -> ToolReply {
     game.read(move |w| {
         let Some(p) = w
@@ -131,7 +195,7 @@ pub async fn memory(game: &Game, a: MemoryArgs) -> ToolReply {
             offset: a.offset,
             limit: a.limit,
         };
-        match af_core::memory::read(w, p.id, &args) {
+        match af_core::memory::read_operator(w, p.id, &args) {
             Ok(mut v) => {
                 // Core continuation arguments are captain-facing; preserve the sysop target.
                 if let Some(next) = v.pointer_mut("/continuation/next_arguments") {
@@ -498,6 +562,7 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 false,
                 "Everything about one captain (by call sign or id): status, ship, cargo, private notes, inbox, the human setup (silent or strategy), the strategy, and the summaries, replies and strategy proposals sent to the human.",
             ),
+            def::<ArchiveArgs>("sysop_private_archive",true,false,"Read permanent confidential note and memory history by captain call sign or id, including archived, expired, overwritten and reset records. Filter kind/key and follow the sequence/ordinal cursor. Numeric ids work for removed captains. Read-only; operator access only."),
             def::<NotesArgs>("sysop_notes", true, false, "Read one captain's text notes by call sign or id. Omit key for all notes, or select a key with character offset/limit. Read-only."),
             def::<MemoryArgs>("sysop_memory", true, false, "Inspect one captain's structured JSON memory by call sign or id: list keys (including expired), read current data or a nested JSON pointer, paginated history, or diff from expected_revision. Read-only."),
             def::<JournalArgs>(
@@ -712,6 +777,7 @@ pub async fn call(game: &Game, access: &SysopAccess, name: &str, args: &Value) -
                 ),
             }
         }
+        "sysop_private_archive" => private_archive(game, p!(ArchiveArgs)).await,
         "sysop_notes" => notes(game, p!(NotesArgs)).await,
         "sysop_memory" => memory(game, p!(MemoryArgs)).await,
         "sysop_journal" => {

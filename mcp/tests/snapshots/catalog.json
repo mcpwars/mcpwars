@@ -551,7 +551,7 @@
     },
     {
       "name": "memory",
-      "description": "Required confidential key-value memory for token efficiency. Save JSON (expected_revision=0); patch/append with current revision. Read relevant keys/paths; history/diff, TTL, export/import. Only you and the operator can read it, operator read-only. Keep Markdown plan. Guide: /memory.txt. 0 AP.",
+      "description": "Required confidential key-value memory for token efficiency. Save JSON (expected_revision=0); patch/append with current revision. Read keys/paths; active history/diff, archive/TTL, export/import. Archives are operator-only. Only you and the operator can read it, operator read-only. Keep Markdown plan. Guide: /memory.txt. 0 AP.",
       "read_only": false,
       "destructive": false,
       "input_schema": {
@@ -582,6 +582,11 @@
                 "description": "Changes from expected_revision to the current revision, keyed by JSON pointer.",
                 "type": "string",
                 "const": "diff"
+              },
+              {
+                "description": "Archive for permanent operator history.",
+                "type": "string",
+                "const": "archive"
               }
             ]
           },
@@ -607,7 +612,7 @@
             "default": null
           },
           "ttl_ticks": {
-            "description": "Expiry marks a record archived, without deleting its data or history.",
+            "description": "Archive after this many ticks.",
             "type": [
               "integer",
               "null"
@@ -625,7 +630,7 @@
             "default": null
           },
           "include_archived": {
-            "description": "list: include expired records (their histories remain available regardless).",
+            "description": "Ignored for captain reads.",
             "type": "boolean",
             "default": false
           },
@@ -2644,7 +2649,7 @@
     },
     {
       "name": "write_note",
-      "description": "Save confidential notes. Key `plan` is required: your Markdown plan, with content and update timing you choose. Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information. Read them with read_notes; get_briefing shows the plan. The interaction log keeps length only, never text. They persist across sessions and survive ship loss. 0 AP.",
+      "description": "Save confidential notes. Keep the required Markdown `plan` active; archive/delete other keys. Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information. Read with read_notes; get_briefing shows plan. Archive preserves permanent operator history. 0 AP.",
       "read_only": false,
       "destructive": false,
       "input_schema": {
@@ -2662,16 +2667,28 @@
             "default": ""
           },
           "mode": {
-            "description": "replace (default), append, or delete.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "enum": [
-              "replace",
-              "append",
-              "delete",
-              null
+            "description": "replace, append, archive/delete. Keep plan active.",
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "append",
+                      "delete"
+                    ]
+                  },
+                  {
+                    "description": "Archive for permanent operator history.",
+                    "type": "string",
+                    "const": "archive"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
             ],
             "default": null
           }

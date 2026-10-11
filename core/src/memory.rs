@@ -1,4 +1,4 @@
-//! Private structured memory. Explicit versions and expiry never discard a record.
+//! Confidential working memory. Archived bodies remain in the durable store, outside the world.
 use crate::engine::{Ctx, Outcome, Refusal, Res};
 use crate::model::{PlayerId, Tick, World};
 use schemars::JsonSchema;
@@ -29,6 +29,8 @@ pub enum Action {
     /// Changes from expected_revision to the current revision, keyed by JSON pointer.
     Diff,
     History,
+    /// Archive for permanent operator history.
+    Archive,
     Export,
     Import,
 }
@@ -43,13 +45,13 @@ pub struct Args {
     /// Optimistic revision check (0 means create only). Required for patch.
     #[serde(default)]
     pub expected_revision: Option<u64>,
-    /// Expiry marks a record archived, without deleting its data or history.
+    /// Archive after this many ticks.
     #[serde(default)]
     pub ttl_ticks: Option<Tick>,
     /// JSON pointer for a nested read, e.g. /facts/0/sector.
     #[serde(default)]
     pub path: Option<String>,
-    /// list: include expired records (their histories remain available regardless).
+    /// Ignored for captain reads.
     #[serde(default)]
     pub include_archived: bool,
     #[serde(default)]
@@ -59,7 +61,10 @@ pub struct Args {
 }
 impl Args {
     pub fn mutates(&self) -> bool {
-        matches!(self.action, Action::Save | Action::Patch | Action::Append | Action::Import)
+        matches!(
+            self.action,
+            Action::Save | Action::Patch | Action::Append | Action::Import | Action::Archive
+        )
     }
 }
 fn key(a: &Args) -> Res<&str> {
@@ -72,8 +77,36 @@ fn key(a: &Args) -> Res<&str> {
     }
     Ok(k)
 }
-fn current<'a>(w: &'a World, pid: PlayerId, k: &str) -> Option<&'a Version> {
-    w.players.get(&pid)?.memory.get(k)?.versions.last()
+pub fn current<'a>(w: &'a World, pid: PlayerId, k: &str) -> Option<&'a Version> {
+    w.players
+        .get(&pid)?
+        .memory
+        .get(k)?
+        .versions
+        .last()
+        .filter(|v| v.expires_tick.is_none_or(|t| t > w.tick))
+}
+/// Forget expired working records; complete bodies already live in the permanent journal/archive.
+pub fn expire(w: &mut World) {
+    let tick = w.tick;
+    for p in w.players.values_mut() {
+        let expired: Vec<_> = p
+            .memory
+            .iter()
+            .filter(|(_, r)| r.versions.last().is_some_and(|v| v.expires_tick.is_some_and(|t| t <= tick)))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in expired {
+            retire(p, &k);
+        }
+    }
+}
+fn retire(p: &mut crate::model::Player, k: &str) {
+    if let Some(r) = p.memory.remove(k) {
+        let last = r.versions.last().map_or(0, |v| v.revision);
+        let floor = p.memory_revisions.entry(k.to_string()).or_default();
+        *floor = (*floor).max(last);
+    }
 }
 fn merge(target: &mut Value, patch: &Value) {
     if let Value::Object(p) = patch {
@@ -116,14 +149,30 @@ fn differences(before: &Value, after: &Value, path: &str) -> BTreeMap<String, Va
     out
 }
 pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
+    read_inner(w, pid, a, false)
+}
+/// Trusted operator entry point. Captain-supplied include_archived never grants this access.
+pub fn read_operator(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
+    read_inner(w, pid, a, true)
+}
+fn read_inner(w: &World, pid: PlayerId, a: &Args, operator: bool) -> Res<Value> {
     let p = w
         .players
         .get(&pid)
         .ok_or_else(|| Refusal::new("unknown_player", "No such captain."))?;
+    if let Some(k) = &a.key
+        && !operator
+        && matches!(a.action, Action::Read | Action::History | Action::Diff)
+        && current(w, pid, k).is_none()
+    {
+        return Err(Refusal::new("not_found", "No active memory record."));
+    }
     match a.action {
-        Action::Export => Ok(json!({"format": "mcpwars-private-memory-1", "notes": p.notes, "records": p.memory})),
+        Action::Export => Ok(
+            json!({"format": "mcpwars-private-memory-1", "notes": p.notes, "records": p.memory.iter().filter(|(k,_)| operator || current(w,pid,k).is_some()).collect::<BTreeMap<_,_>>()}),
+        ),
         Action::List => Ok(
-            json!({"records": p.memory.iter().filter(|(_,r)| a.include_archived || r.versions.last().is_some_and(|v| v.expires_tick.is_none_or(|t| t > w.tick))).filter_map(|(k,r)| r.versions.last().map(|v| json!({"key": k, "revision": v.revision, "tick": v.tick, "expires_tick": v.expires_tick, "archived": v.expires_tick.is_some_and(|t| t <= w.tick)}))).collect::<Vec<_>>()}),
+            json!({"records": p.memory.iter().filter(|(_,r)| operator || r.versions.last().is_some_and(|v| v.expires_tick.is_none_or(|t| t > w.tick))).filter_map(|(k,r)| r.versions.last().map(|v| json!({"key": k, "revision": v.revision, "tick": v.tick, "expires_tick": v.expires_tick, "archived": v.expires_tick.is_some_and(|t| t <= w.tick)}))).collect::<Vec<_>>()}),
         ),
         Action::Diff => {
             let k = key(a)?;
@@ -141,7 +190,11 @@ pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
         }
         Action::Read => {
             let k = key(a)?;
-            let v = current(w, pid, k).ok_or_else(|| Refusal::new("not_found", "No such memory record."))?;
+            let v = p
+                .memory
+                .get(k)
+                .and_then(|r| r.versions.last())
+                .ok_or_else(|| Refusal::new("not_found", "No such memory record."))?;
             let data = match &a.path {
                 Some(path) => v.data.pointer(path).cloned(),
                 None => Some(v.data.clone()),
@@ -172,10 +225,18 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         }
         let notes: BTreeMap<String, String> =
             serde_json::from_value(bundle["notes"].clone()).map_err(|_| Refusal::new("invalid_args", "Invalid notes."))?;
-        let records: BTreeMap<String, Record> =
+        let mut records: BTreeMap<String, Record> =
             serde_json::from_value(bundle["records"].clone()).map_err(|_| Refusal::new("invalid_args", "Invalid records."))?;
         // Opt-in import never overwrites live work. Validate the entire bundle before mutation.
-        if notes.len() + ctx.w.players[&pid].notes.len() > 40 || records.len() + ctx.w.players[&pid].memory.len() > 40 {
+        if notes.len() + ctx.w.players[&pid].notes.len() > 40
+            || records.len()
+                + ctx.w.players[&pid]
+                    .memory
+                    .keys()
+                    .filter(|k| current(ctx.w, pid, k).is_some())
+                    .count()
+                > 40
+        {
             return Err(Refusal::new("limit_reached", "Import exceeds 40 notes or records."));
         }
         for k in notes.keys() {
@@ -187,14 +248,36 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             if k.is_empty()
                 || k == "plan"
                 || k.chars().count() > 40
-                || ctx.w.players[&pid].memory.contains_key(k)
+                || current(ctx.w, pid, k).is_some()
                 || r.versions.is_empty()
-                || r.versions.iter().enumerate().any(|(i, v)| v.revision != i as u64 + 1)
+                || r.versions[0].revision == 0
+                || r.versions.windows(2).any(|v| v[0].revision.checked_add(1) != Some(v[1].revision))
+                || r.versions.last().is_some_and(|v| v.expires_tick.is_some_and(|t| t <= ctx.w.tick))
             {
                 return Err(Refusal::new(
                     "conflict",
                     "Imported records must have valid unused keys and consecutive revisions.",
                 ));
+            }
+        }
+        for (k, r) in &records {
+            let floor = ctx.w.players[&pid].memory_revisions.get(k).copied().unwrap_or(0).max(
+                ctx.w.players[&pid]
+                    .memory
+                    .get(k)
+                    .and_then(|r| r.versions.last())
+                    .map_or(0, |v| v.revision),
+            );
+            if floor == u64::MAX
+                || (r.versions[0].revision <= floor
+                    && r.versions
+                        .last()
+                        .unwrap()
+                        .revision
+                        .checked_add(floor.saturating_add(1).saturating_sub(r.versions[0].revision))
+                        .is_none())
+            {
+                return Err(Refusal::new("limit_reached", "Revision limit reached."));
             }
         }
         let tick = ctx.w.tick;
@@ -203,8 +286,28 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             p.plan_tick = Some(tick);
         }
         p.notes.extend(notes);
+        for (k, r) in &mut records {
+            retire(p, k);
+            let floor = p.memory_revisions.get(k).copied().unwrap_or(0);
+            if r.versions[0].revision <= floor {
+                let shift = floor.saturating_add(1).saturating_sub(r.versions[0].revision);
+                for v in &mut r.versions {
+                    v.revision += shift;
+                }
+            }
+            p.memory_revisions.insert(k.clone(), r.versions.last().unwrap().revision);
+        }
         p.memory.extend(records);
         return Ok(ctx.finish("Imported private memory.", json!({"imported": true})));
+    }
+    if a.action == Action::Archive {
+        let k = key(a)?.to_string();
+        let v = current(ctx.w, pid, &k).ok_or_else(|| Refusal::new("not_found", "No active memory record."))?;
+        if a.expected_revision.is_some_and(|r| r != v.revision) {
+            return Err(Refusal::new("conflict", "Revision changed; read before archiving."));
+        }
+        retire(ctx.player_mut(pid), &k);
+        return Ok(ctx.finish(format!("Archived confidential memory '{k}'."), json!({"key":k,"archived":true})));
     }
     if !matches!(a.action, Action::Save | Action::Patch | Action::Append) {
         return Err(Refusal::new("invalid_args", "Use a read action through the memory tool."));
@@ -224,10 +327,17 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             format!("Current revision is {revision}; read it before retrying."),
         ));
     }
-    if old.is_none() && ctx.w.players[&pid].memory.len() >= 40 {
+    if old.is_none()
+        && ctx.w.players[&pid]
+            .memory
+            .keys()
+            .filter(|k| current(ctx.w, pid, k).is_some())
+            .count()
+            >= 40
+    {
         return Err(Refusal::new(
             "limit_reached",
-            "You already have 40 structured records. Update an existing record.",
+            "You already have 40 active structured records. Archive a key or update an existing record.",
         ));
     }
     let mut data = a.data.clone().ok_or_else(|| Refusal::new("invalid_args", "data is required."))?;
@@ -248,15 +358,36 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         .ttl_ticks
         .map(|t| ctx.w.tick.saturating_add(t))
         .or_else(|| old.and_then(|v| v.expires_tick));
+    let next_revision = ctx.w.players[&pid]
+        .memory_revisions
+        .get(&k)
+        .copied()
+        .unwrap_or(0)
+        .max(revision)
+        .max(
+            ctx.w.players[&pid]
+                .memory
+                .get(&k)
+                .and_then(|r| r.versions.last())
+                .map_or(0, |v| v.revision),
+        )
+        .checked_add(1)
+        .ok_or_else(|| Refusal::new("limit_reached", "Revision limit reached."))?;
     let v = Version {
-        revision: revision + 1,
+        revision: next_revision,
         tick: ctx.w.tick,
         expires_tick,
         data,
     };
-    ctx.player_mut(pid).memory.entry(k.clone()).or_default().versions.push(v);
+    let absent = old.is_none();
+    let p = ctx.player_mut(pid);
+    if absent {
+        retire(p, &k);
+    }
+    p.memory_revisions.insert(k.clone(), next_revision);
+    p.memory.entry(k.clone()).or_default().versions.push(v);
     Ok(ctx.finish(
-        format!("Saved private memory '{k}' revision {}.", revision + 1),
-        json!({"key": k, "revision": revision + 1}),
+        format!("Saved private memory '{k}' revision {}.", next_revision),
+        json!({"key": k, "revision": next_revision}),
     ))
 }

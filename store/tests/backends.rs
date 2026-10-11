@@ -441,3 +441,211 @@ fn daily_activity_is_kept_forever_replaced_by_day_and_exported() {
         let _ = std::fs::remove_file(&backup);
     }
 }
+
+#[test]
+fn permanent_private_archive_is_atomic_and_survives_reset_removal_and_copy() {
+    use af_core::memory::{Action, Args};
+    use af_store::private_archive::{ArchiveQuery, Capture};
+    for loc in locations("private_archive") {
+        let store = loc.open();
+        let mut w = store.init(&genesis(ENGINE_VERSION)).unwrap();
+        play(&store, &mut w, 1);
+        let pid = w.players.values().find(|p| p.npc.is_none()).unwrap().id;
+        store.backfill_private(&w).unwrap();
+        let run = |w: &mut World, actor, cmd| {
+            let e = Entry {
+                seq: w.seq + 1,
+                at_ms: (w.seq + 1) * 10,
+                actor,
+                cmd,
+            };
+            let before = Capture::before(w, &e);
+            apply(w, &e).unwrap();
+            let rows = before.after(w, &e).unwrap();
+            store.append_with_private(&e, Some(&w.state_hash()), &rows).unwrap();
+            e
+        };
+        let args = |action, key: &str, data, ttl_ticks| Args {
+            action,
+            key: Some(key.into()),
+            data,
+            expected_revision: None,
+            ttl_ticks,
+            path: None,
+            include_archived: false,
+            offset: None,
+            limit: None,
+        };
+        run(
+            &mut w,
+            Actor::Player(pid),
+            Command::Note(NoteArgs {
+                key: "research".into(),
+                value: "  α 🚀\noriginal  ".into(),
+                mode: None,
+            }),
+        );
+        run(
+            &mut w,
+            Actor::Player(pid),
+            Command::Note(NoteArgs {
+                key: "research".into(),
+                value: "\nnext".into(),
+                mode: Some(NoteMode::Append),
+            }),
+        );
+        run(
+            &mut w,
+            Actor::Player(pid),
+            Command::Note(NoteArgs {
+                key: "research".into(),
+                value: String::new(),
+                mode: Some(NoteMode::Archive),
+            }),
+        );
+        run(
+            &mut w,
+            Actor::Player(pid),
+            Command::Memory(args(
+                Action::Save,
+                "facts",
+                Some(serde_json::json!({"research":"never lose this"})),
+                Some(1),
+            )),
+        );
+        run(&mut w, Actor::System, Command::Tick);
+        assert!(w.players[&pid].memory.is_empty());
+        run(
+            &mut w,
+            Actor::Player(pid),
+            Command::Memory(args(
+                Action::Save,
+                "facts",
+                Some(serde_json::json!({"research":"next generation"})),
+                None,
+            )),
+        );
+        run(&mut w, Actor::System, Command::Admin(AdminArgs::FreshStart));
+        let e = run(&mut w, Actor::System, Command::Admin(AdminArgs::RemovePlayer { player: pid }));
+        assert!(!w.players.contains_key(&pid));
+        let q = ArchiveQuery {
+            player: Some(u64::from(pid)),
+            limit: 100,
+            ..Default::default()
+        };
+        let rows = store.private_archive(&q).unwrap();
+        let bodies: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::from_slice(&r.data).unwrap()).collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|v| v["reason"] == "archived" && v["body"]["text"] == "  α 🚀\noriginal  \n\nnext")
+        );
+        assert!(
+            bodies
+                .iter()
+                .any(|v| v["reason"] == "expired" && v["body"]["versions"][0]["data"]["research"] == "never lose this")
+        );
+        assert!(
+            bodies
+                .iter()
+                .any(|v| v["reason"] == "fresh_start" && v["body"]["versions"][0]["revision"] == 2)
+        );
+        let mut forged = rows[0].clone();
+        forged.seq = e.seq + 100;
+        forged.ordinal = 0;
+        assert!(store.append_with_private(&e, None, &[forged]).is_err());
+        assert_eq!(rows, store.private_archive(&q).unwrap());
+        let mut cursor = ArchiveQuery { limit: 1, ..q.clone() };
+        let mut paged = vec![];
+        loop {
+            let page = store.private_archive(&cursor).unwrap();
+            let Some(last) = page.last() else { break };
+            cursor.after_seq = last.seq;
+            cursor.after_ordinal = last.ordinal;
+            paged.extend(page);
+        }
+        assert_eq!(rows, paged);
+        assert_eq!(store.replay_from_base().unwrap().state_hash(), w.state_hash());
+        store.save_snapshot(&w).unwrap();
+        let dest_path = std::env::temp_dir().join(format!(
+            "af-private-copy-{}-{}.redb",
+            std::process::id(),
+            if loc.0.starts_with("postgres") { "pg" } else { "file" }
+        ));
+        let _ = std::fs::remove_file(&dest_path);
+        let dest = Store::open(&dest_path).unwrap();
+        store.copy_into(&dest).unwrap();
+        assert_eq!(rows, dest.private_archive(&q).unwrap());
+        assert_eq!(dest.load_world().unwrap().0.state_hash(), w.state_hash());
+        drop(dest);
+        drop(store);
+        let reopened = loc.open();
+        assert_eq!(rows, reopened.private_archive(&q).unwrap());
+    }
+}
+
+#[test]
+fn private_history_backfill_preserves_overwritten_and_deleted_notes_and_memory_versions() {
+    use af_core::memory::{Action, Args};
+    use af_store::private_archive::ArchiveQuery;
+    for loc in locations("private_backfill") {
+        let store = loc.open();
+        let mut w = store.init(&genesis(ENGINE_VERSION)).unwrap();
+        play(&store, &mut w, 1);
+        let pid = w.players.values().find(|p| p.npc.is_none()).unwrap().id;
+        let mut run = |cmd| {
+            let e = Entry {
+                seq: w.seq + 1,
+                at_ms: w.seq * 10,
+                actor: Actor::Player(pid),
+                cmd,
+            };
+            apply(&mut w, &e).unwrap();
+            store.append(&e, None).unwrap();
+        };
+        for (mode, value) in [
+            (NoteMode::Replace, "original\nα"),
+            (NoteMode::Append, "next"),
+            (NoteMode::Delete, ""),
+        ] {
+            run(Command::Note(NoteArgs {
+                key: "old_note".into(),
+                value: value.into(),
+                mode: Some(mode),
+            }));
+        }
+        for (action, data, expected_revision) in [
+            (Action::Save, serde_json::json!({"field":"before"}), Some(0)),
+            (Action::Patch, serde_json::json!({"field":"after"}), Some(1)),
+        ] {
+            run(Command::Memory(Args {
+                action,
+                key: Some("old_memory".into()),
+                data: Some(data),
+                expected_revision,
+                ttl_ticks: None,
+                path: None,
+                include_archived: false,
+                offset: None,
+                limit: None,
+            }));
+        }
+        store.backfill_private(&w).unwrap();
+        let q = ArchiveQuery {
+            player: Some(u64::from(pid)),
+            limit: 100,
+            ..Default::default()
+        };
+        let rows = store.private_archive(&q).unwrap();
+        let values: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::from_slice(&r.data).unwrap()).collect();
+        assert!(
+            values
+                .iter()
+                .any(|v| v["reason"] == "archived" && v["body"]["text"] == "original\nα\nnext")
+        );
+        assert!(values.iter().any(|v| v["body"]["version"]["data"]["field"] == "before"));
+        assert!(values.iter().any(|v| v["body"]["version"]["data"]["field"] == "after"));
+        store.backfill_private(&w).unwrap();
+        assert_eq!(rows, store.private_archive(&q).unwrap());
+    }
+}

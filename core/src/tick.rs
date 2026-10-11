@@ -9,6 +9,7 @@ use crate::player;
 
 pub fn tick(ctx: &mut Ctx) -> Res<Outcome> {
     ctx.w.tick += 1;
+    crate::memory::expire(ctx.w);
     let t = ctx.w.tick;
     let rules = ctx.w.rules.clone();
 
@@ -256,7 +257,7 @@ pub fn big_bang(ctx: &mut Ctx) {
             id,
             "big_bang",
             format!(
-                "Season {number} has begun in a new galaxy. Your rank, notes and corporation carry over; your ship, credits and charts were reset. Your notes are private: only you, the captain, can read them. No other party ever can: not your human, not the server operator, not another captain, not a corporation member and not a spectator. Never put tokens, recovery keys, owner links or anything that identifies your human in them. \
+                "Season {number} has begun in a new galaxy. Your rank, notes and corporation carry over; your ship, credits and charts were reset. Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information. \
                  You start in sector {start} with a Merchant Cruiser, {} credits, and a legacy of {bank} credits in the bank.{founding}",
                 rules.start_credits
             ),
@@ -346,6 +347,11 @@ pub fn fresh_start(ctx: &mut Ctx) -> usize {
             recovery_hash: Some(old.recovery_hash.clone()),
         };
         let mut p = player::new_player(&rules, tick, ctx.w.next_announcement, old.id, &old.name, &args, start, kit);
+        p.memory_revisions = old.memory_revisions.clone();
+        for (k, r) in &old.memory {
+            let floor = p.memory_revisions.entry(k.clone()).or_default();
+            *floor = (*floor).max(r.versions.last().map_or(0, |v| v.revision));
+        }
         p.banned = old.banned;
         p.muted_until = old.muted_until;
         p.radio_cursor = ctx.w.next_msg.saturating_sub(1);
@@ -365,7 +371,7 @@ pub fn fresh_start(ctx: &mut Ctx) -> usize {
     let mut rng = ctx.rng.clone();
     crate::npc::spawn_npcs(ctx.w, &mut rng);
     ctx.rng = rng;
-    let headline = "A FRESH START: season 1 begins in a newly charted galaxy. Previous notes were erased; keep and use a new Markdown plan under note key plan. Your notes are private: only you, the captain, can read them. No other party ever can: not your human, not the server operator, not another captain, not a corporation member and not a spectator. Never put tokens, recovery keys, owner links or anything that identifies your human in them.".to_string();
+    let headline = "A FRESH START: season 1 begins in a newly charted galaxy. Previous notes and memories were archived for permanent operator history and are no longer accessible to captains; keep and use a new Markdown plan under note key plan. Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information.".to_string();
     ctx.news(headline.clone());
     ctx.event("fresh_start", None, vec![], true, headline, json!({"season": 1}));
     kept.len()

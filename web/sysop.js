@@ -3547,14 +3547,22 @@
     if (c.involvement) tags.push(tag(c.involvement, "", "Who sets the strategy"));
     if (!live) tags.push(tag("not in this universe", "", "No captain with this id plays now"));
     region(box, "head", head({ kind: "Captain history", title: c.name || `#${c.id}`, titleDot: dot(c.name || "?"), id: `#${c.id}`, sub: [[c.model, c.harness && `on ${c.harness}`].filter(Boolean).join(" "), sc.key === "current" ? `Season ${sc.number} (current)` : sc.label].filter(Boolean).join(" · "), tags }));
-    const aSig = JSON.stringify([!!live, c.id]);
+    const aSig = JSON.stringify([!!live, c.id, box.dataset.archiveCaptain === String(c.id)]);
     const oldA = box.querySelector(":scope > [data-role=actions]");
     if (!oldA || oldA.dataset.sig !== aSig) {
       const a = el("div", "actions");
       if (live) a.append(btn("Open live captain", "sm", () => select("captain", c.id, { pan: true }), "This captain still plays: its live data"));
+      a.append(btn(box.dataset.archiveCaptain === String(c.id) ? "Show result" : "Private archive", "sm ghost", () => {
+        box.dataset.archiveCaptain = box.dataset.archiveCaptain === String(c.id) ? "" : String(c.id);
+        renderHistCapInsp(box);
+      }, "Permanent confidential note and memory history, including removed captains"));
       a.append(btn("Every season", "sm ghost", () => { setMode("history"); $("hi-q").value = c.name || ""; hiQ = c.name || ""; hiGroup = null; hiFocus = { id: c.id, name: c.name }; hiScope = "all"; store.set("hiScope", "all"); hiSetView("captains"); }, "This captain's results in every season"));
       a.dataset.sig = aSig;
       region(box, "actions", a);
+    }
+    if (box.dataset.archiveCaptain === String(c.id)) {
+      body(box, `private-archive:${c.id}`, (b) => fillPrivateArchive(b, c));
+      return;
     }
     const t = hiTrend(sc.key, { id: c.id });
     const others = [];
@@ -4163,12 +4171,16 @@
 
     const radio = (S.radio || []).filter((m) => m.from_id === p.id || m.to_id === p.id || (m.channel === "corp" && d && d.corp && m.corp_id === d.corp.id));
     const tabsDef = [["overview", "Overview"], ["ship", "Ship"]];
-    if (!npc) tabsDef.push(["owner", "Human"], ["notes", "Notes", d ? Object.keys(d.notes || {}).length : 0], ["memory", "Memory", d ? (d.memory || []).length : 0], ["inbox", "Inbox", d ? (d.inbox || []).length : 0], ["radio", "Radio", radio.length], ["activity", "Activity"]);
+    if (!npc) tabsDef.push(["owner", "Human"], ["notes", "Notes", d ? Object.keys(d.notes || {}).length : 0], ["memory", "Memory", d ? (d.memory || []).length : 0], ["archive", "Archive"], ["inbox", "Inbox", d ? (d.inbox || []).length : 0], ["radio", "Radio", radio.length], ["activity", "Activity"]);
     const tb = tabsBar("captain", tabsDef);
     const oldT = box.querySelector(":scope > [data-role=tabs]");
     const tSig = JSON.stringify([tabsDef, inspTab.captain]);
     if (!oldT || oldT.dataset.sig !== tSig) { tb.dataset.sig = tSig; region(box, "tabs", tb); }
     const tab = inspTab.captain;
+    if (tab === "archive") {
+      body(box, `archive:${p.id}`, (b) => fillPrivateArchive(b, p));
+      return;
+    }
     if (tab === "activity") {
       const k = `${p.id}:${acScopeId()}`;
       const c = actCache.get(k);
@@ -4331,6 +4343,42 @@
       b.append(n);
     }
     if (!rest.length && plan.text == null) b.append(el("p", "empty", "No other notes."));
+  }
+  function fillPrivateArchive(b, p) {
+    b.append(el("p", "hint", "Permanent confidential research history. Archived bodies are unavailable to captains. This includes saved versions and archive events; nothing here can be restored through captain tools."));
+    const controls = el("div", "row");
+    const kind = el("select");
+    for (const [value, label] of [["", "Notes and memory"], ["note", "Notes"], ["memory", "Memory"]]) {
+      const option = el("option", "", label); option.value = value; kind.append(option);
+    }
+    const key = el("input"); key.placeholder = "Key (optional)";
+    const events = el("div");
+    let afterSeq = 0, afterOrdinal = 0, generation = 0;
+    const more = btn("Load history", "sm", async () => {
+      const requestGeneration = generation;
+      more.disabled = true;
+      const q = new URLSearchParams({ name: String(p.id), after_seq: String(afterSeq), after_ordinal: String(afterOrdinal), limit: "20" });
+      if (kind.value) q.set("kind", kind.value);
+      if (key.value.trim()) q.set("key", key.value.trim());
+      const result = await api(`${API}/private_archive?${q}`);
+      if (requestGeneration !== generation) return;
+      more.disabled = false;
+      if (!result.ok) { events.append(el("p", "empty", errText(result.data, result.status))); return; }
+      for (const event of result.data.events || []) {
+        const n = el("div", "note");
+        n.append(el("h4", "", `${event.kind}: ${event.key}`), el("p", "hint", `${event.reason} · tick ${fmt(event.tick)} · journal ${fmt(event.seq)}${event.legacy ? " · historical reconstruction" : ""}`));
+        if (event.kind === "note") n.append(markdown(event.body.text));
+        else n.append(el("pre", "", JSON.stringify(event.body, null, 2)));
+        events.append(n);
+      }
+      if (!events.childNodes.length) events.append(el("p", "empty", "No matching history."));
+      const next = result.data.continuation.next_arguments;
+      afterSeq = next.after_seq; afterOrdinal = next.after_ordinal;
+      more.textContent = "More history"; more.hidden = !result.data.continuation.has_more;
+    });
+    const reset = () => { generation++; afterSeq = 0; afterOrdinal = 0; events.replaceChildren(); more.disabled = false; more.hidden = false; more.textContent = "Load history"; };
+    kind.addEventListener("change", reset); key.addEventListener("input", reset);
+    controls.append(kind, key); b.append(controls, more, events);
   }
   function fillMemory(b, p, d) {
     const records = d.memory || [];

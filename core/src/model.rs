@@ -493,6 +493,9 @@ pub struct Player {
     pub notes: BTreeMap<String, String>,
     #[serde(default)]
     pub memory: BTreeMap<String, crate::memory::Record>,
+    /// Revision floors survive archiving/reset, preventing stale writes to reused keys.
+    #[serde(default)]
+    pub memory_revisions: BTreeMap<String, u64>,
     /// When the captain last wrote its plan (note key `plan`); None if it has none.
     #[serde(default)]
     pub plan_tick: Option<Tick>,

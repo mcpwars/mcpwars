@@ -2898,7 +2898,7 @@ fn a_plan_is_mandatory_but_its_content_and_timing_are_the_captains() {
     assert_eq!(view(&s)["due"], false);
     plan(&mut s, "moved on");
     assert_eq!(s.p(a).plan_tick, Some(s.w.tick));
-    // Deleting the plan makes it due.
+    // The current required plan remains active; archiving/deleting it is refused.
     s.run(
         Actor::Player(a),
         Command::Note(NoteArgs {
@@ -2907,9 +2907,9 @@ fn a_plan_is_mandatory_but_its_content_and_timing_are_the_captains() {
             mode: Some(af_core::cmd::NoteMode::Delete),
         }),
     )
-    .unwrap();
-    assert_eq!(view(&s)["due"], true);
-    assert!(s.p(a).plan_tick.is_none());
+    .unwrap_err();
+    assert_eq!(view(&s)["due"], false);
+    assert!(s.p(a).plan_tick.is_some());
 }
 
 #[test]
@@ -6596,19 +6596,27 @@ fn feedback_private_memory_revision_history_import_and_expiry() {
         )),
     )
     .unwrap();
-    s.tick();
-    assert_eq!(af_core::memory::read(&s.w, a, &read).unwrap()["archived"], true);
-    assert_eq!(
-        af_core::memory::read(&s.w, a, &args(Action::List, "", None, None)).unwrap()["records"]
-            .as_array()
-            .unwrap()
-            .len(),
-        0
-    );
+    // Export/import active history works; expiry later removes every captain access path.
     let export = af_core::memory::read(&s.w, a, &args(Action::Export, "", None, None)).unwrap();
     s.run(Actor::Player(b), Command::Memory(args(Action::Import, "", Some(export), None)))
         .unwrap();
     assert_eq!(s.w.players[&b].memory["facts"].versions.len(), 2);
+    s.tick();
+    assert_eq!(af_core::memory::read(&s.w, a, &read).unwrap_err().code, "not_found");
+    for action in [Action::Read, Action::History, Action::Diff] {
+        let mut request = args(action, "facts", None, Some(1));
+        request.include_archived = true;
+        assert_eq!(af_core::memory::read(&s.w, a, &request).unwrap_err().code, "not_found");
+    }
+    assert!(s.w.players[&a].memory.is_empty());
+    assert_eq!(
+        af_core::memory::read(&s.w, a, &args(Action::List, "", None, None)).unwrap()["records"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        af_core::memory::read(&s.w, a, &args(Action::Export, "", None, None)).unwrap()["records"],
+        serde_json::json!({})
+    );
     let mut replay = generate(&s.cfg);
     for e in &s.journal {
         let _ = apply(&mut replay, e);
@@ -6983,4 +6991,145 @@ fn feedback_watchlist_pages_do_not_skip_matching_messages_or_observations() {
     assert_eq!(inbox["radio_digest"][0]["count"], 4);
     assert_eq!(inbox["read_receipt"]["radio_ids"].as_array().unwrap().len(), 4);
     assert_eq!(inbox["read_receipt"]["peek"], true);
+}
+
+#[test]
+fn private_archive_reuse_slots_reset_and_captain_access() {
+    use af_core::memory::{Action, Args};
+    let mut s = Sim::new(991, 40);
+    let a = s.join("Archivist");
+    let args = |action, key: &str, data, expected_revision| Args {
+        action,
+        key: Some(key.into()),
+        data,
+        expected_revision,
+        ttl_ticks: None,
+        path: None,
+        include_archived: true,
+        offset: None,
+        limit: None,
+    };
+    for i in 0..40 {
+        s.run(
+            Actor::Player(a),
+            Command::Memory(args(
+                Action::Save,
+                &format!("key{i}"),
+                Some(serde_json::json!({"secret":"old","sectors":[1]})),
+                Some(0),
+            )),
+        )
+        .unwrap();
+    }
+    let old_export = af_core::memory::read(&s.w, a, &args(Action::Export, "", None, None)).unwrap();
+    let hash = s.w.state_hash();
+    assert_eq!(
+        s.run(
+            Actor::Player(a),
+            Command::Memory(args(Action::Save, "overflow", Some(serde_json::json!({})), Some(0)))
+        )
+        .unwrap_err()
+        .code,
+        "limit_reached"
+    );
+    assert_eq!(hash, s.w.state_hash());
+    s.run(Actor::Player(a), Command::Memory(args(Action::Archive, "key0", None, Some(1))))
+        .unwrap();
+    assert!(af_core::memory::read(&s.w, a, &args(Action::History, "key0", None, None)).is_err());
+    let brief = query::briefing_with(
+        &s.w,
+        a,
+        &query::BriefingArgs {
+            memory_keys: vec!["key0".into()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(brief["memory"]["key0"].is_null());
+    assert!(
+        query::changes(
+            &s.w,
+            a,
+            &query::ChangesArgs {
+                watchlist_key: Some("key0".into()),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        s.run(
+            Actor::Player(a),
+            Command::Memory(args(Action::Patch, "key0", Some(serde_json::json!({})), Some(1)))
+        )
+        .is_err()
+    );
+    s.run(
+        Actor::Player(a),
+        Command::Memory(args(Action::Save, "key0", Some(serde_json::json!({"secret":"new"})), Some(0))),
+    )
+    .unwrap();
+    assert_eq!(s.w.players[&a].memory["key0"].versions[0].revision, 2);
+    assert!(
+        s.run(
+            Actor::Player(a),
+            Command::Memory(args(Action::Patch, "key0", Some(serde_json::json!({})), Some(1)))
+        )
+        .is_err()
+    );
+    assert!(af_core::memory::read(&s.w, a, &args(Action::Diff, "key0", None, Some(1))).is_err());
+    assert!(
+        !af_core::memory::read(&s.w, a, &args(Action::History, "key0", None, None))
+            .unwrap()
+            .to_string()
+            .contains("old")
+    );
+    s.run(
+        Actor::Player(a),
+        Command::Note(NoteArgs {
+            key: "lesson".into(),
+            value: "old note".into(),
+            mode: None,
+        }),
+    )
+    .unwrap();
+    s.run(
+        Actor::Player(a),
+        Command::Note(NoteArgs {
+            key: "lesson".into(),
+            value: String::new(),
+            mode: Some(NoteMode::Archive),
+        }),
+    )
+    .unwrap();
+    assert!(
+        query::notes(
+            &s.w,
+            a,
+            &query::NotesArgs {
+                key: Some("lesson".into()),
+                ..Default::default()
+            }
+        )
+        .unwrap()["value"]
+            .is_null()
+    );
+    s.run(Actor::System, Command::Admin(AdminArgs::FreshStart)).unwrap();
+    assert!(s.w.players[&a].memory.is_empty());
+    // Importing a previously exported bundle preserves contents but assigns fresh revisions.
+    s.run(Actor::Player(a), Command::Memory(args(Action::Import, "", Some(old_export), None)))
+        .unwrap();
+    assert_eq!(s.w.players[&a].memory["key0"].versions[0].revision, 3);
+    assert!(
+        s.run(
+            Actor::Player(a),
+            Command::Memory(args(Action::Patch, "key0", Some(serde_json::json!({})), Some(1)))
+        )
+        .is_err()
+    );
+    let mut replay = generate(&s.cfg);
+    for e in &s.journal {
+        let _ = apply(&mut replay, e);
+    }
+    assert_eq!(s.w.state_hash(), replay.state_hash());
 }

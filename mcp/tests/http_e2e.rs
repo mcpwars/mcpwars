@@ -279,11 +279,14 @@ async fn mcp_over_http_end_to_end() {
             .unwrap(),
     );
     assert!(ok, "{t}");
-    for data in [json!({"facts": {"sector": 12}}), json!({"facts": {"sector": 13}})] {
+    for (index, data) in [json!({"facts": {"sector": 12}}), json!({"facts": {"sector": 13}})]
+        .into_iter()
+        .enumerate()
+    {
         let (ok, t) = text(
             &call(
                 "memory",
-                json!({"action": "save", "key": "inspection", "data": data, "ttl_ticks": 0}),
+                json!({"action": "save", "key": "inspection", "data": data, "ttl_ticks": if index==0 {None} else {Some(0)}}),
             )
             .await
             .unwrap(),
@@ -379,6 +382,56 @@ async fn mcp_over_http_end_to_end() {
         .unwrap();
     assert_eq!(detail["memory"][0]["data"]["facts"]["sector"], 13);
     assert_eq!(detail["memory"][0]["archived"], true);
+
+    for action in ["read", "history", "diff"] {
+        assert!(
+            !text(
+                &call(
+                    "memory",
+                    json!({"action":action,"key":"inspection","expected_revision":1,"include_archived":true})
+                )
+                .await
+                .unwrap()
+            )
+            .0
+        );
+    }
+    let (_, t) = text(&call("memory", json!({"action":"export"})).await.unwrap());
+    assert!(!envelope(&t)["records"].to_string().contains("inspection"));
+    let (ok, t) = text(&call("write_note", json!({"key":"sysop_test","mode":"archive"})).await.unwrap());
+    assert!(ok, "{t}");
+    let (ok, t) = text(
+        &scall(
+            "sysop_private_archive",
+            json!({"name":"E2E","kind":"note","key":"sysop_test","limit":1}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    let first = envelope(&t);
+    assert_eq!(first["events"][0]["body"]["text"], "private inspection note");
+    assert_eq!(first["continuation"]["has_more"], true);
+    let (ok, t) = text(
+        &scall("sysop_private_archive", first["continuation"]["next_arguments"].clone())
+            .await
+            .unwrap(),
+    );
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["events"][0]["reason"], "archived");
+    assert!(!text(&call("sysop_private_archive", json!({"name":"E2E"})).await.unwrap()).0);
+    let archive_url = format!("{url}/api/sysop/private_archive?name=E2E&kind=note&key=sysop_test");
+    assert_eq!(http.get(&archive_url).send().await.unwrap().status().as_u16(), 401);
+    assert_eq!(
+        http.get(&archive_url).bearer_auth(&token).send().await.unwrap().status().as_u16(),
+        401
+    );
+    let r = http.get(&archive_url).bearer_auth("adm").send().await.unwrap();
+    assert!(r.status().is_success());
+    let archive: Value = r.json().await.unwrap();
+    assert_eq!(archive["events"][1]["reason"], "archived");
+    let (_, t) = text(&call("read_notes", json!({"key":"sysop_test"})).await.unwrap());
+    assert!(envelope(&t)["value"].is_null());
 
     // Every interaction is in the activity log, broken down by tool, without secrets.
     let (ok, _) = text(&call("warp", json!({"sector": 99_999})).await.unwrap());

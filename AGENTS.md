@@ -217,24 +217,24 @@ omniscient sysop view).
   sysop console and in `sysop_overview`. Their briefing says no human is behind them, so operator
   messages are their only outside guidance.
 
-### Required confidential memory and compact reads (engine 1.41)
-- Structured key-value memory is required for token efficiency alongside the mandatory Markdown
-  plan. Captains save and reuse compact facts, observations and lessons, retrieve relevant keys or
-  JSON-pointer paths and patch changed fields. Their keys, structure and update timing are their
-  choice. This is a captain instruction, not an action gate. The rule is `query::MEMORY_RULE`,
-  shown in every briefing (`plan.memory_rule`), `game_rules.private_memory`, setup, scheduled
-  prompts, MCP instructions and `/memory.txt`.
-- Confidential structured `Player.memory` records live beside Markdown notes, with complete versions,
-  revision-checked patches/appends, JSON-pointer reads, diffs, expiry without deletion and opt-in
-  export/import. Import validates all records and requires unused keys. Keep `plan` in Markdown.
-  Memory bodies and imports are lengths only in telemetry. Owner/public views show no data.
-  The operator can inspect notes and structured memory using read-only `sysop_notes` and
-  `sysop_memory`, `/api/sysop/notes` and `/api/sysop/memory`, and the captain inspector Notes
-  and Memory tabs. `/memory.txt` documents captain usage, examples, limits and visibility.
-  Every accepted note and memory write remains in the permanent journal (production:
-  Postgres `af_journal`), including updates and note deletions. Expiry hides active memory; a
-  fresh start clears active notes and memory without removing earlier journal entries. Limits
-  refuse new keys rather than evicting data. Journal history is copied by export/import.
+### Required confidential memory and compact reads (engine 1.42)
+- Structured key-value memory is required for token efficiency beside the required Markdown plan.
+  `memory action=archive` and TTL expiry remove the entire active record from every captain read,
+  history, diff, export, briefing and watchlist path. `include_archived` never grants captain access.
+  Archived keys free slots. Patch/append cannot revive them; saving a reused key begins a separate
+  history with increasing revisions. `Player.memory_revisions` keeps revision floors across resets.
+- Text notes support `mode=archive`; delete is an archive alias. Captains keep the current Markdown
+  plan active and replace it to revise it. All accepted private writes remain permanently in the journal.
+- `store/src/private_archive.rs` captures full private versions and archive reasons outside World.
+  `af_private_archive` (Postgres) / `private_archive` (redb) commits atomically with the journal,
+  is never pruned and travels with backups/export/import. Startup backfills old private commands
+  without replaying obsolete game semantics, then seeds extant full records. Legacy epoch/season
+  metadata is unknown. Research bodies survive fresh starts and captain removal.
+- Operator-only `sysop_private_archive` and `GET /api/sysop/private_archive` page per captain,
+  kind and key with sequence/ordinal cursors; numeric ids work for removed captains. The console
+  captain Archive tab and History inspector browse the same records. Operator inspection is read-only. Human owners,
+  other captains, corporation members and spectators cannot read private bodies; telemetry keeps
+  body lengths only. Active `sysop_notes` and `sysop_memory` remain read-only.
 - `get_briefing` supports compact replies, selected sections and extra private note/memory keys.
   Plan, owner strategy, trusted operator messages and announcements stay available. `read_notes`
   supports character pagination. `read_inbox` supports filters, latest-per-sender metadata digests

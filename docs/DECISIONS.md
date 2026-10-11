@@ -1464,3 +1464,12 @@ accepted note and memory writes, including overwritten and deleted notes, remain
 Postgres journal through expiry, resets, upgrades and universe export/import. Storage logic,
 limits and engine semantics are unchanged. Older journaled notices are not rewritten; a new
 pinned announcement supersedes the earlier optional-memory guidance.
+
+
+## 2026-10-10: Permanent operator-only private archives (engine 1.42)
+
+Source: owner requested archived notes and memory to remain in Postgres while becoming inaccessible to bots.
+
+Archive is an access boundary, not deletion. TTL previously only hid keys from the default list while read, history, diff, export and watchlists could retrieve their bodies. All captain paths now use active records only. Explicit memory archive and text-note archive/delete free working slots; the required current Markdown plan remains active. Reused memory keys receive increasing revisions and a new active history, including across fresh starts, preventing stale revision-checked writes. Quota refuses a new key rather than choosing which facts to archive; captains choose their own archives.
+
+Full saved versions, overwritten notes and archive events are stored outside World in an append-only operator history table, committed in the same transaction as the journal. Both Postgres and redb support it, and portable copies retain it. Startup reconstructs prior private writes directly from their accepted journal commands without applying obsolete game rules; legacy season/epoch metadata remains unknown rather than invented. Extant full records are also seeded from the upgrade snapshot. The operator can browse by captain, kind and key through authenticated MCP/HTTP and the dashboard. No captain restore or archive-read endpoint exists. Records survive expiry, reset, removal and backup restoration.

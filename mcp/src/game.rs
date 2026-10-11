@@ -27,6 +27,10 @@ enum Req {
         reply: oneshot::Sender<Result<Outcome, Refusal>>,
     },
     Read(ReadFn),
+    PrivateArchive(
+        af_store::private_archive::ArchiveQuery,
+        oneshot::Sender<Result<Vec<af_store::private_archive::ArchiveRow>, String>>,
+    ),
     Snapshot(oneshot::Sender<()>),
     /// Copy the database between transactions (a consistent online backup).
     Backup(std::path::PathBuf, oneshot::Sender<Result<u64, String>>),
@@ -347,6 +351,10 @@ impl Game {
             .spawn(move || {
                 let mut w = world;
                 let mut store = store;
+                if let Some(st) = &store {
+                    st.backfill_private(&w).expect("permanent private archive backfill");
+                }
+                let mut private_mem: Vec<af_store::private_archive::ArchiveRow> = vec![];
                 let mut released = false;
                 let mut since_snapshot = 0u64;
                 let mut feed_id = 0u64;
@@ -418,6 +426,24 @@ impl Game {
                                 };
                             let _ = reply.send(ok);
                         }
+                        Req::PrivateArchive(q, reply) => {
+                            let result = match &store {
+                                Some(st) => st.private_archive(&q).map_err(|e| e.to_string()),
+                                None if released => Err("This server handed over; reconnect to the active server.".into()),
+                                None => Ok(private_mem
+                                    .iter()
+                                    .filter(|r| {
+                                        (r.seq, r.ordinal) > (q.after_seq, q.after_ordinal)
+                                            && q.player.is_none_or(|p| p == r.player)
+                                            && q.kind.as_ref().is_none_or(|k| *k == r.kind)
+                                            && q.key.as_ref().is_none_or(|k| *k == r.key)
+                                    })
+                                    .take(q.limit)
+                                    .cloned()
+                                    .collect()),
+                            };
+                            let _ = reply.send(result);
+                        }
                         Req::Read(f) => f(&w),
                         Req::Backup(dest, done) => match store.as_ref().map(|st| st.detached_backup()) {
                             // Postgres: a consistent export on its own connection, off this thread.
@@ -466,11 +492,13 @@ impl Game {
                                 actor,
                                 cmd,
                             };
+                            let private_before = af_store::private_archive::Capture::before(&w, &e);
                             match apply(&mut w, &e) {
                                 Ok(out) => {
+                                    let private_rows = private_before.after(&w, &e).expect("serialize private archive");
                                     if let Some(st) = &store {
                                         let cp = e.seq.is_multiple_of(af_store::CHECKPOINT_EVERY).then(|| w.state_hash());
-                                        if let Err(err) = st.append(&e, cp.as_deref()) {
+                                        if let Err(err) = st.append_with_private(&e, cp.as_deref(), &private_rows) {
                                             // Fail-stop: never acknowledge state we could not persist.
                                             tracing::error!("FATAL: journal append failed: {err}");
                                             eprintln!("FATAL: journal append failed: {err}");
@@ -483,6 +511,9 @@ impl Game {
                                                 tracing::error!("snapshot failed: {err}");
                                             }
                                         }
+                                    }
+                                    if store.is_none() {
+                                        private_mem.extend(private_rows);
                                     }
                                     for ev in &out.events {
                                         feed_id += 1;
@@ -551,6 +582,18 @@ impl Game {
         });
         self.tx.send(Req::Read(job)).await.expect("engine running");
         rx.await.expect("engine replied")
+    }
+
+    pub async fn private_archive(
+        &self,
+        q: af_store::private_archive::ArchiveQuery,
+    ) -> Result<Vec<af_store::private_archive::ArchiveRow>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Req::PrivateArchive(q, tx))
+            .await
+            .map_err(|_| "Engine stopped".to_string())?;
+        rx.await.map_err(|_| "Engine stopped".to_string())?
     }
 
     /// Write a consistent copy of the database to `dest` (bytes written).

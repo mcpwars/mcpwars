@@ -14,6 +14,8 @@ const CHECKPOINTS: TableDefinition<u64, &[u8]> = TableDefinition::new("checkpoin
 const SNAPSHOTS: TableDefinition<u64, &[u8]> = TableDefinition::new("snapshots");
 /// Interaction log: (at_ms, n) -> player (8 bytes, u64::MAX for none) + row. `n` only grows.
 const ACTIVITY: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("activity");
+const PRIVATE: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("private_archive");
+const PRIVATE_PLAYER: TableDefinition<(u64, u64, u64), &[u8]> = TableDefinition::new("private_archive_player");
 const NO_PLAYER: u64 = u64::MAX;
 /// Daily activity summaries, kept forever: (day "YYYY-MM-DD", player) -> summary JSON.
 const ACTIVITY_DAILY: TableDefinition<(&str, u64), &[u8]> = TableDefinition::new("activity_daily");
@@ -44,6 +46,8 @@ impl RedbBackend {
         tx.open_table(SNAPSHOTS)?;
         tx.open_table(ACTIVITY)?;
         tx.open_table(ACTIVITY_DAILY)?;
+        tx.open_table(PRIVATE)?;
+        tx.open_table(PRIVATE_PLAYER)?;
         tx.commit()?;
         Ok(RedbBackend {
             db,
@@ -57,6 +61,19 @@ impl RedbBackend {
             Table::Snapshots => SNAPSHOTS,
         }
     }
+}
+
+fn private_insert(tx: &redb::WriteTransaction, rows: &[crate::private_archive::ArchiveRow]) -> Result<()> {
+    let mut table = tx.open_table(PRIVATE)?;
+    let mut players = tx.open_table(PRIVATE_PLAYER)?;
+    for r in rows {
+        if table.get((r.seq, r.ordinal))?.is_none() {
+            let data = serde_json::to_vec(r)?;
+            table.insert((r.seq, r.ordinal), data.as_slice())?;
+            players.insert((r.player, r.seq, r.ordinal), data.as_slice())?;
+        }
+    }
+    Ok(())
 }
 
 impl Backend for RedbBackend {
@@ -82,7 +99,7 @@ impl Backend for RedbBackend {
         Ok(())
     }
 
-    fn append(&self, seq: u64, entry: &[u8], checkpoint: Option<&str>) -> Result<()> {
+    fn append(&self, seq: u64, entry: &[u8], checkpoint: Option<&str>, private: &[crate::private_archive::ArchiveRow]) -> Result<()> {
         let tx = self.db.begin_write()?;
         {
             let mut t = tx.open_table(JOURNAL)?;
@@ -98,8 +115,54 @@ impl Backend for RedbBackend {
                 tx.open_table(CHECKPOINTS)?.insert(seq, h.as_bytes())?;
             }
         }
+        private_insert(&tx, private)?;
         tx.commit()?;
         Ok(())
+    }
+
+    fn private_insert(&self, rows: &[crate::private_archive::ArchiveRow]) -> Result<()> {
+        let tx = self.db.begin_write()?;
+        private_insert(&tx, rows)?;
+        tx.commit()?;
+        Ok(())
+    }
+    fn private_query(&self, q: &crate::private_archive::ArchiveQuery) -> Result<Vec<crate::private_archive::ArchiveRow>> {
+        if q.limit == 0 {
+            return Ok(vec![]);
+        }
+        let tx = self.db.begin_read()?;
+        let mut rows = vec![];
+        let mut add = |data: &[u8]| -> Result<bool> {
+            let r: crate::private_archive::ArchiveRow = serde_json::from_slice(data)?;
+            if q.kind.as_ref().is_none_or(|k| *k == r.kind) && q.key.as_ref().is_none_or(|k| *k == r.key) {
+                rows.push(r);
+            }
+            Ok(rows.len() >= q.limit)
+        };
+        if let Some(pid) = q.player {
+            let table = tx.open_table(PRIVATE_PLAYER)?;
+            for row in table.range((
+                std::ops::Bound::Excluded((pid, q.after_seq, q.after_ordinal)),
+                std::ops::Bound::Included((pid, u64::MAX, u64::MAX)),
+            ))? {
+                let (_, v) = row?;
+                if add(v.value())? {
+                    break;
+                }
+            }
+        } else {
+            let table = tx.open_table(PRIVATE)?;
+            for row in table.range((
+                std::ops::Bound::Excluded((q.after_seq, q.after_ordinal)),
+                std::ops::Bound::Unbounded,
+            ))? {
+                let (_, v) = row?;
+                if add(v.value())? {
+                    break;
+                }
+            }
+        }
+        Ok(rows)
     }
 
     fn last_seq(&self) -> Result<u64> {

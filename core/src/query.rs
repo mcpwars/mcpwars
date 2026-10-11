@@ -486,9 +486,8 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
         );
     }
     if !a.memory_keys.is_empty() {
-        let p = player_or(w, pid)?;
         o.insert("memory".into(),json!(a.memory_keys.iter().map(|k| {
-            let record = p.memory.get(k).and_then(|r| r.versions.last());
+            let record = crate::memory::current(w,pid,k);
             (k,record.map(|v| { let archived = v.expires_tick.is_some_and(|t| t <= w.tick); json!({"revision": v.revision,"tick": v.tick,"archived": archived,"data": if archived {None} else {Some(&v.data)}}) }))
         }).collect::<BTreeMap<_,_>>()));
     }
@@ -497,16 +496,12 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
 }
 
 pub fn changes(w: &World, pid: PlayerId, a: &ChangesArgs) -> Res<Value> {
-    let p = player_or(w, pid)?;
+    player_or(w, pid)?;
     let mut sectors = a.sectors.clone();
     let mut captains = a.captains.clone();
     let mut keywords = a.keywords.clone();
     if let Some(k) = &a.watchlist_key {
-        let record = p
-            .memory
-            .get(k)
-            .and_then(|r| r.versions.last())
-            .ok_or_else(|| Refusal::new("not_found", "No such watchlist memory record."))?;
+        let record = crate::memory::current(w, pid, k).ok_or_else(|| Refusal::new("not_found", "No such watchlist memory record."))?;
         sectors.extend(serde_json::from_value::<Vec<SectorId>>(record.data["sectors"].clone()).unwrap_or_default());
         captains.extend(serde_json::from_value::<Vec<String>>(record.data["captains"].clone()).unwrap_or_default());
         keywords.extend(serde_json::from_value::<Vec<String>>(record.data["keywords"].clone()).unwrap_or_default());

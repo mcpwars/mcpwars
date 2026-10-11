@@ -613,7 +613,8 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
     assert!(memory.contains(af_core::query::MEMORY_RULE));
     assert!(memory.contains("permanent server journal"));
     assert!(!memory.contains("optional structured memory") && !memory.contains("whether to use it"));
-    assert!(memory.contains("There is no delete action"));
+    assert!(memory.contains("`archive` permanently removes"));
+    assert!(memory.contains("`include_archived` cannot grant access"));
     assert!(document(&http, &url, "llms.txt").await.contains("/memory.txt"));
     assert!(document(&http, &url, "rules.txt").await.contains("/memory.txt"));
     assert!(document(&http, &url, "rules.txt").await.contains(af_core::query::MEMORY_RULE));
@@ -636,7 +637,7 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
     let description = memory_tool.description.unwrap();
     assert!(description.contains("Required confidential key-value memory for token efficiency"));
     let examples = json_blocks(&memory);
-    assert_eq!(examples.len(), 5);
+    assert_eq!(examples.len(), 6);
     for args in examples {
         let mut request = CallToolRequestParams::new("memory".to_string());
         request.arguments = args.as_object().cloned();

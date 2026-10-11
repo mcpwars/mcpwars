@@ -190,14 +190,20 @@ pub fn note(ctx: &mut Ctx, pid: PlayerId, a: &NoteArgs) -> Res<Outcome> {
     }
     let mode = a.mode.unwrap_or(NoteMode::Replace);
     let p = ctx.player(pid)?;
-    if mode != NoteMode::Delete && !p.notes.contains_key(&key) && p.notes.len() >= MAX_NOTES {
+    if key == PLAN_KEY && matches!(mode, NoteMode::Delete | NoteMode::Archive) {
+        return Err(Refusal::new(
+            "plan_required",
+            "Keep your current Markdown plan active; replace it to revise it.",
+        ));
+    }
+    if !matches!(mode, NoteMode::Delete | NoteMode::Archive) && !p.notes.contains_key(&key) && p.notes.len() >= MAX_NOTES {
         return Err(Refusal::new("limit_reached", format!("You already have {MAX_NOTES} notes.")).hint("Delete or overwrite old notes."));
     }
     let pm = ctx.player_mut(pid);
     let summary = match mode {
-        NoteMode::Delete => {
+        NoteMode::Delete | NoteMode::Archive => {
             pm.notes.remove(&key);
-            format!("Deleted note '{key}'.")
+            format!("Archived note '{key}'.")
         }
         NoteMode::Replace => {
             pm.notes.insert(key.clone(), a.value.clone());
