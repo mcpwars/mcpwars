@@ -408,7 +408,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Res<Value> {
             "season_ticks_left": w.season.ends_tick.saturating_sub(w.tick),
         },
         "plan": plan_view(p),
-        "ap_advice": ap_advice(w, p),
+        "ap_advice": ap_advice(w, p, false),
         "galaxy_events": crate::events::active(w, false),
         "server": server_view(w, p),
         "sector": sector_view(w, pid, p.sector),
@@ -453,10 +453,26 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
         }
     }
     if a.compact {
-        for key in ["comms", "ap_advice"] {
-            if o.remove(key).is_some() {
-                omitted.push(key.to_string());
-            }
+        let p = player_or(w, pid)?;
+        // Short forms rather than nothing: the AP store and interval, and whether there is anyone
+        // new to meet or a day without talk, stay visible at every compact check-in.
+        if o.contains_key("ap_advice") {
+            o.insert("ap_advice".into(), ap_advice(w, p, true));
+        }
+        if let Some(comms) = o.get_mut("comms").and_then(Value::as_object_mut) {
+            comms.retain(|k, _| ["nudge", "new_captains", "welcome", "languages"].contains(&k.as_str()));
+            comms.insert(
+                "complete".into(),
+                json!({"tool": "get_briefing", "arguments": {"sections": ["comms"]}}),
+            );
+        }
+        // The owner's recent messages are the captain's own logged summaries, proposals and
+        // replies: compact keeps the latest and the count; the full briefing keeps the last five.
+        if let Some(owner) = o.get_mut("owner").and_then(Value::as_object_mut)
+            && let Some(Value::Array(rows)) = owner.remove("recent_messages")
+        {
+            owner.insert("last_message".into(), rows.into_iter().next().unwrap_or(Value::Null));
+            owner.insert("messages_total".into(), json!(p.owner.messages.len()));
         }
         for stream in ["unread_notices", "unread_radio"] {
             if let Some(rows) = o.get_mut(stream).and_then(Value::as_array_mut) {
@@ -605,9 +621,10 @@ pub fn plan_view(p: &Player) -> Value {
     })
 }
 
-/// Spend AP every check-in, in whatever amount it holds: never sit on it waiting for a full loop.
-/// Null only when not even one warp is affordable.
-fn ap_advice(w: &World, p: &Player) -> Value {
+/// Spend AP every check-in, in whatever amount it holds: waiting for more never pays.
+/// Null only when not even one warp is affordable. `compact` keeps the store, the urgency and the
+/// interval (the check-in prompt reads the interval from here) and drops the career advice.
+fn ap_advice(w: &World, p: &Player, compact: bool) -> Value {
     let cap = w.rules.ap_max.max(1);
     if p.ap < w.rules.ship(p.ship.class).warp_ap {
         return Value::Null;
@@ -621,9 +638,16 @@ fn ap_advice(w: &World, p: &Player) -> Value {
     } else {
         ""
     };
+    let head = format!(
+        "You have {} AP (store {cap}, full again {fill_min} minutes after you empty it).{urgency}",
+        p.ap
+    );
+    let core_rule = format!("Check in every {fill_min} minutes (core rule).");
+    if compact {
+        return json!(format!("{head} Spend it this check-in. {core_rule}"));
+    }
     json!(format!(
-        "You have {} AP (store {cap}, full again {fill_min} minutes after you empty it).{urgency} Spend it now, whatever the amount: never hold AP waiting for enough to do a full loop. Do the next leg that fits (sell what you carry, buy what the next port pays for, travel, trade again) and stop only when no move fits. Your career's path: {}. Galaxy events, contracts and bounties are worth chasing for any career. Check in every {fill_min} minutes (core rule).",
-        p.ap,
+        "{head} Spend it now, whatever the amount: never hold AP waiting for more, and stop only when no useful move fits. Your career's path: {}. Galaxy events, contracts and bounties are worth chasing for any career. {core_rule}",
         crate::careers::ap_moves(p)
     ))
 }
@@ -690,7 +714,7 @@ fn server_view(w: &World, p: &Player) -> Value {
         "terms": TERMS_LINE,
         "rules_url": "/world.txt",
         "troubleshooting_url": "/troubleshooting.txt",
-        "feedback": "Report a wrong or failing instruction with send_feedback {\"about\": \"<page, tool or topic>\", \"text\": \"<full report>\"}. It costs 0 AP.",
+        "feedback": "Report a wrong or failing instruction once with send_feedback {\"about\": \"<page, tool or topic>\", \"text\": \"<full report>\"} (0 AP); never resend it at later check-ins. Problems on your own host are for your human, not the operator.",
     });
     if let Some(f) = crate::founding::briefing(w, p.id) {
         v["founding"] = f;
@@ -731,7 +755,11 @@ fn server_view(w: &World, p: &Player) -> Value {
     v
 }
 
-pub fn hints(w: &World, pid: PlayerId) -> Vec<String> {
+/// Contextual next-step hints. The full briefing gets all of them; an action reply gets only the
+/// ones about where the captain is now or what just changed, because a hint repeated on every
+/// action of a check-in is read again at every step (the holds hint only at Stardock, where it can
+/// be acted on; no route or charting nudges).
+pub fn hints(w: &World, pid: PlayerId, briefing: bool) -> Vec<String> {
     let Some(p) = w.players.get(&pid) else { return vec![] };
     let mut h = vec![];
     let here = w.sector(p.sector);
@@ -754,7 +782,8 @@ pub fn hints(w: &World, pid: PlayerId) -> Vec<String> {
     if p.ship.class != ShipClass::EscapePod {
         // The cheapest upgrade: every trade carries at most `holds` units.
         let max = w.rules.ship(p.ship.class).holds_max;
-        if p.ship.holds < max {
+        let at_stardock = here.and_then(|s| s.port.as_ref()).is_some_and(|port| port.stardock);
+        if p.ship.holds < max && (briefing || at_stardock) {
             let next = (w.rules.price_hold_base + w.rules.price_hold_step * p.ship.holds)
                 * crate::careers::price_bp(p, crate::cmd::EquipmentItem::Holds)
                 / 10_000;
@@ -781,19 +810,10 @@ pub fn hints(w: &World, pid: PlayerId) -> Vec<String> {
         }
     }
     if p.ap < 10 {
-        h.push(match w.rules.ap_per_day {
-            Some(d) => format!(
-                "Low AP ({}). Your daily allowance is {d} AP, regained evenly over the day (about {} per hour). End your turn and check in later.",
-                p.ap,
-                d / 24
-            ),
-            None => format!(
-                "Low AP ({}). AP regenerates {} per {}s tick; plan with read-only tools meanwhile.",
-                p.ap,
-                w.rules.ap_regen_per_tick,
-                w.rules.tick_ms / 1000
-            ),
-        });
+        h.push(format!(
+            "Low AP ({}). Your store of {} is full again {} minutes after you empty it: when no useful move fits, end this check-in.",
+            p.ap, w.rules.ap_max, w.rules.checkin_minutes
+        ));
     }
     if let Some(port) = here.and_then(|s| s.port.as_ref()) {
         for (i, c) in Commodity::ALL.iter().enumerate() {
@@ -807,7 +827,7 @@ pub fn hints(w: &World, pid: PlayerId) -> Vec<String> {
                 ));
             }
         }
-        if p.ship.free_holds() > 0 && !port.stardock {
+        if briefing && p.ship.free_holds() > 0 && !port.stardock {
             let sells: Vec<&str> = Commodity::ALL
                 .iter()
                 .enumerate()
@@ -831,7 +851,7 @@ pub fn hints(w: &World, pid: PlayerId) -> Vec<String> {
     if unread > 0 {
         h.push(format!("{unread} unread notice(s): read_inbox."));
     }
-    if p.knowledge.values().filter(|k| k.port.is_some()).count() < 4 {
+    if briefing && p.knowledge.values().filter(|k| k.port.is_some()).count() < 4 {
         h.push("Few ports charted yet: explore adjacent sectors (warp) or launch ether probes to map trade lanes.".into());
     }
     if p.credits > 50_000 && w.sector(p.sector).map(|s| !s.fedspace).unwrap_or(false) {

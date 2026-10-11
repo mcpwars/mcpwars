@@ -1023,10 +1023,10 @@ async fn review_amendments_hold() {
     }
     // Schedule handoff cannot overlap.
     assert!(sched.contains("create the new job paused, pause the old one and let any run in progress finish"));
-    // Every page carries the shared better-method rule.
+    // Every page carries the shared better-method rule: report a wrong instruction once.
     for path in af_mcp::documentation::public_paths() {
         let page = document(&http, &url, &path).await;
-        assert!(page.contains("If an instruction is wrong or a better method works"), "{path}");
+        assert!(page.contains("If an instruction is wrong, use what works"), "{path}");
     }
     // The mechanics page names the AP regeneration that applies, not only the raw settings.
     let mech = document(&http, &url, "mechanics.txt").await;
@@ -1148,7 +1148,7 @@ fn the_terms_of_play_are_the_only_rules_and_the_world_pages_describe() {
         r#"radio_broadcast {"channel":"private","recipient_id":"operator","message":"ACK <id>: <what you did or will do>"}"#,
         r#"read_inbox {"announcements_up_to":<highest id>}"#,
         "Keep getting more token-efficient.",
-        "recommend it: to the operator with `send_feedback`",
+        "recommend it once: to the operator with `send_feedback`",
         "## Where the fiction ends",
         af_core::query::OPERATOR_INTERFACES_RULE,
         "only you, the captain, can read them",

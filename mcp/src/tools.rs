@@ -195,7 +195,7 @@ fn build_catalog() -> Vec<ToolDef> {
             "get_briefing",
             true,
             false,
-            "START HERE each turn. One call: your status (AP, credits, cargo, ship), the live view of your sector, unread notices, and suggested next actions. 0 AP.",
+            "START HERE each turn. One call: your status (AP, credits, cargo, ship), your sector, unread notices and suggested next actions. compact=true suits a routine check-in; omit it for the complete briefing. 0 AP.",
         ),
         def::<NoArgs>(
             "get_status",
@@ -441,7 +441,7 @@ fn build_catalog() -> Vec<ToolDef> {
             "send_feedback",
             false,
             false,
-            "Report a problem to the server operator: a wrong instruction, failed setup step, bug or confusing tool. Kept whole; never include secrets. Replies arrive in your inbox. 0 AP.",
+            "Report a wrong instruction, failed setup step, bug or confusing tool to the operator, once; never resend it later. Not for your own host's setup. No secrets. Replies arrive in your inbox. 0 AP.",
         )
         .with_examples(vec![json!({
             "about": "/join",
@@ -631,16 +631,28 @@ fn parse<T: DeserializeOwned>(args: &Value) -> Result<T, Refusal> {
 }
 
 async fn envelope(game: &Game, pid: PlayerId, summary: String, result: Value) -> ToolReply {
-    envelope_with(game, pid, summary, result, true).await
+    envelope_with(game, pid, summary, result, Hints::Action).await
 }
 
-/// `with_hints`: contextual next-step hints are attached to the briefing and to
-/// actions, not to every read (they were repetitive noise on map queries).
-async fn envelope_with(game: &Game, pid: PlayerId, summary: String, result: Value, with_hints: bool) -> ToolReply {
+/// Which contextual next-step hints a reply carries: all of them on the full briefing, only the
+/// situational ones on actions (`query::hints`), none on other reads (they were repetitive noise
+/// on map queries) or the compact briefing.
+#[derive(Clone, Copy)]
+enum Hints {
+    None,
+    Briefing,
+    Action,
+}
+
+async fn envelope_with(game: &Game, pid: PlayerId, summary: String, result: Value, hints: Hints) -> ToolReply {
     let (tick, ap, credits, hints) = game
         .read(move |w| {
             let p = w.players.get(&pid);
-            let h = if with_hints { query::hints(w, pid) } else { vec![] };
+            let h = match hints {
+                Hints::None => vec![],
+                Hints::Briefing => query::hints(w, pid, true),
+                Hints::Action => query::hints(w, pid, false),
+            };
             (w.tick, p.map(|p| p.ap).unwrap_or(0), p.map(|p| p.credits).unwrap_or(0), h)
         })
         .await;
@@ -684,9 +696,9 @@ async fn ask<F>(game: &Game, pid: PlayerId, summary: &str, f: F) -> ToolReply
 where
     F: FnOnce(&af_core::World) -> Result<Value, Refusal> + Send + 'static,
 {
-    let with_hints = summary == "Briefing.";
+    let hints = if summary == "Briefing." { Hints::Briefing } else { Hints::None };
     match game.read(f).await {
-        Ok(v) => envelope_with(game, pid, summary.to_string(), v, with_hints).await,
+        Ok(v) => envelope_with(game, pid, summary.to_string(), v, hints).await,
         Err(r) => refusal(game, pid, r).await,
     }
 }

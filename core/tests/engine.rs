@@ -2267,12 +2267,66 @@ fn captains_with_banked_ap_are_told_to_spend_it() {
     s.w.players.get_mut(&a).unwrap().ap = cap;
     let advice = query::briefing(&s.w, a).unwrap()["ap_advice"].as_str().unwrap().to_string();
     assert!(advice.contains("wasted") && advice.contains("find_trade_routes"), "{advice}");
-    // Any spendable amount gets advice (never wait for a full loop); none below one warp.
+    // Any spendable amount gets advice (never wait for more); none below one warp.
     s.w.players.get_mut(&a).unwrap().ap = 10;
     let advice = query::briefing(&s.w, a).unwrap()["ap_advice"].as_str().unwrap().to_string();
     assert!(advice.contains("never hold AP") && !advice.contains("wasted"), "{advice}");
     s.w.players.get_mut(&a).unwrap().ap = 1;
     assert!(query::briefing(&s.w, a).unwrap()["ap_advice"].is_null());
+}
+
+#[test]
+fn compact_check_ins_and_action_hints_stay_short() {
+    use af_core::owner::AskAction;
+    use serde_json::json;
+    let mut s = Sim::new(68, 120);
+    let a = join_owned(&mut s, "Lean");
+    let setup = serde_json::from_value(json!({"action": "setup", "involvement": "strategy", "style": "trader", "text": "Trade."})).unwrap();
+    s.run(Actor::Player(a), Command::AskOwner(setup)).unwrap();
+    for n in 1..=4 {
+        let mut summary = ask(AskAction::Summary);
+        summary.text = format!("Summary {n}.");
+        s.run(Actor::Player(a), Command::AskOwner(summary)).unwrap();
+    }
+    s.w.players.get_mut(&a).unwrap().ap = s.w.rules.ap_max;
+    let compact = query::BriefingArgs {
+        compact: true,
+        ..Default::default()
+    };
+    let full = query::briefing_with(&s.w, a, &query::BriefingArgs::default()).unwrap();
+    let brief = query::briefing_with(&s.w, a, &compact).unwrap();
+
+    // The captain's own logged messages: the full briefing keeps the last five, compact the latest.
+    assert_eq!(full["owner"]["recent_messages"].as_array().unwrap().len(), 4);
+    assert!(brief["owner"].get("recent_messages").is_none());
+    assert_eq!(brief["owner"]["last_message"]["text"], "Summary 4.");
+    assert_eq!(brief["owner"]["messages_total"], 4);
+    // AP: store, urgency and the interval stay; the career advice is in the full briefing only.
+    let advice = brief["ap_advice"].as_str().unwrap();
+    assert!(
+        advice.contains("wasted") && advice.contains("core rule") && !advice.contains("find_trade_routes"),
+        "{advice}"
+    );
+    assert!(full["ap_advice"].as_str().unwrap().contains("trade_loop"));
+    // Comms: no roster or standing text, but a pointer to the complete section.
+    assert!(brief["comms"].get("captains").is_none() && brief["comms"].get("talk").is_none());
+    assert_eq!(brief["comms"]["complete"]["arguments"]["sections"], json!(["comms"]));
+    assert!(brief.to_string().len() < full.to_string().len());
+
+    // Hints: the holds hint rides on actions only at Stardock; the briefing keeps all of them.
+    let holds = |h: &[String]| h.iter().any(|x| x.contains("cargo holds"));
+    let elsewhere = (1..=s.w.sectors.len() as SectorId)
+        .find(|&id| id != s.w.rules.stardock_sector)
+        .unwrap();
+    s.w.players.get_mut(&a).unwrap().sector = elsewhere;
+    assert!(holds(&query::hints(&s.w, a, true)));
+    let action = query::hints(&s.w, a, false);
+    assert!(
+        !holds(&action) && !action.iter().any(|x| x.contains("find_trade_routes")),
+        "{action:?}"
+    );
+    s.w.players.get_mut(&a).unwrap().sector = s.w.rules.stardock_sector;
+    assert!(holds(&query::hints(&s.w, a, false)));
 }
 
 #[test]

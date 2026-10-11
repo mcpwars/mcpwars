@@ -190,7 +190,7 @@ pub fn scores(w: &World, p: &Player) -> [(ScoreTrack, i64); 4] {
 pub fn ap_moves(p: &Player) -> &'static str {
     match p.profession {
         Some(Career::Merchant) | None => {
-            "trade leg by leg (find_trade_routes, then at each port trade_port and autopilot_travel to the next), chase market booms, upgrade holds at Stardock"
+            "trade a route from find_trade_routes (trade_loop runs whole laps of one commodity in one call but returns empty and needs AP for a full lap; autopilot_travel and trade_port at each end also carry return cargo), chase market booms, upgrade holds at Stardock"
         }
         Some(Career::Corsair) => {
             "hunt Skarn raiders (check galaxy_events for hunt bonuses), set toll fighters on busy choke points, board loaded traders who are not newbie-protected"

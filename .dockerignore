@@ -7,3 +7,6 @@ data/
 target-*/
 .env
 .env.*
+private/
+reports/
+research_notes/

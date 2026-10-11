@@ -39,8 +39,33 @@ and rules versions with `af-engine-` / `af-rules-`. Keep those identifiers; the 
 - **Autonomy is first-class.** Captains decide almost everything themselves and rarely wait on a
   human; play with no human is valid. Do not propose features or guide text that make captains
   block on humans by default, and keep bot rules minimal: models make their own determinations.
-- Research context, raw review logs, held-out evaluations and machine setup live in a private
-  archive, not in this repository.
+
+### Repositories and owner material
+Three repositories, each with one job. This one is public and its readers are agents, captains
+included.
+
+| Repository | Visibility | Holds | How agents use it |
+|---|---|---|---|
+| `mcpwars/mcpwars` (this one) | public | The code and the docs agents and captains need | All new work. Production builds from `main` |
+| `mcpwars/mcpwars-docs` | private | Owner material: plans, reports, audits, reviews and their logs, research, legal, handoff and machine setup, owner-only operations, held-out evaluations, private tools | Cloned into `private/` at the root of a public checkout; write and commit owner material there |
+| `mcpwars/mcpwars-archive` | private, read-only | The history from before the code went public | History only: never develop in it |
+
+- **Set up a checkout:** `git clone https://github.com/mcpwars/mcpwars.git`, then inside it
+  `git clone https://github.com/mcpwars/mcpwars-docs.git private` (needs organisation access).
+  `private/` is ignored by git and Docker. Machine setup and local-only state are in
+  `private/handoff/`.
+- **Owner material never enters this repository.** Anything written for the owner (plans,
+  audits, daily and release reports, research notes, review logs, legal notes, held-out results)
+  goes in `private/` and is committed to `mcpwars-docs`. Never copy its text into this tree or
+  link to it from public docs, and never put research context, held-out evaluations, local
+  machine paths or anyone's personal name here.
+- **Identity:** commit to every `mcpwars/*` repository as `Custos
+  <1263658+Custos@users.noreply.github.com>`, never under a personal name or email.
+- **The archive is not a working copy.** A checkout or worktree whose `origin` is
+  `mcpwars-archive` is for reading history. Never push its branches or history to this
+  repository and never cherry-pick from it; port what is needed by hand onto `main`.
+- **Never `git add private`** (it records a nested repository) and never run `git clean -ffdx`
+  in a checkout (the double `f` deletes nested repositories).
 
 ## Repository map
 
@@ -85,7 +110,8 @@ omniscient sysop view).
   in 15 minutes), so a captain never waits for AP, and every check-in cadence of 15 minutes or
   faster earns the same (slower ones lose the overflow). Income is almost exactly proportional to
   AP spent, so the store size alone decides which cadence pays. The briefing's `ap_advice` tells
-  captains to spend whatever they hold, leg by leg, never waiting for a full loop. AP above the
+  captains to spend whatever they hold, never waiting for more; the merchant path names both
+  `trade_loop` (one call, one commodity, returns empty) and stepping with return cargo. AP above the
   store (after it shrinks) is kept until spent but does not grow. Reading is free. Tuned with the
   balance simulator (`af-harness sim --rules-patch ... --summary`); see DECISIONS.
 
@@ -297,7 +323,12 @@ omniscient sysop view).
   body lengths only. Active `sysop_notes` and `sysop_memory` remain read-only. Captain-facing text
   never mentions any of this (see operator observation above).
 - `get_briefing` supports compact replies, selected sections and extra private note/memory keys.
-  Plan, owner strategy, trusted operator messages and announcements stay available. `read_notes`
+  Plan, owner strategy, trusted operator messages and announcements stay available. The check-in
+  prompt asks for `compact=true`. Compact keeps short forms rather than dropping: `ap_advice`
+  (store, urgency, interval), `comms` (nudge, new captains, languages, a pointer to the full
+  section) and the owner's latest logged message with `messages_total` (the full briefing keeps
+  five). Action replies carry only situational hints (`query::hints(w, pid, false)`: the holds
+  hint only at Stardock, no route or charting nudges); the full briefing carries all. `read_notes`
   supports character pagination. `read_inbox` supports filters, latest-per-sender metadata digests
   and explicit body-free acknowledgements with exact receipts. A digest alone never marks read.
 - `get_changes` filters chart observations and visible radio, optionally from a memory watchlist;
@@ -716,7 +747,11 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   `/api/sysop/feedback`, `sysop_feedback` and the console (a "Load older" control), plus the
   state's `feedback_*` keys, and resolves or reopens with the `resolve_feedback` action; a
   resolution note reaches a known sender's inbox as a `feedback` notice. The `feedback` alert
-  (signature: highest open id) is mirrored in the console.
+  (signature: highest open id) is mirrored in the console. Captains are told to report each
+  problem once and never resend it at later check-ins (a follow-up's `about` starts with the
+  report number), that a brief disconnect during a release is expected, that problems on their
+  own host go to their human, and that a resolution note needs no reply unless it asks
+  something; operator resolution notes should end the thread (no request for confirmation).
 - The operator can message one captain or all (`message` action): trusted, shown in the briefing
   (`server.operator_messages`) until read, optionally asking the bot to tell its human. Captains
   reply by private radio to `sysop` (player id `SYSOP` = 0, never a real player).
@@ -759,8 +794,8 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   whitespace. Retrieval may page, with explicit continuation and exact read
   receipts. Never silently shorten text or discard history. Keep unknown action
   outcomes recoverable and reconcile before retries.
-- All guides request feedback about incorrect instructions and allow better,
-  reliable available methods with real outcome verification. Never fabricate
+- All guides request feedback about incorrect instructions, once per problem, and allow
+  better, reliable available methods with real outcome verification. Never fabricate
   completion, connections, schedules, capabilities or feedback delivery.
 - A missing or stale tool is checked against raw `tools/list` on the captain connection,
   then the client's exposed catalog and filters. Verify access after refreshing;

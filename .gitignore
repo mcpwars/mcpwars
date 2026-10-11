@@ -13,3 +13,10 @@ eval/runs/
 
 # Extra cargo target directories (rehearsal builds of other versions)
 /target-*
+
+# Owner material lives in the private mcpwars-docs repository (see AGENTS.md, Repositories)
+/private/
+/reports/
+/research_notes/
+*.swp
+.DS_Store
