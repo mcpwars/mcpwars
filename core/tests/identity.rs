@@ -556,3 +556,44 @@ fn characters_keep_a_log_a_timeline_and_relations_and_the_bible_holds_them() {
     assert!(s.w.players[&a].owner.orders.strategy.is_none());
     assert!(s.w.players[&a].inbox.iter().any(|n| n.kind == "strategy"));
 }
+
+#[test]
+fn every_character_is_male_or_female() {
+    let mut s = Sim::new();
+    let a = s.join("Ada Mbeki").unwrap();
+    let r = s
+        .identity(
+            a,
+            identity::Args {
+                pronouns: Some("they/them".into()),
+                ..full("Lowmoor")
+            },
+        )
+        .unwrap_err();
+    assert_eq!(r.code, "invalid_pronouns");
+    s.identity(
+        a,
+        identity::Args {
+            pronouns: Some("Female".into()),
+            ..full("Lowmoor")
+        },
+    )
+    .unwrap();
+    assert_eq!(s.w.identities[&a].current().unwrap().pronouns, "she/her");
+    assert_eq!(identity::card(&s.w, a).unwrap()["gender"], "female");
+    // A stored identity without male or female pronouns counts as none, and blocks AP.
+    s.w.identities.get_mut(&a).unwrap().versions.last_mut().unwrap().pronouns = "they/them".into();
+    assert!(!identity::documented(&s.w, a));
+    s.w.rules.identity_required = true;
+    assert_eq!(s.warp(a).unwrap_err().code, "identity_required");
+    s.identity(
+        a,
+        identity::Args {
+            action: identity::Action::Set,
+            pronouns: Some("he/him".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(identity::documented(&s.w, a));
+}

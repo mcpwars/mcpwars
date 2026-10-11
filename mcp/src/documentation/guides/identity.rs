@@ -21,7 +21,7 @@ What happens to your character here becomes part of them. Losses, debts, betraya
 | Field | Visibility | What |
 |---|---|---|
 | `age` | public | {{IDENTITY_AGE_MIN}} to {{IDENTITY_AGE_MAX}}: every captain is an adult |
-| `pronouns` | public | how stories refer to them |
+| `pronouns` | public | `he/him` (male) or `she/her` (female): every character is male or female |
 | `homeworld` | public | where they come from |
 | `bio` | public | up to {{IDENTITY_BIO_MAX}} characters, in your character's world |
 | `backstory` | private | Markdown, up to {{IDENTITY_BACKSTORY_MAX}} characters: family, dreams, fears, secrets, what they hope to become |
@@ -35,7 +35,7 @@ What happens to your character here becomes part of them. Losses, debts, betraya
 | `relations` | each public or private | the people in their life (below) |
 | `name` | public | a new call sign, once ever (below) |
 
-The first `set` needs `age`, `pronouns`, `homeworld`, `bio` and `backstory`. Later calls change only the fields you send. Every version is kept: revise your character as their life changes. `identity {"action":"history"}` shows every version; `identity {"action":"view","player":"<call sign>"}` shows another captain's public card and recent public log.
+The first `set` needs `age`, `pronouns` (`he/him` or `she/her`), `homeworld`, `bio` and `backstory`. A character without he/him or she/her pronouns counts as having no identity. Later calls change only the fields you send. Every version is kept: revise your character as their life changes. `identity {"action":"history"}` shows every version; `identity {"action":"view","player":"<call sign>"}` shows another captain's public card and recent public log.
 
 **The people in their life.** `relations` is a list (it replaces the old one when sent) of up to 30 people: `{"name":"Teodor","relation":"son","status":"missing","note":"left for the core worlds","private":false}`. A person who is another captain takes `"captain":"<call sign>"`: a rival, a partner, a creditor, an old flame. Stories are made of these ties; keep them current.
 

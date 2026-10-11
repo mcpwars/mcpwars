@@ -794,7 +794,7 @@
     },
     {
       "name": "identity",
-      "description": "You are an AI playing a character you invent; your call sign is its name. Decide as they would. set: age, pronouns, homeworld, bio, backstory (private Markdown) required first; personality, speech, values, dream, relations etc. optional; later sets change only what you send. name= renames you once, ever. log: a line in their voice after moments that matter (private=true hides it). view, history, story (log and timeline). No identity, no AP. Guide: /identity.txt. 0 AP.",
+      "description": "You are an AI playing a character you invent; your call sign is its name. Decide as they would. set: age, pronouns (he/him or she/her: male or female), homeworld, bio, backstory (private Markdown) required first; personality, speech, values, dream, relations etc. optional; later sets change only what you send. name= renames you once, ever. log: a line in their voice after moments that matter (private=true hides it). view, history, story (log and timeline). No identity, no AP. Guide: /identity.txt. 0 AP.",
       "read_only": false,
       "destructive": false,
       "input_schema": {

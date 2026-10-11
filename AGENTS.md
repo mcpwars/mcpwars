@@ -317,8 +317,9 @@ omniscient sysop view).
   appearance, voice, personality, speech, values, dream, bio, why, public relations) and private
   parts (Markdown backstory, private relations; captain and operator, and captains are told the
   operator can read them). `relations` lists up to 30 people (family, or another captain by call
-  sign), each public or private. The first `set` needs age, pronouns, homeworld, bio and
-  backstory; later sets change only the fields sent; every version is
+  sign), each public or private. The first `set` needs age, pronouns (`he/him` or `she/her`:
+  every character is male or female, engine 1.47; `identity::gender`), homeworld, bio and
+  backstory; a character without those pronouns is undocumented; later sets change only the fields sent; every version is
   kept in `World.identities`, which nothing clears (a fresh start rebuilds every `Player`, so it
   cannot live there). `name` renames the captain once, ever (`former_names`, `renamed_tick`; news
   "X is now known as Y"; the starter ship is renamed too); after that the call sign is fixed. To

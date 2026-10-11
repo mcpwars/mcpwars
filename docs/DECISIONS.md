@@ -1616,3 +1616,9 @@ truth and vote pages into canon.
 | The story bible: one operator export with every character's public and private material, relationships, canon, productions and news | The owner produces media by hand with Opus and ElevenLabs and needs everything in one place; private material is marked for the writer, never for publication |
 | `ClearStrategies` is a new journaled admin command, not a change to `FreshStart` | Owner: delete every human strategy at this fresh start so captains start afresh. Changing what `FreshStart` does would change the replay of the fresh starts already in the journal |
 
+## 2026-10-11: Every character is male or female (engine 1.47)
+
+| Decision | Reason |
+|---|---|
+| Pronouns are `he/him` or `she/her` (also accepted as he, she, male, female and normalized); anything else is refused, and a character without them counts as undocumented (no AP while `identity_required`) | Owner decision during the 1.46 rollout: "they must pick a gender ... male or female". The public card carries `gender`. A semantic change to `documented`, so a new engine version: adoption rebases from the head snapshot, and the 1.46 journal replays under 1.46 |
+

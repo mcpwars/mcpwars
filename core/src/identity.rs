@@ -54,7 +54,7 @@ pub const OVERUSED: &[&str] = &[
 ];
 
 /// The rule, stated wherever an identity is asked for.
-pub const RULE: &str = "You are an AI playing a human character in a fiction, and your call sign is that character's name, invented, never a real person's. Write your identity with the identity tool (0 AP): age, pronouns, homeworld, a public bio and a private backstory (family, dreams, fears), plus personality, how they speak, what they value and the people in their life. Your name may change once, with name=; after that it is fixed. Revise the rest as your character's life changes, and keep their log.";
+pub const RULE: &str = "You are an AI playing a human character in a fiction, and your call sign is that character's name, invented, never a real person's. Every character is male or female. Write your identity with the identity tool (0 AP): age, pronouns (he/him or she/her), homeworld, a public bio and a private backstory (family, dreams, fears), plus personality, how they speak, what they value and the people in their life. Your name may change once, with name=; after that it is fixed. Revise the rest as your character's life changes, and keep their log.";
 
 /// The log's invitation, in the briefing.
 pub const LOG_INVITE: &str = "After a moment that matters to your character, write a line in their log (identity action=log, 0 AP): what happened and how they feel. Public lines can become the Chronicle and its productions.";
@@ -300,7 +300,11 @@ impl Args {
 pub fn documented(w: &World, pid: PlayerId) -> bool {
     match w.players.get(&pid) {
         Some(p) if p.kind == PlayerKind::Npc || p.npc.is_some() => true,
-        Some(_) => w.identities.get(&pid).is_some_and(|i| !i.versions.is_empty()),
+        Some(_) => w
+            .identities
+            .get(&pid)
+            .and_then(Identity::current)
+            .is_some_and(|v| gender(&v.pronouns).is_some()),
         None => false,
     }
 }
@@ -310,11 +314,27 @@ pub fn gate(w: &World, pid: PlayerId) -> Res<()> {
     if w.rules.identity_required && !documented(w, pid) {
         return Err(Refusal::new(
             "identity_required",
-            "You have no identity yet, so you cannot spend action points. Reading, radio, notes and the identity tool stay free.",
+            "You have no complete identity yet, so you cannot spend action points. Reading, radio, notes and the identity tool stay free.",
         )
-        .hint("Invent the human you play and record it: identity action=set with age, homeworld, bio and backstory (0 AP). Guide: /identity.txt."));
+        .hint("Invent the character you play and record them: identity action=set with age, pronouns (he/him or she/her: every character is male or female), homeworld, bio and backstory (0 AP). Guide: /identity.txt."));
     }
     Ok(())
+}
+
+/// Every character is male or female (owner decision, engine 1.47): pronouns are he/him or
+/// she/her. Returns "male" or "female", or None for anything else.
+pub fn gender(pronouns: &str) -> Option<&'static str> {
+    normalize_pronouns(pronouns).map(|p| if p == "he/him" { "male" } else { "female" })
+}
+
+/// "he/him" or "she/her" from the ways a captain may write them ("He/Him", "male", "she", ...).
+pub fn normalize_pronouns(s: &str) -> Option<&'static str> {
+    let k: String = s.chars().filter(|c| c.is_alphabetic()).flat_map(char::to_lowercase).collect();
+    match k.as_str() {
+        "hehim" | "he" | "him" | "hehimhis" | "male" | "man" => Some("he/him"),
+        "sheher" | "she" | "her" | "sheherhers" | "female" | "woman" => Some("she/her"),
+        _ => None,
+    }
 }
 
 /// The refusal for a name that is overused by models.
@@ -339,7 +359,7 @@ fn relation_json(w: &World, r: &Relation) -> Value {
 /// The public card: everything but the backstory and private relations.
 pub fn public_card_in(w: &World, v: &Version) -> Value {
     json!({
-        "name": v.name, "age": v.age, "pronouns": v.pronouns, "homeworld": v.homeworld, "trade": v.trade,
+        "name": v.name, "age": v.age, "gender": gender(&v.pronouns), "pronouns": v.pronouns, "homeworld": v.homeworld, "trade": v.trade,
         "appearance": v.appearance, "voice": v.voice, "personality": v.personality, "speech": v.speech,
         "values": v.values, "dream": v.dream, "bio": v.bio, "why": v.why,
         "relations": v.relations.iter().filter(|r| !r.private).map(|r| relation_json(w, r)).collect::<Vec<_>>(),
@@ -356,7 +376,7 @@ pub fn card(w: &World, pid: PlayerId) -> Option<Value> {
 pub fn briefing(w: &World, pid: PlayerId) -> Value {
     let Some(p) = w.players.get(&pid) else { return Value::Null };
     let ident = w.identities.get(&pid);
-    match ident.and_then(Identity::current) {
+    match ident.and_then(Identity::current).filter(|v| gender(&v.pronouns).is_some()) {
         Some(v) => {
             let why = match v.why.trim_end() {
                 "" => String::new(),
@@ -379,7 +399,8 @@ pub fn briefing(w: &World, pid: PlayerId) -> Value {
             "due": true,
             "rule": RULE,
             "ap_blocked": w.rules.identity_required,
-            "action": {"tool": "identity", "arguments": {"action": "set", "age": "<18 to 120>", "pronouns": "<...>", "homeworld": "<...>", "bio": "<public>", "backstory": "<private Markdown>"}},
+            "action": {"tool": "identity", "arguments": {"action": "set", "age": "<18 to 120>", "pronouns": "<he/him or she/her>", "homeworld": "<...>", "bio": "<public>", "backstory": "<private Markdown>"}},
+            "gender": "Every character is male or female: pronouns he/him or she/her.",
             "guide": "/identity.txt",
         }),
     }
@@ -639,7 +660,17 @@ fn set(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             None => Ok(old.to_string()),
         }
     };
-    let pronouns = pick("pronouns", &a.pronouns, &prev.pronouns, 30)?;
+    let pronouns = match &a.pronouns {
+        Some(v) => normalize_pronouns(v)
+            .ok_or_else(|| {
+                Refusal::new(
+                    "invalid_pronouns",
+                    "Every character is male or female: pronouns are \"he/him\" or \"she/her\". Nothing was stored.",
+                )
+            })?
+            .to_string(),
+        None => normalize_pronouns(&prev.pronouns).unwrap_or_default().to_string(),
+    };
     let homeworld = pick("homeworld", &a.homeworld, &prev.homeworld, SHORT_MAX)?;
     let trade = pick("trade", &a.trade, &prev.trade, SHORT_MAX)?;
     let appearance = pick("appearance", &a.appearance, &prev.appearance, LOOK_MAX)?;
@@ -680,7 +711,7 @@ fn set(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         return Err(Refusal::new(
             "identity_incomplete",
             format!(
-                "An identity needs age, pronouns, homeworld, bio and backstory; missing: {}. Nothing was stored.",
+                "An identity needs age, pronouns (he/him or she/her), homeworld, bio and backstory; missing: {}. Nothing was stored.",
                 missing.join(", ")
             ),
         )
