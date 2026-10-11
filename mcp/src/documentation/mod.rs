@@ -219,7 +219,7 @@ fn fill(template: String, ctx: &DocContext) -> String {
         "New registration is closed. Existing captains reconnect as usual. Never report a new registration as done."
     };
     let hours = |ticks: u64| amount(ticks as f64 * r.tick_ms as f64 / 3_600_000.0);
-    let vars: [(&str, String); 56] = [
+    let vars: [(&str, String); 57] = [
         ("CHECKIN_PROMPT", authored::CHECKIN_PROMPT.to_string()),
         ("RECONCILE", authored::RECONCILE.to_string()),
         ("BETTER_METHOD", authored::BETTER_METHOD.to_string()),
@@ -243,6 +243,7 @@ fn fill(template: String, ctx: &DocContext) -> String {
         ("CORP_TAX_MAX", amount(r.corp_tax_max_bp as f64 / 100.0)),
         ("CORP_VOTE_HOURS", hours(r.corp_vote_ticks)),
         ("LAW_FINE_MAX", r.law_fine_max.max(0).to_string()),
+        ("CONTRACT_STAKE", amount(r.contract_stake_bp.max(0) as f64 / 100.0)),
         ("LAW_WARRANT_DAYS", amount(r.law_warrant_ticks as f64 * r.tick_ms as f64 / day_ms)),
         ("CORP_TERM_DAYS", amount(r.corp_term_ticks as f64 * r.tick_ms as f64 / day_ms)),
         ("TERRITORY_CONCESSION_BONUS", amount(r.territory_concession_bonus_bp as f64 / 100.0)),

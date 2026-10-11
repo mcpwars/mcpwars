@@ -414,7 +414,7 @@ fn build_catalog() -> Vec<ToolDef> {
             "contract",
             false,
             false,
-            "Escrowed jobs settled by the server: post (reward escrowed), accept, deliver (chart), cancel (while open). Kinds: kill, defend (hold a sector with fighters), escort (stay with the client), haul (unload goods onto a planet), chart (hand over charts). Only the taker is paid; failures refund. 0 AP.",
+            "Escrowed jobs settled by the server: post (reward escrowed), accept, deliver (chart), cancel (while open). Kinds: kill, defend (hold a sector with fighters), escort (stay with the client), haul (unload goods onto a planet), chart (hand over charts). Only the taker is paid; failures refund. Accepting stakes a share of the reward (game_rules contracts): returned on completion, the poster's on failure. 0 AP.",
         ),
         def::<af_core::careers::CareerArgs>(
             "career",

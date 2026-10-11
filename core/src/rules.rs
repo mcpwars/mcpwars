@@ -326,6 +326,11 @@ pub struct Rules {
     /// Highest fine a corporate law may set, in credits (engine 1.36).
     #[serde(default = "default_law_fine_max")]
     pub law_fine_max: i64,
+    /// Share of a contract's reward the taker stakes on accepting, in basis points: returned on
+    /// completion, paid to the poster when the taker fails (engine 1.45). It reads as 0 in a
+    /// universe made before 1.45, so switching it on is an announced rules change.
+    #[serde(default)]
+    pub contract_stake_bp: i64,
     /// How long an unpaid fine stays a warrant, in ticks.
     #[serde(default = "default_law_warrant")]
     pub law_warrant_ticks: u64,
@@ -757,6 +762,7 @@ impl Default for Rules {
             corp_term_ticks: default_corp_term(),
             corp_vote_ticks: default_corp_vote(),
             law_fine_max: default_law_fine_max(),
+            contract_stake_bp: 1_000,
             law_warrant_ticks: default_law_warrant(),
             founding_days: default_founding_days(),
             founding_probes: default_founding_probes(),

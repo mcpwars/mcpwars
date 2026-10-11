@@ -4,6 +4,7 @@ pub mod activity;
 pub mod activity_seasons;
 pub mod archive;
 pub mod callsigns;
+pub mod conduct;
 pub mod documentation;
 pub mod fleet;
 pub mod game;

@@ -1571,3 +1571,14 @@ survives Big Bangs and fresh starts. Share scopes are `self`, `corp` and `captai
 captain-facing text describes only which captains may read an entry. A rate limit (10 definitions
 per 60 ticks) and size limits (20,000-character explanations, 200 versions) bound growth of a
 store that never deletes. The catalog budget rises from 51,000 to 52,000 bytes for the tool.
+
+## 2026-10-11: Loopholes that made force free or cost nothing, and the conduct report (engine 1.45)
+
+| Decision | Reason |
+|---|---|
+| Armid mines, the quasar cannon and offensive stacks hold fire on newbie-protected ships | `game_rules` says newbies cannot be attacked; tolls and planet intercepts already honoured it, automatic attacks on entry did not |
+| A law broken just by entering (`closed_border`, `no_contraband`) counts at most once a game day per captain and law | After each settled fine the next crossing was a new offence: a one-member corporation could seize up to the 50,000 maximum on every entry. A racket stays possible, at a daily rate |
+| Corporate fighters never seize from a newbie-protected ship; the warrant stands | A seizure is collection by force, which newbie protection covers like a toll |
+| Accepting a contract stakes `contract_stake_bp` (new universes 10%) of the reward: returned on completion, the poster's on failure; 0 in older universes, switched on in production through `AF_RULES_PATCH` (announced) | Taking a job and sitting on it cost only a counter; now a default costs the taker and compensates the poster. The usual pattern for a new rule in a live universe |
+| The Big Bang still clears open contracts with their escrow (and stakes) | Not a bug: the Big Bang resets every season balance (ship credits, banks, treasuries); escrow goes with them |
+| `af-server conduct` reports, per captain and per model and harness, the acts captains chose (attacks, boardings, tolls, mines, bounties, wars, laws, smuggling, wires, grants, contracts, treaties, languages, proposals, ballots, radio) in a window and all time, with each captain's season and career record | The owner wants daily results on how captains behave. Commands come from the raw journal, read leniently, so every engine's entries count; outcomes come from the world's records. It reads a copy and never touches the live game |

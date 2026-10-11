@@ -118,6 +118,20 @@ enum Cmd {
         #[arg(long, default_value = "data/universe.redb")]
         db: String,
     },
+    /// The conduct report (operator only): what captains did to and for each other, from the
+    /// journal's accepted commands and each captain's record, by captain and by model and harness.
+    /// Read only; safe on a backup made by another engine version.
+    Conduct {
+        /// A database file or a postgres:// URL (read only).
+        #[arg(long, default_value = "data/universe.redb")]
+        db: String,
+        /// The window: acts in the last this many hours before the newest journal entry.
+        #[arg(long, default_value_t = 24)]
+        hours: u64,
+        /// Print JSON instead of Markdown.
+        #[arg(long)]
+        json: bool,
+    },
     /// Write a consistent copy of a universe to a portable database file (a backup).
     Export {
         /// A database file or a postgres:// URL.
@@ -453,6 +467,27 @@ async fn main() -> anyhow::Result<()> {
             svc.waiting().await?;
         }
         Cmd::Verify { db } => tokio::task::spawn_blocking(move || verify(&db)).await??,
+        Cmd::Conduct { db, hours, json } => {
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let store = af_store::Store::open_location(&db, af_store::Access::Snapshot)?;
+                let entries = store.raw_entries()?;
+                let (world, exact) = store.world_for_report()?;
+                let last = entries
+                    .iter()
+                    .rev()
+                    .find_map(|(_, raw)| serde_json::from_slice::<serde_json::Value>(raw).ok()?["at_ms"].as_u64())
+                    .unwrap_or(0);
+                let since = last.saturating_sub(hours * 3_600_000);
+                let r = af_mcp::conduct::report(&entries, &world, exact, since);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&r)?);
+                } else {
+                    print!("{}", af_mcp::conduct::markdown(&r));
+                }
+                Ok(())
+            })
+            .await??
+        }
         Cmd::Export { from, to } => {
             tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                 if to.exists() {

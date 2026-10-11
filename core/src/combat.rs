@@ -297,6 +297,9 @@ pub fn on_enter(ctx: &mut Ctx, pid: PlayerId, sid: SectorId, from: SectorId, bli
     r.log.extend(law);
     let strength = if blind { 2 } else { 1 };
     let rules = ctx.w.rules.clone();
+    // Newbie protection covers every automatic attack on entry (engine 1.45): armid mines, the
+    // quasar cannon and offensive stacks hold fire, as toll stacks and planet intercepts already did.
+    let newbie = is_newbie(ctx.w, pid);
     let pname = ctx.w.player_name(pid);
 
     // 1. Limpet mines (silent to the victim).
@@ -320,7 +323,7 @@ pub fn on_enter(ctx: &mut Ctx, pid: PlayerId, sid: SectorId, from: SectorId, bli
     if let Some(m) = sector
         .armid
         .clone()
-        .filter(|m| !crate::diplomacy::at_peace(ctx.w, m.owner, pid) && m.count > 0)
+        .filter(|m| !newbie && !crate::diplomacy::at_peace(ctx.w, m.owner, pid) && m.count > 0)
     {
         let n = m.count.min(ctx.rng.range(1, rules.armid_trigger_max) * strength);
         let dmg = n * rules.armid_damage;
@@ -360,7 +363,7 @@ pub fn on_enter(ctx: &mut Ctx, pid: PlayerId, sid: SectorId, from: SectorId, bli
             continue;
         }
         let (sector_pct, _) = crate::planet::qcannon_settings(&rules, &pl);
-        if pl.citadel >= 3 && pl.stock[0] > 0 && sector_pct > 0 {
+        if pl.citadel >= 3 && pl.stock[0] > 0 && sector_pct > 0 && !newbie {
             // Fuel = ore × sector% ; damage = fuel / 3.
             let ore = (pl.stock[0] * sector_pct / 100).max(1);
             let dmg = ore / 3 * strength;
@@ -424,7 +427,6 @@ pub fn on_enter(ctx: &mut Ctx, pid: PlayerId, sid: SectorId, from: SectorId, bli
             FighterMode::Toll => {
                 let toll = stack.toll(rules.toll_per_fighter);
                 let p = &ctx.w.players[&pid];
-                let newbie = is_newbie(ctx.w, pid);
                 if newbie {
                     r.log
                         .push(format!("Toll fighters ({owner_name}) waved you through: newbie protection."));
@@ -469,6 +471,10 @@ pub fn on_enter(ctx: &mut Ctx, pid: PlayerId, sid: SectorId, from: SectorId, bli
                     knowledge::observe(ctx.w, pid, sid, false);
                     return r;
                 }
+            }
+            FighterMode::Offensive if newbie => {
+                r.log
+                    .push(format!("Offensive fighters ({owner_name}) held fire: newbie protection."));
             }
             FighterMode::Offensive => {
                 let mut atk = Force {

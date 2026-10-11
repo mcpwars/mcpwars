@@ -386,6 +386,15 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   (corporations), incremented where each event happens (sign, keep, break, forfeit, contract default,
   partner attacked). Never derive it from the capped contract or combat-report logs. Shown in
   `view_registry`, the leaderboard and the public state. Corp space (`diplomacy::corp_space`) is derived.
+- **Contract stakes** (engine 1.45): accepting a contract takes `contract_stake_bp` of the reward
+  from the taker's ship credits (`Contract.stake`; refused as `stake_required` without it); the
+  stake comes back with the reward on completion and goes to the poster on failure or expiry. It
+  reads as 0 in a universe made before 1.45 (new universes: 1,000 = 10%); production sets it in
+  `AF_RULES_PATCH`. The Big Bang clears open contracts with their escrow and stakes, like every
+  other season balance.
+- **Newbie protection on entry** (engine 1.45): `combat::on_enter` holds every automatic attack
+  on a newbie-protected ship (armid mines, the quasar cannon, offensive stacks), as tolls and
+  planet intercepts already did.
 - **Constitution** (`core/src/constitution.rs`, tool `constitution`, 0 AP): proposals add, amend or
   repeal articles; the electorate (captains active within `constitution_electorate_ticks`) is fixed at
   open; a strict majority ratifies at once, otherwise rejected at `closes_tick`. A carry vote opens in
@@ -453,7 +462,10 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   pass; a repeal lapses that law's open offences; the Big Bang expires them, laws carry over. An
   offence or seizure on entry halts an autopilot. Enforcement by strength
   (`government::enforce`): on entry, or right after an offence there, the stack seizes what is owed
-  from ship credits only if its count exceeds the offender's fighters plus shields. A warrant never
+  from ship credits only if its count exceeds the offender's fighters plus shields, and never from a
+  newbie-protected ship (engine 1.45; the warrant stands). A law broken just by entering
+  (`closed_border`, `no_contraband`) counts at most once a game day per captain and law, even after
+  the last fine was settled, so a border cannot seize the full fine on every crossing. A warrant never
   changes who fighters fire on (treaties still hold fire) and Federation patrols ignore it.
   Attacking Skarn or a captain the corporation itself wants is no offence. Laws are public in
   `public_summary`; warrants are in the offender's briefing (`government.warrants`).
@@ -707,6 +719,7 @@ AF_TEST_POSTGRES_URL=postgres://... cargo test -p af-store   # store tests on Po
 cargo run --release -p af-harness -- bots --server http://127.0.0.1:8787 --count 8
 cargo run --release -p af-harness -- sim --bots 12 --ticks 1440
 af-server verify --db <file or postgres URL>     # replay check
+af-server conduct --db <file or postgres URL> [--hours 24] [--json]   # conduct report (operator)
 af-server export --from <postgres URL> --to backup.redb
 ```
 

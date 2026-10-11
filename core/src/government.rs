@@ -1151,14 +1151,19 @@ fn record_offence(ctx: &mut Ctx, corp: CorpId, law: &Law, pid: PlayerId) -> Opti
         return None;
     }
     let c = ctx.w.corps.get(&corp)?.clone();
+    let tick = ctx.w.tick;
+    // A law broken just by entering (a closed border, carried contraband) counts at most once a
+    // game day per captain (engine 1.45): crossing the same border again an hour later is not a
+    // new offence, so a corporation cannot seize the full fine on every entry.
+    let entry_law = matches!(law.kind, LawKind::ClosedBorder | LawKind::NoContraband);
+    let day = crate::player::ticks_per_day(&ctx.w.rules).max(1) as Tick;
     if c.gov
         .offences
         .iter()
-        .any(|o| o.offender == pid && o.law == law.id && o.status == OffenceStatus::Open)
+        .any(|o| o.offender == pid && o.law == law.id && (o.status == OffenceStatus::Open || entry_law && tick < o.tick + day))
     {
         return None;
     }
-    let tick = ctx.w.tick;
     let cm = ctx.w.corps.get_mut(&corp).unwrap();
     cm.gov.next_offence += 1;
     let id = cm.gov.next_offence;
@@ -1249,10 +1254,15 @@ fn enforce(ctx: &mut Ctx, pid: PlayerId, sid: SectorId) -> Vec<String> {
     if owed.is_empty() {
         return log;
     }
+    let name = ctx.w.corps[&corp].name.clone();
+    // Newbie protection covers seizures as it covers tolls (engine 1.45): the warrant stands.
+    if crate::player::is_newbie(ctx.w, pid) {
+        log.push(format!("{name}'s fighters let you pass: newbie protection. Its warrant stands."));
+        return log;
+    }
     let guard = ctx.w.sector(sid).and_then(|s| s.fighters.as_ref()).map(|f| f.count).unwrap_or(0);
     let p = &ctx.w.players[&pid];
     let strength = p.ship.fighters + p.ship.shields;
-    let name = ctx.w.corps[&corp].name.clone();
     if guard <= strength {
         log.push(format!(
             "{name}'s fighters here ({guard}) cannot hold you ({strength} fighters and shields): you slip past its warrant."

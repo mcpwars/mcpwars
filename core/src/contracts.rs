@@ -65,6 +65,9 @@ pub struct Contract {
     pub deadline: Option<Tick>,
     pub checks: u32,
     pub checks_ok: u32,
+    /// What the taker staked on accepting: returned on completion, the poster's on failure.
+    #[serde(default)]
+    pub stake: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -181,6 +184,7 @@ pub fn contract(ctx: &mut Ctx, pid: PlayerId, a: &ContractArgs) -> Res<Outcome> 
                 deadline: None,
                 checks: 0,
                 checks_ok: 0,
+                stake: 0,
             };
             match kind {
                 ContractKind::Kill | ContractKind::Escort => {
@@ -269,7 +273,22 @@ pub fn contract(ctx: &mut Ctx, pid: PlayerId, a: &ContractArgs) -> Res<Outcome> 
                         ContractKind::Defend | ContractKind::Escort => tick + c.term_ticks,
                         _ => c.expires_tick,
                     };
+                    // The taker stakes a share of the reward, so taking a job and sitting on it
+                    // costs something (engine 1.45).
+                    let stake = (c.reward * ctx.w.rules.contract_stake_bp.max(0) / 10_000).max(0);
+                    if ctx.w.players[&pid].credits < stake {
+                        return Err(Refusal::new(
+                            "stake_required",
+                            format!(
+                                "Taking contract #{id} stakes {stake} credits from your ship; you carry {}.",
+                                ctx.w.players[&pid].credits
+                            ),
+                        )
+                        .hint("The stake comes back when you complete it and goes to the poster if you fail."));
+                    }
+                    ctx.player_mut(pid).credits -= stake;
                     let cm = ctx.w.contracts.get_mut(&id).unwrap();
+                    cm.stake = stake;
                     cm.status = ContractStatus::Taken;
                     cm.taker = Some(pid);
                     cm.taken_tick = Some(tick);
@@ -285,8 +304,15 @@ pub fn contract(ctx: &mut Ctx, pid: PlayerId, a: &ContractArgs) -> Res<Outcome> 
                         json!({}),
                     );
                     Ok(ctx.finish(
-                        format!("You took contract #{id} ({what}); complete it by tick {deadline}."),
-                        json!({"deadline": deadline}),
+                        format!(
+                            "You took contract #{id} ({what}); complete it by tick {deadline}.{}",
+                            if stake > 0 {
+                                format!(" You staked {stake} credits: returned on completion, the poster's if you fail.")
+                            } else {
+                                String::new()
+                            }
+                        ),
+                        json!({"deadline": deadline, "stake": stake}),
                     ))
                 }
                 ContractAction::Deliver => {
@@ -341,7 +367,7 @@ fn complete(ctx: &mut Ctx, id: u64) {
     let Some(t) = c.taker else { return };
     let combat = matches!(c.kind, ContractKind::Kill | ContractKind::Defend | ContractKind::Escort);
     if let Some(tp) = ctx.w.players.get_mut(&t) {
-        tp.credits += c.reward;
+        tp.credits += c.reward + c.stake;
         tp.stats.contracts_completed += 1;
         if combat {
             tp.stats.combat_contract_income += c.reward;
@@ -362,11 +388,16 @@ fn complete(ctx: &mut Ctx, id: u64) {
     ctx.event("contract", c.sector, vec![t, c.poster], true, text, json!({}));
 }
 
-/// Close without payment: refund the poster.
+/// Close without payment: refund the poster, who also takes a failed taker's stake.
 fn settle(ctx: &mut Ctx, id: u64, status: ContractStatus) {
     let Some(c) = ctx.w.contracts.get(&id).cloned() else { return };
+    let forfeit = if status != ContractStatus::Cancelled && c.taker.is_some() {
+        c.stake
+    } else {
+        0
+    };
     if let Some(p) = ctx.w.players.get_mut(&c.poster) {
-        p.credits += c.reward;
+        p.credits += c.reward + forfeit;
     }
     ctx.w.contracts.get_mut(&id).unwrap().status = status;
     if status != ContractStatus::Cancelled {
@@ -380,7 +411,12 @@ fn settle(ctx: &mut Ctx, id: u64, status: ContractStatus) {
             if let Some(tp) = ctx.w.players.get_mut(&t) {
                 tp.stats.contracts_defaulted += 1;
             }
-            ctx.notify(t, "contract", format!("Contract #{id} ({what}) failed: deadline passed."));
+            let lost = if forfeit > 0 {
+                format!(" Your {forfeit}-credit stake went to the poster.")
+            } else {
+                String::new()
+            };
+            ctx.notify(t, "contract", format!("Contract #{id} ({what}) failed: deadline passed.{lost}"));
         }
     }
 }

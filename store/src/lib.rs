@@ -510,6 +510,38 @@ impl Store {
         Ok(out)
     }
 
+    /// Every journal entry as stored, unparsed: for offline reports that must read entries
+    /// recorded by older engines (`af-server conduct`).
+    pub fn raw_entries(&self) -> Result<Vec<(u64, Vec<u8>)>> {
+        let mut out = vec![];
+        let mut after = 0;
+        loop {
+            let page = self.b.entries_page(after, PAGE)?;
+            let Some((last, _)) = page.last() else { break };
+            after = *last;
+            let full = page.len() == PAGE;
+            out.extend(page);
+            if !full {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// The current world when this engine recorded it (snapshot and replay), otherwise the newest
+    /// stored state as it is (latest snapshot or replay base, no replay): for offline reports on a
+    /// copy made by another engine version. Returns the world and whether it is exact.
+    pub fn world_for_report(&self) -> Result<(World, bool)> {
+        if self.check_engine().is_ok() {
+            return Ok((self.load_world()?.0, true));
+        }
+        if let Some((_, v)) = self.b.snapshot_last()? {
+            let row: SnapshotRow = serde_json::from_slice(&v)?;
+            return Ok((row.world, false));
+        }
+        Ok((self.base_world()?, false))
+    }
+
     pub fn save_snapshot(&self, w: &World) -> Result<()> {
         let row = SnapshotRow {
             hash: w.state_hash(),

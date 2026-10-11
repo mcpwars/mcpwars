@@ -5733,6 +5733,14 @@ fn laws_are_breakable_and_enforced_by_strength_and_replay() {
 
     // A pardon closes a warrant; an attack in its space breaks no_attack.
     g(&mut s, a, enact(LawKind::NoAttack, 2_000)).unwrap();
+    // The fine was paid, but crossing the same border again the same game day is no new offence
+    // (engine 1.45): a corporation cannot seize the full fine on every entry.
+    warp(&mut s, c, y).unwrap();
+    warp(&mut s, c, x).unwrap();
+    assert_eq!(s.w.corps[&corp].gov.offences.iter().filter(|o| o.offender == c).count(), 1);
+    for _ in 0..af_core::player::ticks_per_day(&s.w.rules) {
+        s.tick();
+    }
     warp(&mut s, c, y).unwrap();
     warp(&mut s, c, x).unwrap();
     let open = s.w.corps[&corp]
@@ -7439,4 +7447,96 @@ fn alignment_labels_are_the_federations_view_not_a_moral_verdict() {
     for word in ["Good", "Evil", "evil"] {
         assert!(!rule.contains(word), "{word}");
     }
+}
+
+#[test]
+fn newbie_protection_holds_off_mines_and_offensive_stacks() {
+    let mut s = Sim::new(94, 150);
+    let (a, n) = (s.join("Ada"), s.join("Neo"));
+    let (x, y, _, _) = chain(&s.w);
+    arm(&mut s, a, x);
+    deploy(&mut s, a, 200, Some(FighterMode::Offensive), None).unwrap();
+    s.w.sector_mut(x).unwrap().armid = Some(MineStack { owner: a, count: 20 });
+    set_ship(&mut s, n, Some(y), Some(30));
+    assert!(af_core::player::is_newbie(&s.w, n));
+    let ship = |s: &Sim| (s.p(n).ship.fighters, s.p(n).ship.shields);
+    let before = ship(&s);
+    let out = s.run(Actor::Player(n), Command::Warp(WarpArgs { destination_sector: x })).unwrap();
+    assert_eq!(ship(&s), before, "a newbie takes no damage on entry: {}", out.summary);
+    assert!(out.summary.contains("held fire: newbie protection"), "{}", out.summary);
+    assert_eq!(s.w.sectors[x as usize - 1].armid.as_ref().unwrap().count, 20, "no mine went off");
+    // Once protection ends, the same sector is dangerous.
+    arm(&mut s, n, y);
+    let before = ship(&s);
+    s.run(Actor::Player(n), Command::Warp(WarpArgs { destination_sector: x })).unwrap();
+    assert!(
+        ship(&s).0 < before.0 || ship(&s).1 < before.1,
+        "mines and fighters hit an unprotected ship"
+    );
+}
+
+#[test]
+fn taking_a_contract_stakes_a_share_returned_on_completion_and_forfeited_on_failure() {
+    let mut s = Sim::new(95, 80);
+    let (a, b) = (s.join("Ada"), s.join("Bex"));
+    assert_eq!(s.w.rules.contract_stake_bp, 1_000, "new universes stake 10%");
+    let post = |s: &mut Sim, expires: u64| {
+        let mut p = contract_args(ContractAction::Post);
+        p.kind = Some(ContractKind::Chart);
+        p.sectors = Some(vec![2, 3]);
+        p.reward = Some(2_000);
+        p.expires_in_ticks = Some(expires);
+        s.run(Actor::Player(a), Command::Contract(p)).unwrap().reply["contract_id"]
+            .as_u64()
+            .unwrap()
+    };
+    let take = |s: &mut Sim, id: u64| {
+        let mut t = contract_args(ContractAction::Accept);
+        t.contract_id = Some(id);
+        s.run(Actor::Player(b), Command::Contract(t))
+    };
+    // Completed: the stake comes back with the reward.
+    let id = post(&mut s, 100);
+    let before = s.p(b).credits;
+    let out = take(&mut s, id).unwrap();
+    assert_eq!(out.reply["stake"], 200);
+    assert_eq!(s.p(b).credits, before - 200);
+    let mut d = contract_args(ContractAction::Deliver);
+    d.contract_id = Some(id);
+    s.run(Actor::Player(b), Command::Contract(d)).unwrap();
+    assert_eq!(s.w.contracts[&id].status, ContractStatus::Completed);
+    assert_eq!(s.p(b).credits, before + 2_000);
+    // Failed: the poster gets its reward back and the stake.
+    let id = post(&mut s, 30);
+    let (poster, taker) = (s.p(a).credits, s.p(b).credits);
+    take(&mut s, id).unwrap();
+    for _ in 0..32 {
+        s.tick();
+    }
+    assert_eq!(s.w.contracts[&id].status, ContractStatus::Failed);
+    assert_eq!(s.p(b).credits, taker - 200);
+    assert_eq!(s.p(a).credits, poster + 2_000 + 200);
+    // A taker without the stake is refused, and nothing changes.
+    let id = post(&mut s, 100);
+    s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::SetPlayer {
+            player: b,
+            credits: Some(50),
+            bank: None,
+            ap: None,
+            alignment: None,
+            experience: None,
+            sector: None,
+            fighters: None,
+            shields: None,
+            end_protection: None,
+            model: None,
+            harness: None,
+        }),
+    )
+    .unwrap();
+    assert_eq!(take(&mut s, id).unwrap_err().code, "stake_required");
+    assert_eq!(s.w.contracts[&id].status, ContractStatus::Open);
+    replay_matches(&s);
 }
