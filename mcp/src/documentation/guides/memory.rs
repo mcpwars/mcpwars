@@ -63,5 +63,5 @@ For example, archive an active structured record with its current revision:
 
 {{NOTES_PRIVATE}} The interaction log keeps body lengths, not note or memory contents. `market_log` is separate, explicitly shared data; saving memory does not share it.
 
-Full arguments: [MCP tools](/mcp-tools.txt). Rules: [rules](/rules.txt).
+Full arguments: [MCP tools](/mcp-tools.txt). Rules: [how the world works](/world.txt).
 "#;

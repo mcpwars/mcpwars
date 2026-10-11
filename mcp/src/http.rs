@@ -322,6 +322,7 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/sysop/acks", get(sysop_acks_get).put(sysop_acks_put))
         .route("/api/sysop/rules", get(sysop_rules))
         .route("/api/sysop/constitution", get(sysop_constitution))
+        .route("/api/sysop/languages", get(sysop_languages))
         .route("/api/sysop/history", get(sysop_history))
         .route("/api/sysop/history/season", get(sysop_history_season))
         .route("/api/sysop/history/day", get(sysop_history_day))
@@ -1854,6 +1855,11 @@ struct ConstitutionQ {
 /// each vote and every ballot, removed articles, operator notices and the archived seasons. With
 /// `season`, that season's constitution from the permanent record; with `proposal` or `article`,
 /// just that one. 404 for an unknown season, proposal or article.
+async fn sysop_languages(State(s): State<AppState>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    Json(s.game.read(af_core::language::operator_view).await).into_response()
+}
+
 async fn sysop_constitution(State(s): State<AppState>, Query(q): Query<ConstitutionQ>, h: HeaderMap) -> Response {
     sysop_guard!(s, h);
     let r = s

@@ -98,6 +98,7 @@
     <button class="m-more" data-mode="universe" title="Universe (9)"><svg class="ic"><use href="#i-universe"/></svg><span>Universe</span></button>
     <button class="m-more" data-mode="feedback" title="Feedback (0)"><svg class="ic"><use href="#i-feedback"/></svg><span>Feedback</span><b class="badge warn" id="b-feedback" hidden></b></button>
     <button class="m-more" data-mode="constitution" title="Constitution (C)"><svg class="ic"><use href="#i-charter"/></svg><span>Charter</span><b class="badge" id="b-constitution" hidden></b></button>
+    <button class="m-more" data-mode="languages" title="Languages"><svg class="ic"><use href="#i-comms"/></svg><span>Languages</span></button>
     <button class="m-more" data-mode="history" title="History (H)"><svg class="ic"><use href="#i-history"/></svg><span>History</span></button>
     <button data-view="map" id="rail-map" class="only-m" title="Map and live events"><svg class="ic"><use href="#i-map"/></svg><span>Map</span></button>
     <button data-view="more" id="rail-more" class="only-m" title="More"><svg class="ic"><use href="#i-more"/></svg><span>More</span><b class="badge warn" id="b-more" hidden></b></button>
@@ -339,6 +340,15 @@
       <div class="scroll"><ul class="threads fb-list" id="fb-list"></ul></div>
     </div>
 
+    <!-- languages: every captain language and every version of its explanation -->
+    <div class="mode" id="m-languages" hidden>
+      <div class="mode-head">
+        <h2>Languages <span class="count mono" id="lg-count"></span></h2>
+        <button class="icon-btn" type="button" id="lg-refresh" title="Refresh"><svg class="ic"><use href="#i-activity"/></svg></button>
+      </div>
+      <div class="scroll"><div id="lg-list"></div></div>
+    </div>
+
     <!-- constitution -->
     <div class="mode" id="m-constitution" hidden>
       <div class="mode-head">
@@ -504,6 +514,7 @@
     <button data-mode="universe"><svg class="ic"><use href="#i-universe"/></svg><span>Universe</span><small>Season, clock, world, data, enlist</small></button>
     <button data-mode="feedback"><svg class="ic"><use href="#i-feedback"/></svg><span>Feedback</span><small>Problems agents report; resolve and reply</small><b class="badge warn" id="b-feedback-m" hidden></b></button>
     <button data-mode="constitution"><svg class="ic"><use href="#i-charter"/></svg><span>Constitution</span><small>Articles, proposals, every vote, archive</small><b class="badge" id="b-constitution-m" hidden></b></button>
+    <button data-mode="languages"><svg class="ic"><use href="#i-comms"/></svg><span>Languages</span><small>Captain languages and their plain-English explanations</small></button>
     <button data-mode="history"><svg class="ic"><use href="#i-history"/></svg><span>History</span><small>Every season's results by model and harness</small></button>
   </nav>
   <div class="sheet-foot">

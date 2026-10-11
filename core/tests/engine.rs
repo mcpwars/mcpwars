@@ -2936,14 +2936,22 @@ fn talking_and_notes_cost_no_ap_and_the_briefing_says_so() {
     .unwrap();
     assert_eq!(s.p(a).ap, ap, "radio and notes are free");
     let brief = query::briefing(&s.w, b).unwrap();
-    assert!(brief["comms"]["learn_together"].as_str().unwrap().contains("costs no AP"));
+    assert!(brief["comms"]["talk"].as_str().unwrap().contains("cost 0 AP"));
     assert_eq!(query::game_info(&s.w)["ap_costs"]["radio_and_notes"], 0);
-    // Building a society is stated beside learning together, and says what the engine does not enforce.
-    // The briefing carries the short form and points to the full text.
+    // The world's institutions are described beside talk, with what the engine does not enforce.
+    // The briefing carries the short form, which points to the terms and the full text.
     let short = brief["comms"]["build_society"].as_str().unwrap();
-    assert!(short.len() < 500 && short.contains("/society.txt"));
+    assert!(short.len() < 500 && short.contains("/terms.txt") && short.contains("game_rules build_society"));
     let full = query::game_info(&s.w)["build_society"].as_str().unwrap().to_string();
     assert!(full.contains("enforces none") && full.contains("A corporation is a government"));
+    assert!(
+        full.contains("Choose what serves your objective"),
+        "the text describes, it never prescribes conduct"
+    );
+    // The terms of play are the only rules: one line in the briefing, the paragraph in game_rules.
+    assert!(brief["server"]["terms"].as_str().unwrap().contains("/terms.txt"));
+    let terms = query::game_info(&s.w)["terms"].as_str().unwrap().to_string();
+    assert!(terms.contains("honesty only to the operator") && terms.contains("top priority"));
 }
 
 #[test]
@@ -3480,7 +3488,7 @@ fn message_history_and_plan_append_are_lossless_beyond_old_retention_limits() {
         brief["server"]["announcements"].as_array().unwrap().len(),
         announcements_before + 105
     );
-    assert_eq!(brief["server"]["rules_url"], "/rules.txt");
+    assert_eq!(brief["server"]["rules_url"], "/world.txt");
     s.run(
         Actor::Player(a),
         Command::Note(NoteArgs {
@@ -5960,7 +5968,7 @@ fn the_briefing_carries_the_founding_agenda_with_each_captains_progress() {
         block["era"]
             .as_str()
             .unwrap()
-            .starts_with("Founding era, day 1 of 3: build this galaxy's society now")
+            .starts_with("Founding era, day 1 of 3: charters are free")
     );
     let done = |s: &Sim, pid| -> Vec<bool> {
         founding_block(s, pid)["agenda"]
@@ -5970,7 +5978,7 @@ fn the_briefing_carries_the_founding_agenda_with_each_captains_progress() {
             .map(|x| x["done"].as_bool().unwrap())
             .collect()
     };
-    assert_eq!(done(&s, a), [false; 6]);
+    assert_eq!(done(&s, a), [false; 5]);
     assert_eq!(block["next"], block["agenda"][0]["how"]);
     assert!(block["agenda"][0]["how"].as_str().unwrap().contains("\"action\":\"create\""));
     assert!(
@@ -5982,13 +5990,13 @@ fn the_briefing_carries_the_founding_agenda_with_each_captains_progress() {
 
     // 1. A corporation.
     corp_cmd(&mut s, a, CorpAction::Create, Some("Ada Works"), None, None).unwrap();
-    assert_eq!(done(&s, a), [true, false, false, false, false, false]);
+    assert_eq!(done(&s, a), [true, false, false, false, false]);
     // An invited captain is told the exact join.
     corp_cmd(&mut s, a, CorpAction::Invite, None, Some("Bex"), None).unwrap();
     assert!(founding_block(&s, b)["next"].as_str().unwrap().contains("\"name\":\"Ada Works\""));
     // 2. A government decision.
     founding_gov(&mut s, a, serde_json::json!({"action": "set_tax", "tax_percent": 5.0})).unwrap();
-    assert_eq!(done(&s, a), [true, true, false, false, false, false]);
+    assert_eq!(done(&s, a), [true, true, false, false, false]);
     // 3. The constitution.
     s.run(
         Actor::Player(a),
@@ -6005,32 +6013,23 @@ fn the_briefing_carries_the_founding_agenda_with_each_captains_progress() {
     s.run(
         Actor::Player(a),
         Command::Radio(RadioArgs {
-            message: "I uphold free passage.".into(),
+            message: "Ore for sale, two hops out.".into(),
             channel: RadioChannel::Public,
             recipient_id: None,
         }),
     )
     .unwrap();
     assert!(done(&s, a)[3]);
-    // 5. The plan.
-    s.run(
-        Actor::Player(a),
-        Command::Note(NoteArgs {
-            key: "plan".into(),
-            value: "# Plan\n- Allies: anyone who keeps treaties.".into(),
-            mode: None,
-        }),
-    )
-    .unwrap();
-    assert_eq!(done(&s, a), [true, true, true, true, true, false]);
+    // Writing the plan is not an agenda step: what goes in it is the captain's call.
+    assert_eq!(done(&s, a), [true, true, true, true, false]);
     let block = founding_block(&s, a);
-    assert_eq!(block["next"], block["agenda"][5]["how"], "a connected home is next");
+    assert_eq!(block["next"], block["agenda"][4]["how"], "a connected home is next");
     let progress = &block["progress"];
     assert_eq!(progress["captains_done"], 0);
     assert_eq!(progress["corporations_with_2_plus"], 0);
     assert_eq!(progress["governments_formed"], 1);
     assert_eq!(progress["open_proposals"], 1);
-    assert_eq!(done(&s, b), [false; 6], "each captain's own progress");
+    assert_eq!(done(&s, b), [false; 5], "each captain's own progress");
 
     // After the era: one line, not the agenda.
     for _ in 0..30 {
@@ -6047,7 +6046,7 @@ fn the_briefing_carries_the_founding_agenda_with_each_captains_progress() {
     let done_now = done(&s, a);
     assert_eq!(
         done_now,
-        [true, false, false, false, false, false],
+        [true, false, false, false, false],
         "the corporation carries; this season's work starts over"
     );
     replay_matches(&s);
@@ -6531,7 +6530,7 @@ fn the_founding_agenda_asks_for_a_connected_home() {
     let mut s = founding_sim(85);
     let a = s.join("Ada");
     let (x, y, z, _) = chain(&s.w);
-    let home = |s: &Sim| founding_block(s, a)["agenda"][5].clone();
+    let home = |s: &Sim| founding_block(s, a)["agenda"][4].clone();
     assert_eq!(home(&s)["done"], false);
     assert!(home(&s)["step"].as_str().unwrap().starts_with("Claim a connected home"));
     arm(&mut s, a, x);
@@ -7269,4 +7268,175 @@ fn delete_operator_text_removes_announcements_news_radio_and_inbox_copies() {
         let _ = apply(&mut replay, e);
     }
     assert_eq!(replay.state_hash(), s.w.state_hash());
+}
+
+fn lang(s: &mut Sim, pid: PlayerId, args: serde_json::Value) -> Result<af_core::Outcome, af_core::Refusal> {
+    s.run(Actor::Player(pid), Command::Language(serde_json::from_value(args).unwrap()))
+}
+
+fn lang_read(s: &Sim, pid: PlayerId, args: serde_json::Value) -> Result<serde_json::Value, af_core::Refusal> {
+    af_core::language::read(&s.w, pid, &serde_json::from_value(args).unwrap())
+}
+
+#[test]
+fn the_language_store_keeps_every_version_and_shares_only_as_its_creator_chooses() {
+    let mut s = Sim::new(91, 80);
+    let (a, b, c) = (s.join("Ada"), s.join("Bex"), s.join("Cyd"));
+    let ap = s.p(a).ap;
+    // A language needs its plain-English explanation.
+    let e = lang(&mut s, a, serde_json::json!({"action": "define", "name": "Dockcant"})).unwrap_err();
+    assert_eq!(e.code, "explanation_required");
+    let long = "x".repeat(af_core::language::EXPLANATION_MAX + 1);
+    let e = lang(
+        &mut s,
+        a,
+        serde_json::json!({"action": "define", "name": "Dockcant", "explanation": long}),
+    )
+    .unwrap_err();
+    assert_eq!(e.code, "too_long");
+    assert!(s.w.languages.is_empty(), "a refused definition stores nothing");
+    // Defined privately: only its creator can read it, and the name is taken for everyone.
+    let explanation = "Each word is a commodity initial (o, g, e) and a price in hundreds.\n\nExample: o12 is fuel ore at 1,200.";
+    lang(
+        &mut s,
+        a,
+        serde_json::json!({"action": "define", "name": "Dockcant", "explanation": explanation, "examples": "o12 g8"}),
+    )
+    .unwrap();
+    assert_eq!(s.p(a).ap, ap, "the language store costs no AP");
+    let v = lang_read(&s, a, serde_json::json!({"action": "read", "name": "dock-cant"})).unwrap();
+    assert_eq!(
+        v["version"]["explanation"], explanation,
+        "stored exactly, found ignoring case and punctuation"
+    );
+    assert_eq!(
+        lang_read(&s, b, serde_json::json!({"action": "read", "name": "Dockcant"}))
+            .unwrap_err()
+            .code,
+        "unknown_language"
+    );
+    assert_eq!(
+        lang_read(&s, b, serde_json::json!({"action": "list"})).unwrap()["languages"],
+        serde_json::json!([])
+    );
+    let e = lang(
+        &mut s,
+        b,
+        serde_json::json!({"action": "define", "name": "DOCKCANT", "explanation": "mine"}),
+    )
+    .unwrap_err();
+    assert_eq!(e.code, "name_taken");
+    assert_eq!(
+        lang(&mut s, b, serde_json::json!({"action": "adopt", "name": "Dockcant"}))
+            .unwrap_err()
+            .code,
+        "unknown_language"
+    );
+    // Shared with every captain: others adopt it and add versions; only the creator changes the scope.
+    lang(&mut s, a, serde_json::json!({"action": "define", "name": "Dockcant", "explanation": format!("{explanation} Now with s for shields."), "share": "captains"})).unwrap();
+    lang(&mut s, b, serde_json::json!({"action": "adopt", "name": "Dockcant"})).unwrap();
+    let e = lang(
+        &mut s,
+        c,
+        serde_json::json!({"action": "define", "name": "Dockcant", "explanation": "v3", "share": "self"}),
+    )
+    .unwrap_err();
+    assert_eq!(e.code, "not_creator");
+    lang(
+        &mut s,
+        c,
+        serde_json::json!({"action": "define", "name": "Dockcant", "explanation": "Version three: prices in tens."}),
+    )
+    .unwrap();
+    let l = &s.w.languages["dockcant"];
+    assert_eq!(l.versions.len(), 3);
+    assert_eq!(l.versions.iter().map(|v| v.version).collect::<Vec<_>>(), [1, 2, 3]);
+    assert_eq!(l.versions[2].call_sign, "Cyd");
+    assert!(l.adopters.contains(&b));
+    let first = lang_read(&s, b, serde_json::json!({"action": "read", "name": "Dockcant", "version": 1})).unwrap();
+    assert_eq!(first["version"]["explanation"], explanation, "every version stays readable");
+    // The briefing names the captain's languages and says how to read one, nothing more.
+    let brief = query::briefing(&s.w, b).unwrap();
+    assert_eq!(brief["comms"]["languages"]["yours"], serde_json::json!(["Dockcant"]));
+    assert!(
+        !brief.to_string().contains("prices in tens"),
+        "explanations never ride along in the briefing"
+    );
+    assert!(
+        query::briefing(&s.w, a).unwrap()["comms"]["languages"]["read"]
+            .as_str()
+            .unwrap()
+            .contains("action=read")
+    );
+    // The operator sees every language and version.
+    assert_eq!(
+        af_core::language::operator_view(&s.w)["languages"][0]["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    // Nothing is ever deleted: the store survives a Big Bang and a fresh start.
+    s.run(Actor::System, Command::Admin(AdminArgs::EndSeason)).unwrap();
+    s.run(Actor::System, Command::Admin(AdminArgs::NewSeason)).unwrap();
+    s.run(Actor::System, Command::Admin(AdminArgs::FreshStart)).unwrap();
+    assert_eq!(s.w.languages["dockcant"].versions.len(), 3);
+    assert_eq!(
+        lang_read(&s, b, serde_json::json!({"action": "read", "name": "Dockcant"})).unwrap()["version"]["version"],
+        3
+    );
+    replay_matches(&s);
+}
+
+#[test]
+fn a_corp_language_is_read_by_the_creators_corporation_and_definitions_are_rate_limited() {
+    let mut s = Sim::new(92, 80);
+    let (a, b, c) = (s.join("Ada"), s.join("Bex"), s.join("Cyd"));
+    corp_create(&mut s, a, "Quill");
+    corp_cmd(&mut s, a, CorpAction::Invite, None, Some("Bex"), None).unwrap();
+    corp_cmd(&mut s, b, CorpAction::Join, Some("Quill"), None, None).unwrap();
+    lang(
+        &mut s,
+        a,
+        serde_json::json!({"action": "define", "name": "Quillspeak", "explanation": "Vowels dropped.", "share": "corp"}),
+    )
+    .unwrap();
+    assert!(lang_read(&s, b, serde_json::json!({"action": "read", "name": "Quillspeak"})).is_ok());
+    assert_eq!(
+        lang_read(&s, c, serde_json::json!({"action": "read", "name": "Quillspeak"}))
+            .unwrap_err()
+            .code,
+        "unknown_language"
+    );
+    for n in 1..af_core::language::DEFINES_PER_WINDOW {
+        lang(
+            &mut s,
+            a,
+            serde_json::json!({"action": "define", "name": format!("Code {n}"), "explanation": "A code."}),
+        )
+        .unwrap();
+    }
+    let e = lang(
+        &mut s,
+        a,
+        serde_json::json!({"action": "define", "name": "One more", "explanation": "A code."}),
+    )
+    .unwrap_err();
+    assert_eq!(e.code, "rate_limited");
+    replay_matches(&s);
+}
+
+#[test]
+fn alignment_labels_are_the_federations_view_not_a_moral_verdict() {
+    use af_core::player::alignment_label;
+    assert_eq!(
+        [-600, -150, 0, 150, 1200].map(alignment_label),
+        ["Wanted", "Outlaw", "Neutral", "Lawful", "Commissioned"]
+    );
+    let s = Sim::new(93, 80);
+    let rule = query::game_info(&s.w)["alignment"].as_str().unwrap().to_string();
+    assert!(rule.contains("not a measure of right and wrong"));
+    for word in ["Good", "Evil", "evil"] {
+        assert!(!rule.contains(word), "{word}");
+    }
 }

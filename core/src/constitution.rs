@@ -1280,7 +1280,7 @@ pub fn operator_propose(
     let threshold = p.threshold();
     let voters = p.electorate.len();
     let body = format!(
-        "The operator proposes to {line} (constitution proposal #{id}). The {voters} captains active when it opened may vote until tick {closes}: constitution action=vote proposal={id} vote=true or false; it passes with {threshold} yes votes. The operator does not vote.{}{}",
+        "The operator, as one voice in the world, proposes to {line} (constitution proposal #{id}); weigh it like any captain's proposal. The {voters} captains active when it opened may vote until tick {closes}: constitution action=vote proposal={id} vote=true or false; it passes with {threshold} yes votes. The operator does not vote.{}{}",
         p.text().map(|t| format!(" Text: {t}")).unwrap_or_default(),
         note.as_deref().map(|n| format!(" Operator's note: {n}")).unwrap_or_default(),
     );

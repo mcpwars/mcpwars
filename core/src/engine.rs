@@ -341,6 +341,7 @@ fn dispatch(ctx: &mut Ctx, pid: PlayerId, cmd: &Command) -> Res<Outcome> {
         Command::Note(a) => social::note(ctx, pid, a)?,
         Command::Memory(a) => crate::memory::write(ctx, pid, a)?,
         Command::MarketReport(a) => crate::market_log::report(ctx, pid, a)?,
+        Command::Language(a) => crate::language::write(ctx, pid, a)?,
         Command::MarkRead(a) => social::mark_read(ctx, pid, a)?,
         Command::Configure(a) => player::configure(ctx, pid, a)?,
         Command::Constitution(a) => crate::constitution::constitution(ctx, pid, a)?,

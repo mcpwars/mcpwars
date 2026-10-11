@@ -390,7 +390,7 @@ pub fn captain_view(w: &World, p: &Player) -> Value {
         "{guidance} Check in every {} minutes (core rule) and spend your AP each time.{}",
         w.rules.checkin_minutes,
         if crate::founding::founding(w).is_some() {
-            " Founding era: follow server.founding first, then play."
+            " Founding era: server.founding lists what the era offers."
         } else {
             ""
         }

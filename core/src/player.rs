@@ -40,13 +40,15 @@ pub fn rank(exp: i64) -> &'static str {
     RANKS.iter().rev().find(|(e, _)| exp >= *e).map(|(_, n)| *n).unwrap_or("Civilian")
 }
 
+/// The Federation's view of a captain, never a verdict on right and wrong: the captains decide
+/// what good and evil mean in this galaxy.
 pub fn alignment_label(a: i64) -> &'static str {
     match a {
-        i64::MIN..=-500 => "Wanted (evil)",
-        -499..=-100 => "Evil",
+        i64::MIN..=-500 => "Wanted",
+        -499..=-100 => "Outlaw",
         -99..=99 => "Neutral",
-        100..=999 => "Good",
-        _ => "Federal Commissioned (good)",
+        100..=999 => "Lawful",
+        _ => "Commissioned",
     }
 }
 

@@ -392,7 +392,7 @@
     for (const b of document.querySelectorAll("#rail button")) b.setAttribute("aria-current", String(v === "map" ? b.dataset.view === "map" : b.dataset.mode === mode));
     $("rail-more").setAttribute("aria-current", String(v !== "map" && MORE_MODES.includes(mode)));
   }
-  const MORE_MODES = ["corps", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "history"];
+  const MORE_MODES = ["corps", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "history"];
   $("rail-map").addEventListener("click", () => { setMView("map"); map.redraw(); });
   // Phones: the modes that do not fit the bottom bar live in a bottom sheet.
   const sheet = $("more");
@@ -475,8 +475,8 @@
   // ======================================================================
   // Digits 1 to 9 pick the first nine in order; 0 picks Feedback, C the Constitution and
   // H History (appended, so no digit moved).
-  const MODES = ["captains", "corps", "alerts", "comms", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "history"];
-  const WIDTH = { captains: 440, corps: 460, alerts: 380, comms: 420, registry: 480, journal: 480, activity: 420, rules: 520, universe: 440, feedback: 440, constitution: 460, history: 600 };
+  const MODES = ["captains", "corps", "alerts", "comms", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "history"];
+  const WIDTH = { captains: 440, corps: 460, alerts: 380, comms: 420, registry: 480, journal: 480, activity: 420, rules: 520, universe: 440, feedback: 440, constitution: 460, languages: 520, history: 600 };
   let mode = "captains";
   const expanded = new Set(store.get("expanded", ["comms", "activity"]));
   function toggleExpand() {
@@ -506,6 +506,7 @@
     if (m === "activity") loadActivity();
     if (m === "feedback" && fbLive()) loadFeedback();
     if (m === "constitution") loadConstitution();
+    if (m === "languages") loadLanguages();
     if (m === "history" && !hiBusy && (!hiAt || Date.now() - hiAt > HI_TTL)) loadHistory(!!hiAt);
     journalTimer();
     renderMode();
@@ -524,6 +525,7 @@
     if (mode === "universe") renderUniverse();
     if (mode === "feedback") renderFeedback();
     if (mode === "constitution") renderConstitution();
+    if (mode === "languages") renderLanguages();
     if (mode === "history") renderHistory();
   }
 
@@ -1831,6 +1833,39 @@
   const ctComments = (p) => (Array.isArray(p.operator_comments) ? p.operator_comments : []);
   const ctBy = (p) => (p.by_operator ? "the operator" : p.proposer || "–");
   const ctSeasonLabel = (s) => `Season ${s.season}${s.reason === "fresh_start" ? " (before fresh start)" : ""}${s.epoch ? ` · epoch ${s.epoch}` : ""}`;
+  // ======================================================================
+  // Languages: every captain language with every version of its explanation (read-only).
+  let lgData = null, lgErr = null;
+  async function loadLanguages() {
+    const r = await api(`${API}/languages`);
+    if (r.ok && r.data && Array.isArray(r.data.languages)) { lgData = r.data; lgErr = null; }
+    else if (r.status !== 401) lgErr = errText(r.data, r.status);
+    renderLanguages();
+  }
+  $("lg-refresh").addEventListener("click", loadLanguages);
+  function renderLanguages() {
+    const box = $("lg-list");
+    const rows = lgData ? lgData.languages : [];
+    $("lg-count").textContent = rows.length ? fmt(rows.length) : "";
+    if (lgErr) { box.replaceChildren(el("p", "empty", lgErr)); return; }
+    if (!lgData) { box.replaceChildren(el("p", "empty", "Loading…")); return; }
+    if (!rows.length) { box.replaceChildren(el("p", "empty", "No captain has stored a language yet.")); return; }
+    box.replaceChildren(...rows.map((l) => {
+      const card = el("section", "lg-card");
+      const vs = l.versions || [];
+      card.append(el("h3", "sec-h", `${l.name} · ${l.creator_name || `#${l.creator}`} · ${l.share} · ${vs.length} version${vs.length === 1 ? "" : "s"}${(l.adopters || []).length ? ` · ${l.adopters.length} adopter${l.adopters.length === 1 ? "" : "s"}` : ""}`));
+      for (const v of [...vs].reverse()) {
+        const d = el("details", "lg-v");
+        if (v === vs[vs.length - 1]) d.open = true;
+        d.append(el("summary", "", `v${v.version} by ${v.call_sign} · tick ${fmt(v.tick)} · season ${v.season}${v.at_ms ? ` · ${ago(v.at_ms)}` : ""}`));
+        d.append(el("pre", "lg-text", v.explanation));
+        if (v.examples) { d.append(el("div", "dim", "Examples")); d.append(el("pre", "lg-text", v.examples)); }
+        card.append(d);
+      }
+      return card;
+    }));
+  }
+
   async function loadConstitution() {
     if (ctBusy) { ctAgain = true; return; }
     ctBusy = true;

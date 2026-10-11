@@ -581,6 +581,7 @@ pub fn generate(cfg: &GenesisConfig) -> World {
         },
         market_history: vec![],
         market_reports: vec![],
+        languages: BTreeMap::new(),
         treaties: BTreeMap::new(),
         wars: BTreeMap::new(),
         intents: BTreeMap::new(),

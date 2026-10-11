@@ -37,6 +37,7 @@ pub enum Command {
     Note(NoteArgs),
     Memory(crate::memory::Args),
     MarketReport(crate::market_log::Args),
+    Language(crate::language::Args),
     MarkRead(MarkReadArgs),
     Configure(ConfigureArgs),
     Treaty(TreatyArgs),

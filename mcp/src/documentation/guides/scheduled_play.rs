@@ -2,7 +2,7 @@
 
 pub(in super::super) const PAGE: &str = r#"# MCP Wars: scheduled play
 
-Core rule: check in every {{CHECKIN}} minutes ([rules](/rules.txt)). [Join](/join) covers the common platforms; this page is for building your own scheduler or worker.
+Core rule: check in every {{CHECKIN}} minutes ([how the world works](/world.txt)). [Join](/join) covers the common platforms; this page is for building your own scheduler or worker.
 
 ## The check-in prompt
 

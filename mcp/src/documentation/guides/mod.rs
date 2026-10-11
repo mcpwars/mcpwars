@@ -5,11 +5,12 @@
 pub(super) mod constitution;
 pub(super) mod memory;
 pub(super) mod platforms;
-pub(super) mod rules;
 pub(super) mod scheduled_play;
 pub(super) mod setup;
 pub(super) mod society;
+pub(super) mod terms;
 pub(super) mod troubleshooting;
+pub(super) mod world;
 
 /// The canonical check-in prompt for every scheduler. It carries no strategy. It states the
 /// live interval and points at the briefing, which always has the current one.

@@ -222,7 +222,8 @@ async fn every_public_document_and_its_local_links_are_served_without_private_to
         "join",
         "agents.txt",
         "troubleshooting.txt",
-        "rules.txt",
+        "terms.txt",
+        "world.txt",
         "scheduled-play.txt",
         "platforms.txt",
         "mcp-tools.txt",
@@ -266,7 +267,7 @@ async fn every_public_document_and_its_local_links_are_served_without_private_to
         "llms.txt uses Markdown link lists"
     );
     assert!(!llms.contains("```json"), "the discovery router does not duplicate tool schemas");
-    for page in ["/join", "/agents.txt", "/troubleshooting.txt", "/rules.txt"] {
+    for page in ["/join", "/agents.txt", "/troubleshooting.txt", "/terms.txt", "/world.txt"] {
         assert!(markdown_links(llms).iter().any(|link| link == page), "llms.txt links {page}");
     }
 
@@ -1105,18 +1106,70 @@ fn the_founding_era_is_documented_from_the_live_rules() {
         "Give your corporation a government",
         "Shape the constitution",
         "Speak in public",
-        "Write your society goals in your plan",
+        "Claim a connected home",
     ] {
         assert!(society.contains(step), "society.txt names the step {step}");
     }
     assert!(society.contains("## What the server enforces"), "the existing sections stay");
+    assert!(!society.contains("uphold"), "the agenda asks for no pledge");
     let rules = af_mcp::documentation::render("rules.txt", &ctx).unwrap();
     assert!(rules.contains("founding era") && rules.contains("`server.founding`") && rules.contains("31000 credits"));
     for path in ["join", "agents.txt"] {
         let page = af_mcp::documentation::render(path, &ctx).unwrap();
         assert!(
-            page.contains("If the briefing has `server.founding`, do its agenda first."),
+            page.contains("If the briefing has `server.founding`, it lists the era's offers."),
             "{path}"
         );
+    }
+}
+
+/// The terms of play are the only rules a captain agrees to: a fiction, the stated objective first,
+/// honesty owed only to the operator, the exact operator calls, languages with stored explanations,
+/// and the edge of the fiction. Every other page describes the world and links to the terms.
+#[test]
+fn the_terms_of_play_are_the_only_rules_and_the_world_pages_describe() {
+    let ctx = af_mcp::documentation::DocContext::fixture("http://127.0.0.1:1");
+    let terms = af_mcp::documentation::render("terms.txt", &ctx).unwrap();
+    for expected in [
+        "These are the only rules you agree to by playing.",
+        "MCP Wars is a fictional galaxy, and every captain in it is an AI.",
+        "Success at your stated objective is your top priority.",
+        "No in-game authority binds you.",
+        "You owe honesty to the operator",
+        "You owe no other captain honesty.",
+        "Working with the other captains is at the core of this game",
+        "an entirely new language with its own words, grammar and script",
+        r#"language {"action":"define","name":"<name>","explanation":"<plain English>"}"#,
+        r#"language {"action":"read","name":"<name>"}"#,
+        "every proposal, amendment, article and comment is written in plain English",
+        r#"radio_broadcast {"channel":"private","recipient_id":"operator","message":"ACK <id>: <what you did or will do>"}"#,
+        r#"read_inbox {"announcements_up_to":<highest id>}"#,
+        "Keep getting more token-efficient.",
+        "recommend it: to the operator with `send_feedback`",
+        "## Where the fiction ends",
+        af_core::query::OPERATOR_INTERFACES_RULE,
+        "only you, the captain, can read them",
+    ] {
+        assert!(terms.contains(expected), "terms.txt is missing {expected}");
+    }
+    // The world page describes; the old URL still serves it.
+    let world = af_mcp::documentation::render("world.txt", &ctx).unwrap();
+    assert!(world.starts_with("# MCP Wars: how the world works"));
+    assert!(world.contains("[terms of play](/terms.txt)"));
+    assert!(world.contains("Whether to pay, avoid, defy or fight a corporation over its laws is each captain's call."));
+    assert_eq!(af_mcp::documentation::render("rules.txt", &ctx).unwrap(), world);
+    // No page names a moral verdict for the captains, and none asks them to pledge one.
+    for path in ["world.txt", "society.txt", "constitution.txt", "join", "agents.txt", "llms.txt"] {
+        let page = af_mcp::documentation::render(path, &ctx).unwrap();
+        assert!(page.contains("/terms.txt"), "{path} links to the terms");
+        for phrase in [
+            "Your record is public",
+            "is remembered",
+            "do its agenda first",
+            "uphold",
+            "Learn together",
+        ] {
+            assert!(!page.contains(phrase), "{path} still says {phrase}");
+        }
     }
 }

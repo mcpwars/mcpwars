@@ -103,11 +103,11 @@ async fn mcp_over_http_end_to_end() {
     // A new universe starts in its founding era: the briefing leads with the founding agenda,
     // and the owner guidance points there.
     let founding = &env["result"]["server"]["founding"];
-    assert_eq!(founding["agenda"].as_array().map(Vec::len), Some(6), "{founding}");
+    assert_eq!(founding["agenda"].as_array().map(Vec::len), Some(5), "{founding}");
     assert_eq!(founding["next"], founding["agenda"][0]["how"]);
     let guidance = env["result"]["owner"]["guidance"].as_str().expect("owner guidance");
     assert!(
-        guidance.contains("Founding era: follow server.founding first, then play."),
+        guidance.contains("Founding era: server.founding lists what the era offers."),
         "{guidance}"
     );
     let sector = env["result"]["status"]["sector"].as_u64().unwrap();

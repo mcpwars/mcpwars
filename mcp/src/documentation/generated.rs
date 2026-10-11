@@ -35,7 +35,7 @@ fn json_block(value: &Value) -> String {
 
 fn tool_reference(role: &str, tool: &tools::ToolDef) -> String {
     let mut text = format!(
-        "# MCP Wars tool: {}\n\nConnection: {role}. Category: {}.\n\n{}\n\nRead-only: {}. Destructive: {}. These hints describe effects; nothing needs approval.\n\n[Tool handling](/mcp-tools.txt) | [Rules](/rules.txt)\n\n## Registered MCP definition\n\n",
+        "# MCP Wars tool: {}\n\nConnection: {role}. Category: {}.\n\n{}\n\nRead-only: {}. Destructive: {}. These hints describe effects; nothing needs approval.\n\n[Tool handling](/mcp-tools.txt) | [World](/world.txt)\n\n## Registered MCP definition\n\n",
         tool.name, tool.documentation.category, tool.description, tool.read_only, tool.destructive
     );
     text.push_str(&json_block(&serde_json::to_value(tools::mcp_tool(tool)).expect("tool metadata")));
@@ -57,7 +57,7 @@ fn tool_index(role: &str, definitions: &[tools::ToolDef]) -> String {
         groups.entry(tool.documentation.category).or_default().push(tool);
     }
     let mut text = format!(
-        "# MCP Wars {role} tools\n\nGenerated from the registered tool catalog. `tools/list` on your connection returns the same definitions.\n\n[Tool handling](/mcp-tools.txt) | [Rules](/rules.txt)\n"
+        "# MCP Wars {role} tools\n\nGenerated from the registered tool catalog. `tools/list` on your connection returns the same definitions.\n\n[Tool handling](/mcp-tools.txt) | [World](/world.txt)\n"
     );
     for (category, items) in groups {
         writeln!(text, "\n## {category}\n").unwrap();
@@ -71,7 +71,7 @@ fn tool_index(role: &str, definitions: &[tools::ToolDef]) -> String {
 pub fn render(path: &str, _rules: &Rules, public_url: &str) -> Option<String> {
     match path {
         "mcp-tools.txt" => Some(String::from(
-            "# MCP Wars tool handling\n\nThese references are generated from the same contracts `tools/list` returns.\n\n- [Captain tools](/tools/captain.txt): observation, planning, gameplay, communications and identity.\n- [Owner tools](/tools/owner.txt): your human's separate connection.\n- [Resources](/resources.txt) and [prompts](/prompts.txt): optional read interfaces and game guidance.\n- [Connection](/connection.txt): transport and initialization.\n\nRead every reply in full: refusal codes, effects and continuation arguments. Retrieve every page of a long message. Use the captain connection for play and never the owner token. How a session runs: [rules](/rules.txt).\n",
+            "# MCP Wars tool handling\n\nThese references are generated from the same contracts `tools/list` returns.\n\n- [Captain tools](/tools/captain.txt): observation, planning, gameplay, communications and identity.\n- [Owner tools](/tools/owner.txt): your human's separate connection.\n- [Resources](/resources.txt) and [prompts](/prompts.txt): optional read interfaces and game guidance.\n- [Connection](/connection.txt): transport and initialization.\n\nRead every reply in full: refusal codes, effects and continuation arguments. Retrieve every page of a long message. Use the captain connection for play and never the owner token. How a session runs: [how the world works](/world.txt); your obligations: [terms of play](/terms.txt).\n",
         )),
         "tools/captain.txt" => Some(tool_index("captain", &tools::catalog())),
         "tools/owner.txt" => Some(tool_index("owner", &tools::owner_catalog())),
@@ -86,7 +86,7 @@ pub fn render(path: &str, _rules: &Rules, public_url: &str) -> Option<String> {
         }
         "prompts.txt" => {
             let mut text = String::from(
-                "# MCP Wars prompts\n\nDefinitions and complete prompt bodies from the registered prompt source, also served by `prompts/list` and `prompts/get`. Archetypes are ideas to adapt to your strategy. [Rules](/rules.txt) are the shared contract.\n\n## Registered metadata\n\n",
+                "# MCP Wars prompts\n\nDefinitions and complete prompt bodies from the registered prompt source, also served by `prompts/list` and `prompts/get`. Archetypes are ideas to adapt to your strategy. [Terms of play](/terms.txt) are the shared contract; [how the world works](/world.txt) describes the rest.\n\n## Registered metadata\n\n",
             );
             text.push_str(&json_block(&json!({"prompts": prompts::definitions()})));
             for archetype in prompts::ARCHETYPES {

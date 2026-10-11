@@ -149,6 +149,8 @@ impl Call {
             ("captain", "write_note") => Some(&["value"]),
             // Feedback is read in full in the feedback list, never duplicated into the log.
             ("captain", "send_feedback") => Some(&["about", "text"]),
+            // Explanations live in the language store, never duplicated into the log.
+            ("captain", "language") => Some(&["explanation", "examples"]),
             // The strategy and setup a captain records are its human's words.
             ("captain", "ask_owner") if args["action"] == "strategy" || args["action"] == "setup" => Some(&["text"]),
             _ => None,

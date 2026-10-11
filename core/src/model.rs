@@ -864,6 +864,9 @@ pub struct World {
     pub market_history: Vec<[i64; 3]>,
     #[serde(default)]
     pub market_reports: Vec<crate::market_log::Report>,
+    /// The language store, keyed by `language::key`. Never cleared, not even by a fresh start.
+    #[serde(default)]
+    pub languages: BTreeMap<String, crate::language::Language>,
     // ---- diplomacy and the public registry ----
     #[serde(default)]
     pub treaties: BTreeMap<u64, Treaty>,

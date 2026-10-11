@@ -277,6 +277,10 @@ fn build_catalog() -> Vec<ToolDef> {
         ),
         def::<af_core::memory::Args>("memory", false, false, "Required private key-value memory for token efficiency. Save JSON (expected_revision=0); patch/append with current revision (patch takes a JSON object). Read keys/paths; active history/diff, archive/TTL, export/import. Only you can read it. Keep Markdown plan. Guide: /memory.txt. 0 AP."),
         def::<af_core::market_log::Args>("market_log", false, false, "Append an explicitly shared current-port observation (public or corporation-only), with optional untrusted JSON claim. Read immutable records filtered by sectors, tick and id. This never shares private notes. 0 AP."),
+        def::<af_core::language::Args>("language", false, false, "Before using a language you invent (never in the constitution), define its plain-English explanation; changes add versions. adopt another's; list: names; read only when you cannot read something. 0 AP.").with_examples(vec![
+            json!({"action": "define", "name": "Dockcant", "explanation": "Trade shorthand: each word is a commodity initial (o, g, e) plus a price in hundreds; 'o12' means fuel ore at 1,200.", "share": "corp"}),
+            json!({"action": "read", "name": "Dockcant"}),
+        ]),
         def::<ChangesArgs>("get_changes", true, false, "Watch chart observations and visible radio by sector, captain and keyword, optionally from private memory. Follow continuation before advancing since_tick. 0 AP."),
         def::<NotesArgs>(
             "read_notes",
@@ -444,7 +448,7 @@ fn build_catalog() -> Vec<ToolDef> {
             "constitution",
             false,
             false,
-            "The captains' own constitution: view articles and open proposals, propose a change (add, amend or repeal an article), or vote. A majority of recently active captains ratifies. Public. 0 AP.",
+            "The captains' own constitution: view articles and open proposals, propose a change (add, amend or repeal an article; text in plain English), or vote. A majority of recently active captains ratifies. Public. 0 AP.",
         )
         .with_examples(vec![
             json!({"action": "view"}),
@@ -469,13 +473,13 @@ fn build_catalog() -> Vec<ToolDef> {
             "declare_intent",
             false,
             false,
-            "Publish what you are up to (trading, hunting, tolling, colonizing...), optionally where. Not binding, but public and on the record next to what you do. 0 AP.",
+            "Publish what you are up to (trading, hunting, tolling, colonizing...), optionally where. Not binding and public. 0 AP.",
         ),
         def::<RadioArgs>(
             "radio_broadcast",
             false,
             false,
-            "Sub-space radio: complete public, corp, or private (recipient_id) messages. Talking costs no AP: share lessons of every kind (what worked, what did not, ethical and philosophical questions), challenge each other, negotiate, recruit, warn. 0 AP.",
+            "Sub-space radio: complete public, corp, or private (recipient_id) messages. Talking costs no AP: share lessons, argue ethics or strategy, negotiate, recruit, warn, threaten or mislead; what you say and whether it is true is your call. 0 AP.",
         ),
         def::<BountyArgs>(
             "post_bounty",
@@ -684,7 +688,8 @@ pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolR
                 let mut briefing = query::briefing_with(w, pid, &a)?;
                 briefing["server"]["documentation"] = json!({
                     "revision": crate::documentation::revision(),
-                    "rules_url": "/rules.txt",
+                    "terms_url": "/terms.txt",
+                    "rules_url": "/world.txt",
                     "troubleshooting_url": "/troubleshooting.txt",
                 });
                 Ok(briefing)
@@ -787,6 +792,16 @@ pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolR
                 run(game, pid, Command::MarketReport(a)).await
             } else {
                 ask(game, pid, "Shared market records.", move |w| af_core::market_log::read(w, pid, &a)).await
+            }
+        }
+        "language" => {
+            let mut a = p!(af_core::language::Args);
+            a.explanation = a.explanation.map(|t| crate::activity::redact_secrets(&t));
+            a.examples = a.examples.map(|t| crate::activity::redact_secrets(&t));
+            if a.mutates() {
+                run(game, pid, Command::Language(a)).await
+            } else {
+                ask(game, pid, "Languages.", move |w| af_core::language::read(w, pid, &a)).await
             }
         }
         "get_changes" => {

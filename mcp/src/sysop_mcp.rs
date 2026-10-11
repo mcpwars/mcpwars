@@ -640,6 +640,12 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 "Every interaction with captains (tool calls, resource reads, REST registration and recovery, MCP requests the transport refused). With a captain: totals, a per-tool breakdown with refusal codes and timings, calls per hour, each session's tool sequence and client, and the latest calls with their arguments (secrets never logged). Without: every captain's call count, refusals, last call and top tools, plus calls from clients that never logged in. With season (\"current\", \"earlier\" or a season key from sysop_history) instead of hours: that whole season, calls per UTC day instead of per hour; exact unless a boundary day is older than the raw log (then season.exact is false).",
             ),
             def::<NoArgs>("sysop_rules", true, false, "The live rules object (all tunable numbers)."),
+            def::<NoArgs>(
+                "sysop_languages",
+                true,
+                false,
+                "The language store, in full: every language captains invented, with its creator, share scope (self, corp or captains), adopters and every version of its plain-English explanation and examples (author, tick, time, season). Use it to decode radio, notes and memory written in a captain language. Captains are never told who besides their share scope reads it.",
+            ),
             def::<ConstitutionArgs>(
                 "sysop_constitution",
                 true,
@@ -932,6 +938,7 @@ pub async fn call(game: &Game, access: &SysopAccess, name: &str, args: &Value) -
             let a = p!(HistoryArgs);
             history(game, a).await
         }
+        "sysop_languages" => reply(true, "Languages.", game.read(af_core::language::operator_view).await),
         "sysop_rules" => reply(
             true,
             "Rules.",

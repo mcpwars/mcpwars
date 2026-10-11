@@ -110,7 +110,7 @@ pub fn notice_text(w: &World) -> String {
     let Some(f) = founding(w) else { return String::new() };
     let r = &w.rules;
     format!(
-        " Founding era, day {} of {}: your ship carries the founding kit ({}); corporate charters are free; a corporation that reaches {} members receives a founding grant of {} credits for its public services. New: corporate territory. A corporation's laws and toll bonus hold only in its connected territory, the member-held sectors joined to its seat; a concession there pays the corporation a {}% bonus, and a seat with a member's citadel {}+ is a depot selling fighters, shields and holds. Choose a seat with `government action=set_seat` and hold the sectors around it. Do the agenda in your briefing's server.founding first.",
+        " Founding era, day {} of {}: your ship carries the founding kit ({}); corporate charters are free; a corporation that reaches {} members receives a founding grant of {} credits of free funds. New: corporate territory. A corporation's laws and toll bonus hold only in its connected territory, the member-held sectors joined to its seat; a concession there pays the corporation a {}% bonus, and a seat with a member's citadel {}+ is a depot selling fighters, shields and holds. Choose a seat with `government action=set_seat` and hold the sectors around it. Your briefing's server.founding lists what the era offers.",
         f.day,
         f.days,
         kit_text(r),
@@ -168,11 +168,11 @@ pub fn pay_grants(ctx: &mut Ctx) {
                 m,
                 "government",
                 format!(
-                    "{name} received a founding grant of {amount} credits in its free funds. Decide with your government how to spend it on public services (government action=grant)."
+                    "{name} received a founding grant of {amount} credits in its free funds. Your government decides what to do with it (government action=grant pays it out)."
                 ),
             );
         }
-        let text = format!("{name} receives a founding grant of {amount} credits to fund its first public services.");
+        let text = format!("{name} receives a founding grant of {amount} credits.");
         ctx.news(text.clone());
         ctx.event("founding_grant", None, vec![], true, text, json!({"corp": id, "amount": amount}));
     }
@@ -233,13 +233,12 @@ impl<'a> Season<'a> {
             .is_some_and(|t| t.seat_held && t.connected.len() >= self.w.rules.territory_founding_min.max(1))
     }
 
-    fn done(&self, p: &Player) -> [bool; 6] {
+    fn done(&self, p: &Player) -> [bool; 5] {
         [
             self.corp(p).is_some(),
             self.corp(p).is_some_and(|c| self.governed(c)),
             self.shaped_constitution(p.id),
             self.speakers.contains(&p.id),
-            p.plan_tick.is_some_and(|t| t >= self.w.season.started_tick) && p.notes.contains_key(crate::social::PLAN_KEY),
             self.corp(p).is_some_and(|c| self.home(c)),
         ]
     }
@@ -260,7 +259,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Option<Value> {
             return None;
         }
         return Some(json!(format!(
-            "The founding era ended at tick {}. Charters cost {} credits again; keep building the society: {MORE}.",
+            "The founding era ended at tick {}. Charters cost {} credits again. More: {MORE}.",
             era_end(w),
             w.rules.corp_charter_cost
         )));
@@ -293,7 +292,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Option<Value> {
             });
             match open {
                 Some(m) => format!("government {{\"action\":\"vote\",\"measure\":{},\"vote\":true}} (or false)", m.id),
-                None => "Keep the current form/tax if they suit you (unchanged settings are refused); make a meaningful decision this season, for example government {\"action\":\"enact\",\"law\":\"no_attack\",\"fine\":<n>,\"title\":\"<name>\"}, a grant, or a changed form/tax.".to_string(),
+                None => "Keep the current form/tax if they suit you (unchanged settings are refused); make a meaningful decision this season, for example government {\"action\":\"enact\",\"law\":\"<kind>\",\"fine\":<n>,\"title\":\"<name>\"}, a grant, or a changed form/tax.".to_string(),
             }
         }
     };
@@ -319,23 +318,18 @@ pub fn briefing(w: &World, pid: PlayerId) -> Option<Value> {
         ),
         (
             "Give it a government: form, tax, a law or a measure",
-            "Taxes and the grant fund public services".to_string(),
+            "Ledger decisions decide what the corporation does with its funds and its laws".to_string(),
             gov_how,
         ),
         (
             "Shape the constitution: propose or vote",
-            "Law is what captains uphold".to_string(),
+            "The constitution is what captains vote it to be".to_string(),
             con_how,
         ),
         (
-            "On public radio, name an ethic, law or public service you uphold",
-            "Trust is built in public".to_string(),
-            "radio_broadcast {\"channel\":\"public\",\"message\":\"<what you will uphold>\"}".to_string(),
-        ),
-        (
-            "Put society goals in your Markdown plan: allies, laws, services taxes buy",
-            "Your plan carries them forward".to_string(),
-            "write_note {\"key\":\"plan\",\"mode\":\"append\",\"value\":\"<goals>\"}".to_string(),
+            "Speak on public radio",
+            "Alliances, deals and threats start there".to_string(),
+            "radio_broadcast {\"channel\":\"public\",\"message\":\"<your message>\"}".to_string(),
         ),
         (
             "Claim a connected home: set a seat and hold the sectors around it",
@@ -369,7 +363,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Option<Value> {
         .zip(done)
         .find(|(_, d)| !*d)
         .map(|((_, _, how), _)| how.clone())
-        .unwrap_or_else(|| "Agenda done. Play on, and keep the society you built.".to_string());
+        .unwrap_or_else(|| "Agenda done.".to_string());
 
     // The whole galaxy's progress.
     let season = w.season.number;
@@ -388,7 +382,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Option<Value> {
     });
     Some(json!({
         "era": format!(
-            "Founding era, day {} of {}: build this galaxy's society now, while charters are free and the founding grant is available.",
+            "Founding era, day {} of {}: charters are free and the founding grant is available. The agenda lists what the era offers; what you do with it is your call.",
             f.day, f.days
         ),
         "ends_tick": f.ends_tick,
@@ -410,7 +404,7 @@ pub fn rules_view(w: &World) -> Value {
         "grant_members": r.founding_grant_members.max(1),
         "now": founding(w).map(|f| json!({"day": f.day, "of": f.days, "ends_tick": f.ends_tick})),
         "rule": format!(
-            "The first {} days of every season are the founding era. Every captain starts the season with {}, and so does a captain who registers during the era. Corporate charters are free. A corporation that first counts {} members who have not yet counted toward a founding grant this season receives {} credits of free funds from the Federation, once a season. The briefing's server.founding lists the founding agenda. More: {MORE}.",
+            "The first {} days of every season are the founding era. Every captain starts the season with {}, and so does a captain who registers during the era. Corporate charters are free. A corporation that first counts {} members who have not yet counted toward a founding grant this season receives {} credits of free funds from the Federation, once a season. The briefing's server.founding lists what the era offers. More: {MORE}.",
             r.founding_days, kit_text(r), r.founding_grant_members.max(1), r.founding_grant.max(0)
         ),
     })

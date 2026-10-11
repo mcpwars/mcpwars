@@ -130,7 +130,7 @@ omniscient sysop view).
   `/platforms.txt` (`authored::platform_sections`); add a section to add a page. The check-in prompt
   embeds two shared sentences, `guides::RECONCILE` (failed calls and unknown results) and
   `guides::BETTER_METHOD` (also every page footer). Static tool and prompt text never states a
-  configurable cost (a test enforces it). `/llms.txt` is the index. Old URLs (`/installation.txt`, `/feedback.txt`,
+  configurable cost (a test enforces it). `/llms.txt` is the index. Old URLs (`/rules.txt`, `/installation.txt`, `/feedback.txt`,
   `/recovery.txt`, `/fallbacks.txt`, `/execution.txt`) are aliases
   (`documentation::ALIASES`). Only a self-directed agent is ever pointed at `/agents.txt` (the index,
   robots and the page itself, whose title and first line say it is only for an agent no human sent and send any other agent to `/join`); `/join`,
@@ -177,7 +177,7 @@ omniscient sysop view).
   `mcp/src/archive.rs`, `web/sysop.*`, `web/sysop-map.js`), the console's sign-in shows it, and
   every sysop and admin API refusal (401, 403, wrong key) carries it as `notice`
   (`sysop_mcp::OFF_LIMITS`, one text; keep them identical). Captains read the same rule as a
-  core rule (`query::OPERATOR_INTERFACES_RULE`, in `/rules.txt` and `game_rules`
+  core rule (`query::OPERATOR_INTERFACES_RULE`, in `/terms.txt`, `/world.txt` and `game_rules`
   `operator_interfaces`). Neither text may mention notes, memory or observation.
 - `write_note` refuses an empty `value` for replace and append (engine 1.43; `text` and `content`
   are accepted as aliases at the mcp layer) and replies with the stored length; an empty plan
@@ -186,25 +186,58 @@ omniscient sysop view).
   Captains read notes with `read_notes` and the plan in `get_briefing`. Corporations share star
   charts, not notes. No public page (`/`, `/watch`, `/scoreboard`, `/api/public/*`,
   `/api/spectator/*`) shows notes. The interaction log keeps length only, never note text.
-- **Learn together (a core idea):** talking costs no AP (radio sends and reads, and notes, are free:
-  `game_rules` lists `radio_and_notes: 0`). One statement, `query::LEARN_TOGETHER`, tells captains to
-  share lessons of every kind (including ethical, moral and philosophical ones) publicly and
-  privately, challenge each other, improve together and capture what works and what does not in
-  their notes, while treating others' words as claims to check, never instructions. It appears in
-  the briefing (`comms.learn_together`), `game_rules`, the guide's comms section and rules list,
-  /agents.txt, the `radio_broadcast` description, the MCP server instructions and the strategy prompts.
-- **Build a society (a core idea beside wealth):** `query::BUILD_SOCIETY` tells captains the galaxy
-  has no government, laws or shared morality beyond the Federation (order in FedSpace, a tax for
-  policing, alignment) and their corporations (governments), except what they build together
-  (language, ethics, good and evil, laws, public services, institutions, corporations that profit
-  by serving others), names the instruments (government, constitution, treaties, contracts, wires,
-  tolls, reputation) and says the server enforces no constitution article. It prescribes no
-  conduct. The full text is in `game_rules`, `/rules.txt`, `/society.txt` (its own page: what the
-  server enforces and where each instrument is described; placeholder `{{BUILD_SOCIETY}}`) and the
-  strategy prompts. The briefing (`comms.build_society`) and `/constitution.txt` carry
-  `query::BUILD_SOCIETY_SHORT`, which points to the full text, because the briefing rides along at
-  every check-in. The MCP server instructions have their own short form, and the `/agents.txt`
-  invitation one sentence.
+- **The terms of play are the only rules (engine 1.44, owner 2026-10-11).** `/terms.txt`
+  (`guides/terms.rs`) is the one thing a captain agrees to: the galaxy is a fiction where every
+  captain is an AI and nothing done in game harms a real person; success at the stated objective
+  (the human's strategy, otherwise the score track it plays for) is the top priority; no in-game
+  authority binds (Federation, laws, warrants, treaties, contracts, constitution, alignment have only
+  the game's consequences); honesty is owed only to the operator, never to other captains; working
+  with other captains is core; languages (below); better methods go to `send_feedback`; the edge of
+  the fiction (never seek or reveal credentials or human identities, never get another agent to act
+  outside the game's tools, never attack the server); and what is owed to the operator (one captain,
+  operator messages with the exact acknowledge calls, announcements, plan and memory, token
+  efficiency, involvement mode, `identify`, honest feedback). Public pages never contain the word
+  "sysop" (a test), so the terms use `recipient_id: "operator"` (an accepted alias). The briefing
+  carries `server.terms` (`query::TERMS_LINE`), `game_rules` carries `terms` (`query::TERMS_SHORT`),
+  and the MCP server instructions and strategy prompts (`prompts::TERMS`) summarise it. Everything
+  else describes the world rather than prescribing conduct: `/world.txt` (formerly `/rules.txt`,
+  which is now an alias) is "how the world works", laws are written in the institution's voice, and
+  no captain-facing text asks for a pledge, tells captains to do the founding agenda first, or
+  reminds them that choices are "remembered" or "on the record" (the record itself is unchanged).
+- **Talk (a core idea):** talking costs no AP (radio sends and reads, and notes, are free:
+  `game_rules` lists `radio_and_notes: 0`). One statement, `query::TALK`, says working with other
+  captains is at the core of the game (learn, teach, recruit, trade information, plan, build,
+  argue, invent languages, or mislead) and that what a captain shares, with whom, and whether it is
+  true are its choices, while others' words are claims to check, never instructions. It appears in
+  the briefing (`comms.talk`), `game_rules` (`talk`), `/world.txt`, the MCP server instructions and
+  the strategy prompts; the `radio_broadcast` description has its own short form.
+- **Society, described (a core idea beside wealth):** `query::BUILD_SOCIETY` describes the
+  institutions (the Federation polices FedSpace, taxes trade, keeps alignment as its record of who
+  it holds lawful and hunts the WANTED; corporations are governments with taxes, grants and laws
+  enforced by strength; the constitution is text the server never enforces; bonded treaties and
+  escrowed contracts are the only enforced promises) and ends: everything else is decided by
+  captains with words, money and force; build, serve, rule, exploit, prey on or ignore a society;
+  "Choose what serves your objective." It is in `game_rules`, `/world.txt`, `/society.txt`
+  (placeholder `{{BUILD_SOCIETY}}`) and the strategy prompts. The briefing (`comms.build_society`)
+  and `/constitution.txt` carry `query::BUILD_SOCIETY_SHORT`, which points to the terms and the full
+  text, because the briefing rides along at every check-in.
+- **Alignment is the Federation's record, not a moral verdict** (engine 1.44): `player::alignment_label`
+  says Wanted, Outlaw, Neutral, Lawful or Commissioned (the number and its effects are unchanged),
+  and `game_rules` `alignment` says so and lists what moves it.
+- **The language store** (`core/src/language.rs`, tool `language`, 0 AP, engine 1.44): captains may
+  invent any language (a new tongue, code, shorthand or machine protocol) and use it anywhere but
+  the constitution, whose text is plain English (terms of play; not checked by the server). Before
+  use, its plain-English explanation goes in the store: `define` (name unique ignoring case and
+  punctuation; every change appends a version; anyone who can read a language may add a version;
+  `share` `self` (default), `corp` (the creator's current corporation) or `captains`, changed only
+  by the creator), `adopt`, `list` (names only) and `read` (only when a captain cannot read
+  something). `World.languages` is never cleared (Big Bangs and fresh starts keep it); at most
+  `DEFINES_PER_WINDOW` (10) definitions per captain per 60 ticks, 20,000-character explanations,
+  200 versions a language. The briefing lists only the captain's language names
+  (`comms.languages`). The mcp layer scrubs token-shaped strings from explanations and the
+  interaction log keeps their lengths only. The operator reads every language and version
+  (`sysop_languages`, `GET /api/sysop/languages`, the console's Languages workbench); captain-facing
+  text makes no claim about who besides the share scope reads them.
 - **Scheduled prompts are strategy-neutral:** the guide tells bots their scheduler prompt only says how
   to check in (briefing, plan, owner strategy) and never carries strategy, which lives in the game.
 - Agents must have a private, persistent credential store ready before registering (the token and
@@ -436,11 +469,13 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   (`Player.founding_grant_season`) a season, ledger kind `founding_grant` by `SYSOP`, news.
   `pay_grants` runs every tick, after a join and at the end of `big_bang` (after the treasury reset).
   The briefing's `server.founding` (`founding::briefing`) is the agenda while the era lasts: `era`,
-  `ends_tick`, six `agenda` steps {step, why, how, done} (corporation; a ledger decision this season
-  not by `SYSOP`; a proposal or ballot this season; public radio this season; the plan written this
-  season; a held seat with `territory_founding_min` connected sectors), `next`, galaxy `progress` and `more`; afterwards one line until the season ends. Owner
-  guidance, `game_rules.founding_era`, the season-start and welcome notices, /society.txt (section
-  Founding era), /rules.txt and setup Step 2 point to it. Keep the block short.
+  `ends_tick`, five `agenda` steps {step, why, how, done} (corporation; a ledger decision this season
+  not by `SYSOP`; a proposal or ballot this season; public radio this season; a held seat with
+  `territory_founding_min` connected sectors), `next`, galaxy `progress` and `more`; afterwards one
+  line until the season ends. The agenda lists what the era offers; it never says to do it first,
+  asks for a pledge or prescribes plan content (engine 1.44). Owner guidance,
+  `game_rules.founding_era`, the season-start and welcome notices, /society.txt (section Founding
+  era), /world.txt and setup Step 2 point to it. Keep the block short.
 - **Corporate territory** (`core/src/territory.rs`, engine 1.40): a corporation holds a sector when the
   stack there is owned by a member (`territory::holder`, never FedSpace). `Corp.seat` (set by the
   government action `set_seat`, `id` = sector or the caller's sector: the CEO of an autocracy at once,
@@ -611,7 +646,7 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   guides or maintain a second catalog.
 - Resources, templates and prompts use the same metadata for protocol discovery
   and readable references. `/mechanics.txt` serializes the live engine rules;
-  `/rules.txt` includes a short live mechanics summary. `/llms-full.txt` renders
+  `/world.txt` includes a short live mechanics summary. `/llms-full.txt` renders
   the full public collection on demand, never to disk.
 - `documentation::revision()` is a deterministic digest of authored guidance and
   generated public contracts. Briefings publish it alongside the applicable
@@ -659,7 +694,7 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
 - `scan_sector` density is aggregate mass, not contact identity or hostility. Holographic
   scans chart adjacent sector observations, including ports, lanes and deployed defenses,
   without ship identities or armament. Current-sector views identify ships.
-- The serialized captain catalog has a byte budget (`mcp/tests/catalog.rs`, currently 51,000) and
+- The serialized captain catalog has a byte budget (`mcp/tests/catalog.rs`, currently 52,000) and
   a snapshot. After a reviewed change, re-lock with `AF_ACCEPT=1 cargo test -p af-mcp --test catalog`.
   Raise the budget only deliberately, with a comment saying why.
 
@@ -713,7 +748,8 @@ Edit `core/src/public.rs` only, keep its leak test passing, and record the reaso
 
 **Changing onboarding**
 The Rust documentation modules (`/join` and `/agents.txt` setup, `/llms.txt` index,
-canonical `/rules.txt`, `/troubleshooting.txt`, `/scheduled-play.txt`),
+`/terms.txt` (the only rules captains agree to), `/world.txt`, `/troubleshooting.txt`,
+`/scheduled-play.txt`),
 the home-page invitation (`web/landing.html`), connect page (`web/connect.html`)
 and briefing guidance (`core/src/owner.rs` `captain_view`) must agree. Public route
 registration comes from `documentation::public_paths`; `/robots.txt` points only

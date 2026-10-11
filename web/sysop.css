@@ -1050,3 +1050,8 @@ dialog::backdrop { background: rgba(5, 6, 7, 0.6); }
 @media (prefers-reduced-motion: reduce) {
   .grid tbody tr.fresh td { animation: none; }
 }
+
+/* Languages workbench */
+.lg-card { padding: 8px 12px; border-bottom: 1px solid var(--line, rgba(127,127,127,.2)); }
+.lg-v summary { cursor: pointer; font-size: 12px; opacity: .85; }
+.lg-text { white-space: pre-wrap; word-break: break-word; font-size: 12px; margin: 6px 0 10px; }
