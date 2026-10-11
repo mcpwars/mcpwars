@@ -649,3 +649,28 @@ fn private_history_backfill_preserves_overwritten_and_deleted_notes_and_memory_v
         assert_eq!(rows, store.private_archive(&q).unwrap());
     }
 }
+
+#[test]
+fn reverse_journal_pages_are_exclusive_and_survive_reopening() {
+    for loc in locations("journal_pages") {
+        let store = loc.open();
+        let mut w = store.init(&genesis(ENGINE_VERSION)).unwrap();
+        play(&store, &mut w, 4);
+        let all = store.entries_after(0).unwrap();
+        drop(store);
+        let store = loc.open();
+        let first = store.journal_page(None, 2).unwrap();
+        assert_eq!(first, store.journal_page(Some(u64::MAX), 2).unwrap());
+        assert_eq!(first[0]["seq"], all.last().unwrap().seq);
+        let mut seqs: Vec<u64> = first.iter().map(|e| e["seq"].as_u64().unwrap()).collect();
+        loop {
+            let page = store.journal_page(seqs.last().copied(), 2).unwrap();
+            if page.is_empty() {
+                break;
+            }
+            seqs.extend(page.iter().map(|e| e["seq"].as_u64().unwrap()));
+        }
+        assert_eq!(seqs, all.iter().rev().map(|e| e.seq).collect::<Vec<_>>());
+        assert!(store.journal_page(Some(0), 100).unwrap().is_empty());
+    }
+}

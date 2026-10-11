@@ -1455,7 +1455,7 @@
   // ======================================================================
   // Journal
   // ======================================================================
-  let jEntries = [], jTimer = null, jBusy = false, jSeen = 0;
+  let jEntries = [], jTimer = null, jBusy = false, jSeen = 0, jCursor = null, jPending = false;
   const nameOf = (id) => { const p = player(id); return p ? p.name : `#${id}`; };
   const compactArgs = (a) => Object.entries(a || {}).filter(([k, v]) => v !== null && v !== undefined && !/hash$/.test(k) && !(Array.isArray(v) && !v.length)).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ");
   const ADMIN_SUM = {
@@ -1513,40 +1513,43 @@
     return compactArgs(a);
   }
   const jType = (e) => (e.cmd.type === "admin" ? `admin:${e.cmd.args.action}` : e.cmd.type);
-  async function loadJournal() {
-    if (jBusy) return;
+  async function loadJournal(older = false) {
+    // Event listeners pass an Event, not a paging flag.
+    older = older === true;
+    if (jBusy) { if (!older) jPending = true; return; }
     jBusy = true;
-    const r = await api(`${API}/journal?limit=500&include_ticks=${$("jr-ticks").checked}`);
+    const q = new URLSearchParams({limit: "500", include_ticks: String($("jr-ticks").checked)});
+    const actor = $("jr-actor").value, command = $("jr-type").value, query = $("jr-q").value.trim();
+    if (actor) q.set("actor", actor === "@sysop" ? "sysop" : actor);
+    if (command) q.set("command", command);
+    if (query) q.set("query", query);
+    if (older && jCursor != null) q.set("before_seq", jCursor);
+    const r = await api(`${API}/journal?${q}`);
     jBusy = false;
+    if (jPending) { jPending = false; loadJournal(); return; }
     if (!r.ok) { $("jr-count").textContent = errText(r.data, r.status); return; }
-    jEntries = (r.data && r.data.entries) || [];
-    const types = [...new Set(jEntries.map(jType))].sort();
-    const ts = $("jr-type"), cur = ts.value;
+    const entries = (r.data && r.data.entries) || [];
+    jEntries = older ? jEntries.concat(entries) : entries;
+    jCursor = r.data.next_before_seq;
+    $("jr-older").hidden = !r.data.has_more;
+    const types = [...new Set([...jEntries.map(jType), command].filter(Boolean))].sort();
+    const ts = $("jr-type");
     ts.replaceChildren(el("option", "", "All commands"), ...types.map((t) => { const o = el("option", "", t); o.value = t; return o; }));
     ts.firstChild.value = "";
-    ts.value = types.includes(cur) ? cur : "";
-    const names = [...new Set(jEntries.map((e) => e.player).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-    const as = $("jr-actor"), curA = as.value;
+    ts.value = command;
+    const names = [...new Set([...jEntries.map((e) => e.player), actor === "@sysop" ? "" : actor].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const as = $("jr-actor");
     const o1 = el("option", "", "Everyone"); o1.value = "";
     const o2 = el("option", "", "Sysop and system"); o2.value = "@sysop";
     as.replaceChildren(o1, o2, ...names.map((n) => { const o = el("option", "", n); o.value = n; return o; }));
-    as.value = curA === "@sysop" || names.includes(curA) ? curA : "";
+    as.value = actor;
     renderJournal();
   }
-  function jRows() {
-    const actor = $("jr-actor").value, type = $("jr-type").value, q = $("jr-q").value.trim().toLowerCase();
-    return jEntries.filter((e) => {
-      if (actor === "@sysop" && e.actor !== "system") return false;
-      if (actor && actor !== "@sysop" && e.player !== actor) return false;
-      if (type && jType(e) !== type) return false;
-      if (q && !`${e.player || "sysop"} ${jType(e)} ${summarize(e.cmd)}`.toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }
+  function jRows() { return jEntries; }
   function renderJournal() {
     const rows = jRows();
     const max = jEntries.reduce((m, e) => Math.max(m, e.seq), 0);
-    $("jr-count").textContent = `${rows.length} of ${jEntries.length}`;
+    $("jr-count").textContent = `${rows.length} entries${jCursor != null ? "; older history available" : ""}`;
     const frag = document.createDocumentFragment();
     for (const e of rows) {
       const tr = el("tr", jSeen && e.seq > jSeen && !reduceMotion ? "fresh" : "");
@@ -1563,13 +1566,20 @@
       tr.addEventListener("click", () => select("entry", e.seq));
       frag.append(tr);
     }
-    if (!rows.length) { const tr = el("tr", "empty"); const td = el("td", "", jEntries.length ? "Nothing matches these filters." : "The journal is empty."); td.colSpan = 4; tr.append(td); frag.append(tr); }
+    if (!rows.length) { const tr = el("tr", "empty"); const td = el("td", "", jCursor != null ? "No matches on this page. Continue to older history." : "No matching journal entries."); td.colSpan = 4; tr.append(td); frag.append(tr); }
     $("jr-body").replaceChildren(frag);
     jSeen = max;
     markSelected();
   }
-  for (const id of ["jr-actor", "jr-type"]) $(id).addEventListener("change", renderJournal);
-  $("jr-q").addEventListener("input", renderJournal);
+  for (const id of ["jr-actor", "jr-type"]) $(id).addEventListener("change", loadJournal);
+  let jSearchTimer = null;
+  $("jr-q").addEventListener("input", () => { clearTimeout(jSearchTimer); jSearchTimer = setTimeout(loadJournal, 250); });
+  $("jr-older").addEventListener("click", () => {
+    if (jBusy || jCursor == null) return;
+    $("jr-auto").checked = false;
+    journalTimer();
+    loadJournal(true);
+  });
   $("jr-ticks").addEventListener("change", loadJournal);
   $("jr-auto").addEventListener("change", journalTimer);
   function journalTimer() {

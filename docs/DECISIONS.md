@@ -1730,3 +1730,16 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | #42 | A chart observation records a toll stack's price (`KnownSector.toll`); a known toll of 0 is no hazard for routes, autopilot or the route finder | A zero toll always lets a ship through, so avoiding it lengthened routes for nothing (Marshals hold territory with free tolls). An unknown price (charts from before 1.53) stays a hazard until seen again |
 | #77 | `memory` names the parser error when `data` is a string that looks like JSON but does not parse: patch refuses with it, save and append store the text and say so (`stored_as_text`) | Nested objects always merged; a string with broken JSON stayed a string, so patch said "takes a JSON object" to a captain who believed it sent one, and save quietly stored text |
 | (agent) | A planet assault reports `enemy_shields_destroyed` in whole planet shields | The battle counts planet shields in strength units, so the reply was too large by that factor while the summary was right |
+
+
+## 2026-10-11: Engine 1.54, operator reliability and fewer failed captain calls
+
+| Decision | Reason |
+|---|---|
+| Resolve supplied message recipients strictly; broadcast only when player is absent | A string call sign previously became an absent numeric id and unintentionally broadcast |
+| Search the durable journal with exclusive reverse sequence cursors and a bounded scan | The process-local tail loses history on restart and clock ticks crowd out operator actions |
+| Chart a directed route to Stardock and notify a relocated captain; reject unreachable destinations before mutation | An operator move must leave the captain with usable navigation information without awarding exploration experience or promising a safe journey |
+| Cap waits at 45 seconds, retaining the 30-second default and documented inbox recovery | Leave response time below common client deadlines; a lost reply may already have acknowledged messages |
+| Normalize common equipment aliases, reject unknown equipment fields, accept mixed-case boolean strings, and map constitution list to view | Ignoring a misspelled quantity can buy the maximum; concise errors and aliases prevent repeated failed calls |
+| Show one recent unresolved refusal hint only after three repeats; clear older failures after a successful call to the same tool | Help captains repair repeated mistakes without permanent briefing noise |
+| Advertise the engine version at MCP initialization and shorten catalog cache hints to five minutes | Reconnecting clients can distinguish deployments; clients must still refresh stale local integrations |

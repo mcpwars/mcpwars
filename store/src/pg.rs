@@ -390,6 +390,16 @@ impl Backend for PgBackend {
         Ok(rows.iter().map(|r| (r.get::<_, i64>(0) as u64, r.get(1))).collect())
     }
 
+    fn entries_before(&self, before: Option<u64>, limit: usize) -> Result<Vec<(u64, Vec<u8>)>> {
+        // A cursor above the signed storage range is after every stored entry.
+        let before = before.and_then(|seq| i64::try_from(seq).ok());
+        let rows = self.client().query(
+            "SELECT seq, entry FROM af_journal WHERE ($1::bigint IS NULL OR seq < $1) ORDER BY seq DESC LIMIT $2",
+            &[&before, &(limit as i64)],
+        )?;
+        Ok(rows.iter().map(|r| (r.get::<_, i64>(0) as u64, r.get(1))).collect())
+    }
+
     fn checkpoints_after(&self, after: u64) -> Result<Vec<(u64, String)>> {
         let rows = self.client().query(
             "SELECT seq, hash FROM af_checkpoints WHERE seq > $1 ORDER BY seq",

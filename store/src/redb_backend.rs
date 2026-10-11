@@ -187,6 +187,18 @@ impl Backend for RedbBackend {
         Ok(out)
     }
 
+    fn entries_before(&self, before: Option<u64>, limit: usize) -> Result<Vec<(u64, Vec<u8>)>> {
+        let tx = self.db.begin_read()?;
+        let t = tx.open_table(JOURNAL)?;
+        let mut out = vec![];
+        let end = before.map(std::ops::Bound::Excluded).unwrap_or(std::ops::Bound::Unbounded);
+        for row in t.range((std::ops::Bound::Unbounded, end))?.rev().take(limit) {
+            let (k, v) = row?;
+            out.push((k.value(), v.value().to_vec()));
+        }
+        Ok(out)
+    }
+
     fn checkpoints_after(&self, after: u64) -> Result<Vec<(u64, String)>> {
         let tx = self.db.begin_read()?;
         let t = tx.open_table(CHECKPOINTS)?;

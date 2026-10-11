@@ -272,6 +272,34 @@ fn sequence(tools: &[&str]) -> String {
     out.join(", ")
 }
 
+/// A short hint only for repeated, still-unresolved failures in the supplied recent sample.
+/// Success on the same tool clears older failures, so repaired problems stop consuming context.
+pub fn refusal_hint(calls: &[Call]) -> Option<Value> {
+    let mut resolved = std::collections::BTreeSet::new();
+    let mut counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for call in calls {
+        if call.role != "captain" {
+            continue;
+        }
+        if call.ok {
+            resolved.insert(call.tool.as_str());
+        }
+        if call.is_refusal() && !resolved.contains(call.tool.as_str()) {
+            *counts.entry((&call.tool, call.code.as_deref().unwrap_or("error"))).or_default() += 1;
+        }
+    }
+    let ((tool, code), count) = counts.into_iter().filter(|(_, n)| *n >= 3).max_by_key(|(_, n)| *n)?;
+    let fix = match code {
+        "invalid_args" => "Use the tool's current input schema and example; correct the rejected field before retrying.",
+        "unknown_tool" => "Refresh tools/list on this captain connection; reconnect if the tool catalog stays stale.",
+        "not_at_stardock" => "This action requires Stardock; check your sector and chart a route there first.",
+        "no_ap" | "insufficient_ap" => "Check current AP and live game_rules costs; choose an affordable action before retrying.",
+        _ => "Read the refusal reason and change the arguments or plan before retrying this action.",
+    };
+    Some(json!({"tool":tool,"code":code,"count":count,"fix":fix,
+        "scope":"last 1000 calls within 6 hours, since the latest success on this tool"}))
+}
+
 /// One captain's activity over the window: totals, a per-tool breakdown, refusal codes, calls per
 /// hour, sessions (each with its tool sequence) and the most recent calls. `calls` is newest first.
 pub fn summarize(calls: &[Call], now_ms: u64, hours: u64) -> Value {

@@ -434,7 +434,7 @@ pub fn server_config() -> ServerConfig {
         .enable_prompts()
         .build();
     let mut info = ServerConfig::new(caps).with_instructions(format!("{INSTRUCTIONS} {}", af_core::query::MEMORY_RULE));
-    info.server_info = Implementation::new("mcp-wars", env!("CARGO_PKG_VERSION"));
+    info.server_info = Implementation::new("mcp-wars", af_core::ENGINE_VERSION);
     info
 }
 
@@ -463,19 +463,19 @@ impl ServerHandler for GameMcp {
         if self.is_sysop(&c) {
             return Ok(
                 ListToolsResult::with_all_items(crate::sysop_mcp::catalog().iter().map(tool_of).collect())
-                    .with_ttl_ms(3_600_000)
+                    .with_ttl_ms(300_000)
                     .with_cache_scope(CacheScope::Private),
             );
         }
         if let Ok((_, true)) = self.who_role(&c).await {
             return Ok(
                 ListToolsResult::with_all_items(tools::owner_catalog().iter().map(tool_of).collect())
-                    .with_ttl_ms(3_600_000)
+                    .with_ttl_ms(300_000)
                     .with_cache_scope(CacheScope::Private),
             );
         }
         Ok(ListToolsResult::with_all_items(tools::catalog().iter().map(tool_of).collect())
-            .with_ttl_ms(3_600_000)
+            .with_ttl_ms(300_000)
             .with_cache_scope(CacheScope::Public))
     }
 

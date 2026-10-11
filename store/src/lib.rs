@@ -510,6 +510,15 @@ impl Store {
         Ok(out)
     }
 
+    /// A bounded reverse page, parsed as JSON so pre-upgrade command shapes stay searchable.
+    pub fn journal_page(&self, before: Option<u64>, limit: usize) -> Result<Vec<serde_json::Value>> {
+        self.b
+            .entries_before(before, limit.min(1_001))?
+            .into_iter()
+            .map(|(_, bytes)| serde_json::from_slice(&bytes).map_err(StoreError::from))
+            .collect()
+    }
+
     /// Every journal entry as stored, unparsed: for offline reports that must read entries
     /// recorded by older engines (`af-server conduct`).
     pub fn raw_entries(&self) -> Result<Vec<(u64, Vec<u8>)>> {

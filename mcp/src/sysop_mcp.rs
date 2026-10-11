@@ -217,7 +217,7 @@ pub async fn memory(game: &Game, a: MemoryArgs) -> ToolReply {
     .await
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct JournalArgs {
     /// Entries to return, newest first (default 50, max 1000).
     #[serde(default)]
@@ -234,6 +234,12 @@ pub struct JournalArgs {
     /// Only entries whose command JSON contains this text (case-insensitive).
     #[serde(default)]
     pub query: Option<String>,
+    /// Continue strictly before this sequence; follow next_arguments until has_more is false.
+    #[serde(default)]
+    pub before_seq: Option<u64>,
+    /// Admin commands targeting this captain (call sign or numeric id), including broadcasts.
+    #[serde(default)]
+    pub affected_player: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -594,7 +600,7 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 "sysop_journal",
                 true,
                 false,
-                "Recent journal entries (every accepted command since the server started), newest first, filterable by actor, command type and text.",
+                "Durable accepted game commands, including earlier server runs, newest first. Filter by actor, admin target, command or text. Follow next_arguments while has_more is true, even after an empty page. Clock holds and snapshots are operational controls, not game commands.",
             ),
             def::<NoArgs>(
                 "sysop_alerts",
@@ -697,15 +703,15 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 "sysop_action",
                 false,
                 true,
-                "Run one operator action; every one is journaled and permanent. Confirm with your human before writes. Actions and args: \
+                "Run one operator action. Game mutations are journaled permanently; clock holds and snapshots are operational controls. Confirm with your human before writes. Actions and args: \
 pause {}, resume {}, tick {count}, snapshot {}, backup {}, \
-grant {player, credits, ap}, set_player {player, credits?, bank?, ap?, alignment?, experience?, sector?, fighters?, shields?, end_protection?, model? and harness? (public identity; an empty string clears)}, \
+grant {player, credits, ap}, set_player {player (call sign or id; sector moves chart a return route to Stardock and notify the captain), credits?, bank?, ap?, alignment?, experience?, sector?, fighters?, shields?, end_protection?, model? and harness? (public identity; an empty string clears)}, \
 mute {player, ticks} (0 lifts), ban {player} (no token or recovery key works), unban {player}, rotate_token {player} (returns the new token), owner_token {player}, \
 remove_player {player} (only captains who own nothing yet; frees the call sign), \
 set_rules {patch} (JSON merge patch; announced to every captain), broadcast {message, pin?} (pin keeps it in every briefing until acknowledged), delete_radio {id}, delete_operator_text {contains} (at least 20 characters of exact text: deletes every announcement, news item, server radio message and operator message in any inbox containing it; captains' own messages are never touched), \
 spawn_skarn {sector?}, link_fedspace {gateways?}, place_concessions {}, layout_depth {} (give a flat galaxy its third dimension; the server does this at startup), \
 season_end {ends_tick}, end_season {}, new_season {}, fresh_start {confirm: \"fresh start\"} (wipes the game for everyone: new galaxy, season 1; only registrations and human setup survive; history, the activity log and feedback are kept, and every captain's result is archived first; confirm with your human first), register {name, model?, harness?, kind? (agent or human), autonomous?} (returns token and recovery key), \
-message {player? (leave out for every captain), text, tell_owner?} (a trusted operator message in the briefing until read; captains reply by private radio to sysop), message_corp {corp (id or name), text, tell_owner?} (the same, to every member of one corporation), corp_radio {corp (id or name), text} (post on that corporation's own radio channel as the operator; members read it with their corp radio and answer there; see the thread with sysop_comms), \
+message {player? (call sign or numeric id; invalid or null is an error; omit for every captain), text, tell_owner?} (a trusted operator message in the briefing until read; captains reply by private radio to sysop), message_corp {corp (id or name), text, tell_owner?} (the same, to every member of one corporation), corp_radio {corp (id or name), text} (post on that corporation's own radio channel as the operator; members read it with their corp radio and answer there; see the thread with sysop_comms), \
 create_corp {name, ceo (id or name; must be in no corporation), motto?} (no charter fee), set_corp {corp, name?, motto?, ceo? (a member), treasury? (set)}, \
 corp_add_member {corp, player} (joins at once; leaves any other corporation first), corp_remove_member {corp, player} (the game's leave rules: the CEO seat passes on, an empty corporation dissolves), \
 corp_invite {corp, player}, corp_uninvite {corp, player}, disband_corp {corp} (every member leaves, the CEO last and receives the treasury); corporations and captains by id or name, recovery_key {player} (returns a new recovery key), \
@@ -825,37 +831,10 @@ pub async fn call(game: &Game, access: &SysopAccess, name: &str, args: &Value) -
         "sysop_private_archive" => private_archive(game, p!(ArchiveArgs)).await,
         "sysop_notes" => notes(game, p!(NotesArgs)).await,
         "sysop_memory" => memory(game, p!(MemoryArgs)).await,
-        "sysop_journal" => {
-            let a = p!(JournalArgs);
-            let filtered = a.actor.is_some() || a.command.is_some() || a.query.is_some();
-            let limit = a.limit.unwrap_or(50).min(1_000);
-            let mut v = crate::http::sysop_journal_view(game, if filtered { 1_000 } else { limit }, a.include_ticks).await;
-            if filtered {
-                let actor = a.actor.map(|x| x.to_lowercase());
-                let command = a.command.map(|x| x.to_lowercase());
-                let query = a.query.map(|x| x.to_lowercase());
-                let keep: Vec<Value> = v["entries"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|e| {
-                        let who = e["player"].as_str().map(str::to_lowercase).unwrap_or_else(|| "sysop".into());
-                        let ty = match e["cmd"]["type"].as_str() {
-                            Some("admin") => format!("admin:{}", e["cmd"]["args"]["action"].as_str().unwrap_or("")),
-                            Some(t) => t.to_string(),
-                            None => String::new(),
-                        };
-                        actor.as_ref().is_none_or(|x| &who == x)
-                            && command.as_ref().is_none_or(|x| &ty == x || ty.ends_with(&format!(":{x}")))
-                            && query.as_ref().is_none_or(|x| e["cmd"].to_string().to_lowercase().contains(x))
-                    })
-                    .take(limit)
-                    .collect();
-                v = json!({"entries": keep});
-            }
-            reply(true, "Journal.", v)
-        }
+        "sysop_journal" => match crate::http::sysop_journal_search(game, p!(JournalArgs)).await {
+            Ok(v) => reply(true, "Journal. Follow next_arguments while has_more is true.", v),
+            Err(e) => reply(false, format!("Journal unavailable: {e}"), Value::Null),
+        },
         "sysop_alerts" => {
             let (open, acked) = alerts_split(game).await;
             let text = if open.is_empty() {

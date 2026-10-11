@@ -808,11 +808,24 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   `include_read=true` and `peek=true`: returned messages may already be marked read,
   but remain stored. Tick or AP advancement alone does not prove a wait completed.
 
+### Operator reliability (engine 1.54)
+- `message` resolves a supplied player strictly by call sign or numeric id. Invalid, empty or null
+  recipients never broadcast; only omission does. Replies list resolved recipient ids.
+- A `set_player` sector change charts a directed lane route to Stardock and sends the captain a
+  trusted notice. No route means refusal before any fields change. Charts do not guarantee safety.
+- Sysop journal searches read durable raw rows across restarts and engine adoption. Follow exclusive
+  `before_seq` / `next_arguments` while `has_more` is true; each request scans at most 10,000 rows.
+  Actor and affected captain are separate filters. Operational clock holds and snapshots are not
+  game commands. Both storage backends implement reverse sequence paging.
+
 ### MCP tools
 - Captain tools: `mcp/src/tools.rs` `build_catalog`; owner tools: `owner_catalog`. Before parsing,
   `tools::coerce_args` turns numeric, boolean or JSON-array strings into their schema types wherever the tool's
   schema allows that type and not a string (some clients send every number as a string); captain, owner
-  and sysop calls all pass through it. Tool descriptions
+  and sysop calls all pass through it. Captain equipment calls accept qty/count aliases and refuse
+  unknown fields before mutation. Repeated unresolved refusals add a short briefing hint from recent
+  telemetry; a later success clears it. `wait_for_event` defaults to 30 seconds, capped at 45.
+  Tool descriptions
   are rendered into the public documentation, so they never name the sysop (say "operator").
 - `find_trade_routes` quotes full cycles including the actual charted return path and an empty
   return when there is no backhaul, using live trade and ship AP costs. Repeatable cycles rank

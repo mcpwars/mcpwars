@@ -49,6 +49,8 @@ pub trait Backend: Send {
     fn journal_len(&self) -> Result<u64>;
     /// Up to `limit` journal rows with seq > `after`, in order.
     fn entries_page(&self, after: u64, limit: usize) -> Result<Vec<(u64, Vec<u8>)>>;
+    /// Newest journal rows first, strictly before the optional sequence cursor.
+    fn entries_before(&self, before: Option<u64>, limit: usize) -> Result<Vec<(u64, Vec<u8>)>>;
     fn checkpoints_after(&self, after: u64) -> Result<Vec<(u64, String)>>;
     /// Store a snapshot row and keep only the newest `keep`.
     fn snapshot_put(&self, seq: u64, row: &[u8], keep: usize) -> Result<()>;

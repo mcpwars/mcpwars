@@ -1002,23 +1002,68 @@ async fn admin(
     }
 }
 
-/// Every sysop/admin write goes through here, and every one of them is a
-/// journaled `Command::Admin`, so the journal stays the single source of truth.
+/// An absent recipient is an intentional broadcast. Any supplied value must resolve.
+async fn admin_recipient(game: &Game, value: Option<&Value>) -> Result<Option<u32>, af_core::Refusal> {
+    let Some(value) = value else { return Ok(None) };
+    let query = match value {
+        Value::Number(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()).map(|n| n.to_string()),
+        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        af_core::Refusal::new(
+            "invalid_args",
+            "player must be a captain name or a valid numeric id; omit player only to broadcast.",
+        )
+    })?;
+    let found = game
+        .read(move |w| {
+            if query.chars().all(|c| c.is_ascii_digit()) {
+                query.parse::<u32>().ok().filter(|id| w.players.contains_key(id))
+            } else {
+                w.players.values().find(|p| p.name.eq_ignore_ascii_case(&query)).map(|p| p.id)
+            }
+        })
+        .await;
+    found
+        .map(Some)
+        .ok_or_else(|| af_core::Refusal::new("unknown_player", "player did not resolve. Nothing was sent or changed."))
+}
+
+/// Sysop/admin actions share this dispatcher. Game mutations are journaled commands;
+/// pause, resume, snapshot and backup operate on the running process or storage.
 /// Returns None for an unknown action.
 pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) -> Option<Result<Value, af_core::Refusal>> {
     let res = match action {
         "set_player" => {
+            let player = match admin_recipient(game, b.get("player")).await {
+                Ok(Some(pid)) => pid,
+                Ok(None) => return Some(Err(af_core::Refusal::new("invalid_args", "player is required."))),
+                Err(e) => return Some(Err(e)),
+            };
+            let sector = match b.get("sector") {
+                None => None,
+                Some(v) => match v.as_u64().and_then(|v| u32::try_from(v).ok()) {
+                    Some(v) => Some(v),
+                    None => {
+                        return Some(Err(af_core::Refusal::new(
+                            "invalid_args",
+                            "sector must be a valid numeric sector id. Nothing was changed.",
+                        )));
+                    }
+                },
+            };
             let opt = |k: &str| b[k].as_i64();
             game.exec(
                 Actor::System,
                 Command::Admin(AdminArgs::SetPlayer {
-                    player: b["player"].as_u64().unwrap_or(0) as u32,
+                    player,
                     credits: opt("credits"),
                     bank: opt("bank"),
                     ap: opt("ap"),
                     alignment: opt("alignment"),
                     experience: opt("experience"),
-                    sector: b["sector"].as_u64().map(|v| v as u32),
+                    sector,
                     fighters: opt("fighters"),
                     shields: opt("shields"),
                     end_protection: b["end_protection"].as_bool(),
@@ -1027,7 +1072,7 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
                 }),
             )
             .await
-            .map(|o| json!({"summary": o.summary, "changed": o.reply["changed"]}))
+            .map(|o| json!({"summary": o.summary, "changed": o.reply["changed"], "relocation": o.reply["relocation"]}))
         }
         "owner_token" => {
             let pid = b["player"].as_u64().unwrap_or(0) as u32;
@@ -1261,17 +1306,22 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
             )
             .await
             .map(|o| json!({"summary": o.summary})),
-        "message" => game
-            .exec(
+        "message" => {
+            let player = match admin_recipient(game, b.get("player")).await {
+                Ok(pid) => pid,
+                Err(e) => return Some(Err(e)),
+            };
+            game.exec(
                 Actor::System,
                 Command::Admin(AdminArgs::Message {
-                    player: b["player"].as_u64().map(|p| p as u32),
+                    player,
                     text: b["text"].as_str().unwrap_or("").to_string(),
                     tell_owner: b["tell_owner"].as_bool().unwrap_or(false),
                 }),
             )
             .await
-            .map(|o| json!({"summary": o.summary, "recipients": o.reply["recipients"]})),
+            .map(|o| json!({"summary": o.summary, "recipients": o.reply["recipients"]}))
+        }
         "create_corp" | "set_corp" | "corp_add_member" | "corp_remove_member" | "corp_invite" | "corp_uninvite" | "disband_corp" => {
             // Corporations and captains may be given by id or by name.
             let corp_q = b["corp"].clone();
@@ -1778,18 +1828,13 @@ pub async fn sysop_player_view(game: &Game, name: String) -> Option<Value> {
     .await
 }
 
-#[derive(Deserialize)]
-struct JournalQ {
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default)]
-    include_ticks: Option<bool>,
-}
-
-/// The most recent journal entries, newest first (ticks hidden unless asked for).
-async fn sysop_journal(State(s): State<AppState>, Query(q): Query<JournalQ>, h: HeaderMap) -> Response {
+/// Durable journal search with bounded pages and explicit continuation.
+async fn sysop_journal(State(s): State<AppState>, Query(q): Query<crate::sysop_mcp::JournalArgs>, h: HeaderMap) -> Response {
     sysop_guard!(s, h);
-    Json(sysop_journal_view(&s.game, q.limit.unwrap_or(200), q.include_ticks.unwrap_or(false)).await).into_response()
+    match sysop_journal_search(&s.game, q).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": e}))).into_response(),
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -1979,27 +2024,77 @@ pub async fn activity_view(game: &Game, name: Option<String>, hours: u64) -> Res
     }))
 }
 
-/// The most recent journal entries, newest first (ticks hidden unless asked for).
-pub async fn sysop_journal_view(game: &Game, limit: usize, ticks: bool) -> Value {
-    let limit = limit.min(1_000);
+/// Search persisted entries rather than the process-local tail. Raw JSON keeps older engine
+/// command shapes readable after adoption. Each request scans at most 10,000 entries; cursors
+/// are exclusive sequence numbers, so concurrent appends cannot duplicate or skip older rows.
+pub async fn sysop_journal_search(game: &Game, mut args: crate::sysop_mcp::JournalArgs) -> Result<Value, String> {
     let names: std::collections::BTreeMap<u32, String> = game.read(|w| w.players.values().map(|p| (p.id, p.name.clone())).collect()).await;
-    let rows: Vec<Value> = {
-        let t = game.journal_tail.lock().unwrap();
-        t.iter()
-            .rev()
-            .filter(|e| ticks || !matches!(e.cmd, Command::Tick))
-            .take(limit)
-            .map(|e| {
-                let (actor, who) = match &e.actor {
-                    Actor::System => ("system".to_string(), None),
-                    Actor::Player(id) => ("player".to_string(), names.get(id).cloned()),
-                    Actor::Owner(id) => ("owner".to_string(), names.get(id).cloned()),
-                };
-                json!({"seq": e.seq, "at_ms": e.at_ms, "actor": actor, "player": who, "cmd": e.cmd})
-            })
-            .collect()
+    let captain_id = |name: &str| {
+        name.parse::<u32>()
+            .ok()
+            .or_else(|| names.iter().find(|(_, n)| n.eq_ignore_ascii_case(name)).map(|(id, _)| *id))
     };
-    json!({"entries": rows})
+    let actor = args.actor.as_ref().map(|s| s.to_lowercase());
+    let actor_id = actor.as_deref().and_then(captain_id);
+    let affected = args.affected_player.as_deref().and_then(captain_id);
+    let command = args.command.as_ref().map(|s| s.to_lowercase());
+    let query = args.query.as_ref().map(|s| s.to_lowercase());
+    let limit = args.limit.unwrap_or(50).clamp(1, 1_000);
+    let mut entries = Vec::new();
+    let mut cursor = args.before_seq;
+    let mut scanned = 0;
+    let mut has_more = false;
+    'pages: loop {
+        let page = game.journal_page(cursor, 1_001).await?;
+        let page_len = page.len();
+        if page_len == 0 {
+            break;
+        }
+        for (i, e) in page.into_iter().take(1_000).enumerate() {
+            let seq = e["seq"].as_u64().ok_or("Journal entry has no sequence")?;
+            cursor = Some(seq);
+            scanned += 1;
+            has_more = i + 1 < page_len;
+            let kind = e["actor"]["kind"].as_str().unwrap_or("system");
+            let id = e["actor"]["id"].as_u64().and_then(|id| u32::try_from(id).ok());
+            let cmd = &e["cmd"];
+            let ty = cmd["type"].as_str().unwrap_or("");
+            let action = cmd["args"]["action"].as_str().unwrap_or("");
+            let command_name = if ty == "admin" { format!("admin:{action}") } else { ty.to_string() };
+            let actor_matches = actor.as_deref().is_none_or(|a| match a {
+                "sysop" | "system" => kind == "system",
+                _ => actor_id.is_some() && actor_id == id,
+            });
+            let target_matches = args.affected_player.is_none()
+                || affected.is_some_and(|id| {
+                    ty == "admin"
+                        && (cmd["args"]["player"].as_u64() == Some(u64::from(id))
+                            || (action == "message" && cmd["args"]["player"].is_null()))
+                });
+            if (args.include_ticks || ty != "tick")
+                && actor_matches
+                && target_matches
+                && command
+                    .as_ref()
+                    .is_none_or(|c| c == &command_name || (ty == "admin" && c == action))
+                && query.as_ref().is_none_or(|q| cmd.to_string().to_lowercase().contains(q))
+            {
+                entries.push(json!({"seq":seq, "at_ms":e["at_ms"], "actor":kind,
+                    "player_id":id, "player":id.and_then(|id| names.get(&id)), "cmd":cmd}));
+            }
+            if entries.len() == limit || scanned == 10_000 {
+                break 'pages;
+            }
+        }
+        if !has_more {
+            break;
+        }
+    }
+    args.before_seq = cursor;
+    args.limit = Some(limit);
+    Ok(json!({"entries":entries, "scanned":scanned, "has_more":has_more,
+        "next_before_seq":if has_more { cursor } else { None },
+        "next_arguments":if has_more { serde_json::to_value(args).ok() } else { None }}))
 }
 
 /// Query parameters of `/api/sysop/constitution`.

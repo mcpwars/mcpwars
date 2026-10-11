@@ -31,6 +31,7 @@ enum Req {
         af_store::private_archive::ArchiveQuery,
         oneshot::Sender<Result<Vec<af_store::private_archive::ArchiveRow>, String>>,
     ),
+    JournalPage(Option<u64>, usize, oneshot::Sender<Result<Vec<serde_json::Value>, String>>),
     Snapshot(oneshot::Sender<()>),
     /// Copy the database between transactions (a consistent online backup).
     Backup(std::path::PathBuf, oneshot::Sender<Result<u64, String>>),
@@ -426,6 +427,22 @@ impl Game {
                                 };
                             let _ = reply.send(ok);
                         }
+                        Req::JournalPage(before, limit, reply) => {
+                            let result = match &store {
+                                Some(st) => st.journal_page(before, limit).map_err(|e| e.to_string()),
+                                None if released => Err("This server handed over; reconnect to the active server.".into()),
+                                None => journal_tail
+                                    .lock()
+                                    .unwrap()
+                                    .iter()
+                                    .rev()
+                                    .filter(|e| before.is_none_or(|b| e.seq < b))
+                                    .take(limit.min(1_001))
+                                    .map(|e| serde_json::to_value(e).map_err(|e| e.to_string()))
+                                    .collect(),
+                            };
+                            let _ = reply.send(result);
+                        }
                         Req::PrivateArchive(q, reply) => {
                             let result = match &store {
                                 Some(st) => st.private_archive(&q).map_err(|e| e.to_string()),
@@ -747,6 +764,12 @@ impl Game {
     /// Whether this server has handed the universe over.
     pub fn is_released(&self) -> bool {
         self.released.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub async fn journal_page(&self, before: Option<u64>, limit: usize) -> Result<Vec<serde_json::Value>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.tx.send(Req::JournalPage(before, limit, tx)).await.map_err(|e| e.to_string())?;
+        rx.await.map_err(|e| e.to_string())?
     }
 
     pub async fn activity(&self, player: Option<PlayerId>, since_ms: u64, limit: usize) -> Vec<crate::activity::Call> {

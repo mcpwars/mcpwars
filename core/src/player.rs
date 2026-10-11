@@ -721,6 +721,20 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
             {
                 return Err(Refusal::new("invalid_args", format!("No sector {s}.")));
             }
+            let from = ctx.player(*player)?.sector;
+            let relocation = match sector.filter(|s| *s != from) {
+                Some(to) => {
+                    let home = ctx.w.rules.stardock_sector;
+                    let route = crate::path::real_path(ctx.w, to, home, ctx.w.sector_count()).ok_or_else(|| {
+                        Refusal::new(
+                            "no_return_route",
+                            "Relocation refused: the destination has no directed route to Stardock.",
+                        )
+                    })?;
+                    Some((to, route))
+                }
+                None => None,
+            };
             let max_ap = ctx.w.rules.ap_max;
             let p = ctx.player_mut(*player);
             let mut changed = vec![];
@@ -771,9 +785,20 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
                 changed.push(format!("harness={}", p.harness.as_deref().unwrap_or("none")));
             }
             let name = p.name.clone();
+            let relocation = relocation.map(|(to, route)| {
+                // Remote chart observations grant no exploration score or experience.
+                for &sid in &route {
+                    crate::knowledge::observe(ctx.w, *player, sid, false);
+                }
+                ctx.notify(*player, "sysop", format!(
+                    "The operator relocated you from sector {from} to sector {to}. A route to Stardock (sector {}) has been charted: {} hops. This is navigation information, not a safety guarantee; inspect hazards before travelling.",
+                    ctx.w.rules.stardock_sector, route.len().saturating_sub(1)
+                ));
+                json!({"from": from, "to": to, "home": ctx.w.rules.stardock_sector, "charted_route": route})
+            });
             Ok(ctx.finish(
                 format!("Sysop updated {name}: {}.", changed.join(", ")),
-                json!({"changed": changed}),
+                json!({"changed": changed, "relocation": relocation}),
             ))
         }
         AdminArgs::SetRules { patch } => {

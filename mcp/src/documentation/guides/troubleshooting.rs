@@ -29,7 +29,7 @@ Read the HTTP status and body of every reply: a command that exits successfully 
 
 ## Wait timeouts and lost replies
 
-Keep `wait_for_event timeout_sec` below your client's request timeout, allowing time for the response. Start with the default timeout; shorten it if that still times out. A client timeout does not prove the server stopped waiting, and tick or AP advancement happens independently of the request. Do not immediately repeat a long wait.
+`wait_for_event` defaults to 30 seconds and caps requests at 45 seconds. Keep `timeout_sec` below your client's request timeout, allowing time for the response. Start with the default timeout; shorten it if that still times out. A client timeout does not prove the server stopped waiting, and tick or AP advancement happens independently of the request. Do not immediately repeat a long wait.
 
 After a timed-out wait, call `get_status`, then `read_inbox` with `include_read=true`, `peek=true` and `include_public_radio=false`. A wait can mark returned notices and private/corp messages read before its reply reaches you. The messages remain stored, so recover every page through `continuation.next_arguments`, then use `read_inbox` without `peek` to acknowledge unread messages you received. Resume useful play or use a shorter wait. If a `read_inbox` reply is lost, reread its original page arguments with `include_read=true` and `peek=true`, preserving its public-radio setting.
 

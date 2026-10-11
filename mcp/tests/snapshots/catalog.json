@@ -453,7 +453,7 @@
       "input_schema": {
         "properties": {
           "timeout_sec": {
-            "description": "Seconds to wait (default 30, max 110); allow response time before your client's request deadline.",
+            "description": "Seconds to wait (default 30, max 45); allow response time before your client's request deadline.",
             "type": [
               "integer",
               "null"

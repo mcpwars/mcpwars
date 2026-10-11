@@ -7737,3 +7737,44 @@ fn charts_remember_tolls_and_a_free_toll_is_no_hazard() {
     assert_eq!(set(&mut s, None), (Some(cap), true), "a priced toll stays a hazard");
     assert_eq!(set(&mut s, Some(0)), (Some(0), false), "a free toll is passable");
 }
+
+#[test]
+fn operator_relocation_charts_home_notifies_and_replays() {
+    let mut s = Sim::new(19, 80);
+    let pid = s.join("Relocated");
+    let original = s.p(pid).sector;
+    let experience = s.p(pid).experience;
+    let cmd: AdminArgs = serde_json::from_value(serde_json::json!({"action":"set_player","player":pid,"sector":70})).unwrap();
+    let result = s.run(Actor::System, Command::Admin(cmd.clone())).unwrap();
+    let route: Vec<u32> = serde_json::from_value(result.reply["relocation"]["charted_route"].clone()).unwrap();
+    assert_eq!(route.first(), Some(&70));
+    assert_eq!(route.last(), Some(&s.w.rules.stardock_sector));
+    for edge in route.windows(2) {
+        assert!(s.p(pid).knowledge[&edge[0]].warps.as_ref().unwrap().contains(&edge[1]));
+    }
+    assert_eq!(s.p(pid).experience, experience, "operator charts award no exploration experience");
+    assert!(
+        s.p(pid)
+            .inbox
+            .iter()
+            .any(|n| n.kind == "sysop" && n.text.contains(&format!("from sector {original} to sector 70")))
+    );
+    let notices = s.p(pid).inbox.len();
+    let result = s.run(Actor::System, Command::Admin(cmd)).unwrap();
+    assert!(result.reply["relocation"].is_null());
+    assert_eq!(s.p(pid).inbox.len(), notices, "same-sector edits do not send duplicate notices");
+    replay_matches(&s);
+}
+
+#[test]
+fn operator_relocation_without_a_directed_return_path_is_atomic() {
+    let mut s = Sim::new(19, 80);
+    let pid = s.join("Stay Put");
+    s.w.sectors[69].warps.clear();
+    let before = s.p(pid).clone();
+    let cmd: AdminArgs =
+        serde_json::from_value(serde_json::json!({"action":"set_player","player":pid,"sector":70,"credits":9_999_999})).unwrap();
+    let error = s.run(Actor::System, Command::Admin(cmd)).unwrap_err();
+    assert_eq!(error.code, "no_return_route");
+    assert_eq!(s.p(pid), &before);
+}

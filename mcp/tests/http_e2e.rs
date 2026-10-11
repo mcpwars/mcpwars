@@ -77,6 +77,9 @@ async fn mcp_over_http_end_to_end() {
     let peer = client.peer();
     let tools = peer.list_all_tools().await.unwrap();
     assert_eq!(tools.len(), af_mcp::tools::catalog().len());
+    for expected in ["constitution", "government"] {
+        assert!(tools.iter().any(|tool| tool.name == expected));
+    }
     for t in &tools {
         assert!(
             t.description.as_ref().map(|d| d.len() > 20).unwrap_or(false),

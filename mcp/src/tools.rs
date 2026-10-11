@@ -127,7 +127,7 @@ pub struct JoinArgs {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct WaitArgs {
-    /// Seconds to wait (default 30, max 110); allow response time before your client's request deadline.
+    /// Seconds to wait (default 30, max 45); allow response time before your client's request deadline.
     #[serde(default)]
     pub timeout_sec: Option<u64>,
 }
@@ -367,7 +367,7 @@ fn build_catalog() -> Vec<ToolDef> {
             false,
             false,
             "Hardware emporium at Stardock: fighters, shields, holds, mines, beacons, Genesis torpedoes, ether probes, scanners, TransWarp drive, limpet removal. Omit quantity for the max you can afford/carry. 0 AP.",
-        ),
+        ).with_examples(vec![json!({"item":"holds", "quantity":1})]),
         def::<BankArgs>(
             "bank",
             false,
@@ -627,7 +627,7 @@ fn coerce(v: &mut Value, schema: &Value, root: &Value) {
             })
             .or_else(|| {
                 if types.contains(&"boolean") {
-                    match t {
+                    match t.to_ascii_lowercase().as_str() {
                         "true" => Some(json!(true)),
                         "false" => Some(json!(false)),
                         _ => None,
@@ -723,24 +723,88 @@ where
     }
 }
 
+/// Leave a response margin below common 60-second client deadlines.
+pub fn wait_timeout(requested: Option<u64>) -> u64 {
+    requested.unwrap_or(30).clamp(1, 45)
+}
+
+/// Normalize common aliases before parsing; reject unknown equipment fields rather than
+/// silently buying the maximum when a misspelled quantity is ignored.
+fn captain_args(defs: &[ToolDef], name: &str, args: &Value) -> Result<Value, Refusal> {
+    let mut args = args.clone();
+    if name == "constitution" && args["action"] == "list" {
+        args["action"] = json!("view");
+    }
+    if let Some(obj) = args.as_object_mut() {
+        let aliases: &[(&str, &str)] = match name {
+            "buy_equipment" => &[("qty", "quantity"), ("count", "quantity"), ("equipment", "item")],
+            "write_note" => &[("text", "value"), ("content", "value")],
+            _ => &[],
+        };
+        for (alias, canonical) in aliases {
+            if let Some(value) = obj.remove(*alias) {
+                if obj.contains_key(*canonical) {
+                    return Err(Refusal::new(
+                        "invalid_args",
+                        format!("Use only {canonical}, not both {canonical} and {alias}. Nothing was done."),
+                    ));
+                }
+                obj.insert((*canonical).into(), value);
+            }
+        }
+        if name == "buy_equipment" && obj.keys().any(|k| !["item", "quantity"].contains(&k.as_str())) {
+            return Err(Refusal::new(
+                "invalid_args",
+                "buy_equipment accepts item and quantity. Example: {\"item\":\"holds\",\"quantity\":1}. Nothing was done.",
+            ));
+        }
+    }
+    Ok(coerce_args(defs, name, &args))
+}
+
 /// Dispatch a tool call for an authenticated player.
 pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolReply {
     let defs = catalog();
     if let Some(r) = unsupported_preview(&defs, name, args) {
         return refusal(game, pid, r).await;
     }
-    let args = &coerce_args(&defs, name, args);
+    let normalized = match captain_args(&defs, name, args) {
+        Ok(args) => args,
+        Err(r) => return refusal(game, pid, r).await,
+    };
+    let args = &normalized;
     macro_rules! p {
         ($t:ty) => {
             match parse::<$t>(args) {
                 Ok(a) => a,
-                Err(r) => return refusal(game, pid, r).await,
+                Err(mut r) => {
+                    if let Some(def) = defs.iter().find(|d| d.name == name) {
+                        let fields = def
+                            .schema
+                            .get("properties")
+                            .and_then(Value::as_object)
+                            .map(|p| p.keys().cloned().collect::<Vec<_>>().join(", "))
+                            .unwrap_or_default();
+                        let example = def
+                            .documentation
+                            .examples
+                            .first()
+                            .map(|v| format!(" Example: {v}."))
+                            .unwrap_or_default();
+                        r = r.hint(format!("Valid fields: {fields}.{example}"));
+                    }
+                    return refusal(game, pid, r).await;
+                }
             }
         };
     }
     match name {
         "get_briefing" => {
             let a = p!(BriefingArgs);
+            let recent = game
+                .activity(Some(pid), crate::game::now_ms().saturating_sub(6 * 3_600_000), 1_000)
+                .await;
+            let refusal_hint = crate::activity::refusal_hint(&recent);
             let summary = if a.compact { "Compact briefing." } else { "Briefing." };
             ask(game, pid, summary, move |w| {
                 let mut briefing = query::briefing_with(w, pid, &a)?;
@@ -750,6 +814,9 @@ pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolR
                     "rules_url": "/world.txt",
                     "troubleshooting_url": "/troubleshooting.txt",
                 });
+                if let Some(hint) = refusal_hint {
+                    briefing["server"]["refusal_hint"] = hint;
+                }
                 Ok(briefing)
             })
             .await
@@ -801,7 +868,7 @@ pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolR
         }
         "wait_for_event" => {
             let a = p!(WaitArgs);
-            let timeout = a.timeout_sec.unwrap_or(30).clamp(1, 110);
+            let timeout = wait_timeout(a.timeout_sec);
             let start = game.read(move |w| query::notice_watermark(w, pid)).await;
             let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout);
             loop {
@@ -827,7 +894,13 @@ pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolR
                     }
                 }
                 if tokio::time::Instant::now() >= deadline {
-                    return envelope(game, pid, format!("Nothing happened in {timeout}s."), json!({"timed_out": true})).await;
+                    return envelope(
+                        game,
+                        pid,
+                        format!("Nothing happened in {timeout}s."),
+                        json!({"timed_out": true, "timeout_sec": timeout}),
+                    )
+                    .await;
                 }
             }
         }
