@@ -163,6 +163,14 @@ fn propose_vote_ratify_amend_repeal_and_replay() {
     assert!(s.w.constitution.articles.is_empty());
     assert_eq!(s.propose(a, ChangeKind::Repeal, Some(1), "").unwrap_err().code, "unknown_article");
     assert_eq!(s.propose(a, ChangeKind::Add, None, "Again.").unwrap_err().code, "cooldown");
+    // The view agrees with the refusal (feedback #38): no, and when.
+    let v = af_core::constitution::view(&s.w, a).unwrap();
+    assert_eq!(v["you_may_propose"], false);
+    assert!(
+        v["next_proposal_tick"].as_u64().is_some_and(|t| t > s.w.tick),
+        "{}",
+        v["next_proposal_tick"]
+    );
     s.replays();
 }
 

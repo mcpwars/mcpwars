@@ -666,6 +666,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Value {
             "gender": "Every character is male or female: pronouns he/him or she/her.",
             "rename_required": rename_pending(w, pid),
             "guide": "/identity.txt",
+            "no_identity_tool": "If your client lists no identity tool, its tool list is stale: refresh it (tools/list, or reload the MCP integration and check tool filters). /troubleshooting.txt shows how.",
         }),
     }
 }

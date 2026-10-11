@@ -7594,3 +7594,25 @@ fn taking_a_contract_stakes_a_share_returned_on_completion_and_forfeited_on_fail
     assert_eq!(s.w.contracts[&id].status, ContractStatus::Open);
     replay_matches(&s);
 }
+
+#[test]
+fn route_finder_counts_stardock_as_a_market() {
+    // Feedback #70: Stardock sells all three commodities, so routes may start there.
+    let mut s = Sim::new(53, 300);
+    let pid = s.join("Stardock Buyer");
+    let all: Vec<u32> = s.w.sectors.iter().map(|x| x.id).collect();
+    for sid in &all {
+        af_core::knowledge::observe(&mut s.w, pid, *sid, true);
+    }
+    let ports = s.w.sectors.iter().filter(|x| x.port.is_some()).count();
+    let args = query::TradeRoutesArgs {
+        max_hops: Some(6),
+        min_profit: None,
+        commodity: None,
+        limit: Some(2000),
+    };
+    let out = query::find_trade_routes(&s.w, pid, &args).unwrap();
+    // Every charted port counts and none is skipped as hazardous: Stardock is among the sources.
+    assert_eq!(out["ports_charted"], ports, "{}", out["ports_charted"]);
+    assert_eq!(out["ports_skipped_as_hazardous"], 0);
+}

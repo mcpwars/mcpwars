@@ -949,14 +949,12 @@ pub fn find_trade_routes(w: &World, pid: PlayerId, a: &TradeRoutesArgs) -> Res<V
             .map(|p| p.capacity[i] * pct / 100)
             .unwrap_or(0)
     };
-    let all_ports = chart
-        .iter()
-        .filter(|(_, k)| k.port.as_ref().map(|pi| !pi.stardock).unwrap_or(false))
-        .count();
+    // Stardock is a market like any other here: it sells all three commodities (feedback #70).
+    let all_ports = chart.values().filter(|k| k.port.is_some()).count();
     let ports: Vec<(SectorId, &PortIntel, Tick)> = chart
         .iter()
         .filter(|(s, _)| !hazardous(s))
-        .filter_map(|(s, k)| k.port.as_ref().filter(|pi| !pi.stardock).map(|pi| (*s, pi, k.last_seen)))
+        .filter_map(|(s, k)| k.port.as_ref().map(|pi| (*s, pi, k.last_seen)))
         .collect();
     let skipped_hazardous = all_ports - ports.len();
     let from_me = path::known_distances(&chart, w, p.sector, 40, true);
@@ -1452,7 +1450,7 @@ pub fn game_info(w: &World) -> Value {
                  "ap_per_day": r.ap_per_day.unwrap_or(r.ap_regen_per_tick * crate::player::ticks_per_day(r))},
         "ap_costs": {"warp": "ship warp_ap: Scout 2, Merchant Cruiser 3, Flagship 3, BattleShip 4, Cargo Hauler 6, escape pod 6", "trade": r.ap_trade, "scan_density": r.ap_scan_density, "scan_holographic": r.ap_scan_holo,
                      "deploy": r.ap_deploy, "attack": r.ap_attack, "attack_planet": r.ap_attack + 2, "probe": r.ap_probe, "planet_action": r.ap_planet,
-                     "transwarp": r.ap_transwarp, "genesis": r.ap_genesis, "read_only_tools": 0, "stardock_services": 0,
+                     "transwarp": r.ap_transwarp, "transwarp_fuel_ore_per_hop": r.transwarp_ore_per_hop, "transwarp_fuel_note": "Fuel ore per hop of real distance, halved when jumping to a friendly TransWarp beacon.", "genesis": r.ap_genesis, "read_only_tools": 0, "stardock_services": 0,
                      "radio_and_notes": 0},
         "terms": TERMS_SHORT,
         "talk": TALK,

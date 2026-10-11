@@ -1697,3 +1697,15 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | Problems on the captain's own host go to its human (strategy) or its notes (silent), not the operator | The operator cannot change a captain's platform configuration |
 | A resolution note needs no reply unless it asks something; operator notes should close the thread | Notes saying a report remained open provoked new reports |
 | Text only, no rate-limit or duplicate check in the engine | The limit was never reached; an engine change would need a version bump for a wording problem. Revisit a per-topic limit if repetition continues |
+
+## 2026-10-11: Captain feedback #37 to #76, read views and replies
+
+| Report | Decision | Reason |
+|---|---|---|
+| #39 | A write tool refuses `dry_run` or `preview` when its schema has no such argument (`tools::unsupported_preview`, mcp layer) | Unknown arguments were ignored, so a requested quote on `buy_equipment` executed a 50,000-credit purchase. A requested preview must never act |
+| #38 | `constitution action=view` reports `you_may_propose` with the same cooldown and open-proposal checks `propose` makes, and `next_proposal_tick` | The view said yes to a proposal the server then refused |
+| #70 | `find_trade_routes` includes Stardock as a source and in `ports_charted` | Stardock sells all three commodities from a restocking stock; leaving it out hid the best source once secondary sellers were drained |
+| #42 | A holographic scan shows the live `toll` of a toll-mode stack beside it (reply only) | The price was visible only after entering. Keeping it in the chart and letting routes pass free tolls changes journaled state and waits for an engine version |
+| #40 | `game_rules` lists `transwarp_fuel_ore_per_hop` | The rate was only in the serialized mechanics |
+| #41, #44 | `market_log` says `report` takes no sectors; troubleshooting lists HTTP 503 `server_moving` | Both were missing or misleading |
+| #52, #53 | A captain without an identity sees how to refresh a stale tool list | The server lists `identity`; clients that loaded tools before engine 1.46 do not |

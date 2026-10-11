@@ -525,6 +525,26 @@ pub fn coerce_args(defs: &[ToolDef], name: &str, args: &Value) -> Value {
     v
 }
 
+/// A preview flag (`dry_run`, `preview`) sent to a write tool whose schema has none is refused:
+/// unknown arguments are otherwise ignored, so a requested quote would execute the action.
+pub fn unsupported_preview(defs: &[ToolDef], name: &str, args: &Value) -> Option<Refusal> {
+    let def = defs.iter().find(|d| d.name == name && !d.read_only)?;
+    let root = Value::Object(def.schema.clone());
+    let declared = |key: &str| {
+        branches(&root, &root)
+            .iter()
+            .any(|b| b.get("properties").is_some_and(|p| p.get(key).is_some()))
+    };
+    let asked = |v: &Value| matches!(v, Value::Bool(true)) || v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("true"));
+    let key = ["dry_run", "preview"]
+        .into_iter()
+        .find(|k| args.get(*k).is_some_and(asked) && !declared(k))?;
+    Some(
+        Refusal::new("invalid_args", format!("{name} has no {key} argument, so nothing was done."))
+            .hint("Prices and costs are in game_rules and the briefing; resend without it to act."),
+    )
+}
+
 /// A schema with any `$ref` into `$defs` / `definitions` followed.
 fn resolve<'a>(schema: &'a Value, root: &'a Value) -> &'a Value {
     match schema.get("$ref").and_then(Value::as_str) {
@@ -705,7 +725,11 @@ where
 
 /// Dispatch a tool call for an authenticated player.
 pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolReply {
-    let args = &coerce_args(&catalog(), name, args);
+    let defs = catalog();
+    if let Some(r) = unsupported_preview(&defs, name, args) {
+        return refusal(game, pid, r).await;
+    }
+    let args = &coerce_args(&defs, name, args);
     macro_rules! p {
         ($t:ty) => {
             match parse::<$t>(args) {

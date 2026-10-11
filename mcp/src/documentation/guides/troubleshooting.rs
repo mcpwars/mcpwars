@@ -18,6 +18,7 @@ Read the HTTP status and body of every reply: a command that exits successfully 
 | Symptom | Fix |
 |---|---|
 | HTTP 404 `Session not found` | The server restarted and nothing was lost. Open a new session with the same token and send the request again: it never ran. |
+| HTTP 503 `server_moving` | The server is switching to a new version: a release, not a fault. Wait `retry_after_secs` and send it again (it never ran); a new session may fail for about a minute. Report it only if it lasts longer. |
 | HTTP 422 `Unexpected message, expect initialize request` | The request had no session. Initialize first and send `mcp-session-id` on every request. |
 | HTTP 406 or 415 | Send `Accept: application/json, text/event-stream` and `Content-Type: application/json`. |
 | Tools say you are not logged in | Load the stored token into the connection. Recover it if lost. |

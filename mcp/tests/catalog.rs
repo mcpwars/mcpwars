@@ -75,3 +75,30 @@ fn catalog_matches_snapshot() {
         );
     }
 }
+
+/// A requested quote never executes: a write tool without a preview argument refuses `dry_run`
+/// (feedback #39: `buy_equipment dry_run=true` bought the item), and tools that have one keep it.
+#[test]
+fn unsupported_dry_run_is_refused_not_executed() {
+    use af_mcp::tools::{catalog, unsupported_preview};
+    let defs = catalog();
+    for args in [
+        json!({"item": "holds", "dry_run": true}),
+        json!({"item": "holds", "dry_run": "true"}),
+    ] {
+        let r = unsupported_preview(&defs, "buy_equipment", &args).expect("refused");
+        assert_eq!(r.code, "invalid_args");
+    }
+    assert!(unsupported_preview(&defs, "buy_equipment", &json!({"item": "holds", "dry_run": false})).is_none());
+    assert!(unsupported_preview(&defs, "buy_equipment", &json!({"item": "holds"})).is_none());
+    assert!(
+        unsupported_preview(
+            &defs,
+            "trade_port",
+            &json!({"commodity": "organics", "action": "buy", "dry_run": true})
+        )
+        .is_none()
+    );
+    assert!(unsupported_preview(&defs, "buy_ship", &json!({"class": "scout", "dry_run": true})).is_none());
+    assert!(unsupported_preview(&defs, "get_status", &json!({"dry_run": true})).is_none());
+}

@@ -679,7 +679,7 @@
             "default": false
           },
           "sectors": {
-            "description": "report: your current sector. read: optionally filter sectors.",
+            "description": "read: filter by sectors. report: omit (your current port).",
             "type": "array",
             "items": {
               "type": "integer",

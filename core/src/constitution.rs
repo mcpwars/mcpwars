@@ -348,6 +348,27 @@ pub struct ConstitutionArgs {
 
 // ---------- electorate ----------
 
+/// Open proposals that count toward `constitution_max_open` (the carry vote does not).
+fn open_count(w: &World) -> usize {
+    w.constitution
+        .proposals
+        .iter()
+        .filter(|p| p.status == ProposalStatus::Open && p.change != ProposalKind::Carry)
+        .count()
+}
+
+/// The captain's last proposal tick and the tick its next proposal may open.
+fn cooldown(w: &World, pid: PlayerId) -> Option<(Tick, Tick)> {
+    let last = w
+        .constitution
+        .proposals
+        .iter()
+        .filter(|p| p.proposer == pid)
+        .map(|p| p.opened_tick)
+        .max()?;
+    Some((last, last + w.rules.constitution_cooldown_ticks))
+}
+
 /// Captains who may vote on a proposal opened now: real, unbanned captains that acted within
 /// `constitution_electorate_ticks`.
 pub fn electorate(w: &World) -> BTreeSet<PlayerId> {
@@ -453,12 +474,7 @@ fn propose(ctx: &mut Ctx, pid: PlayerId, a: &ConstitutionArgs) -> Res<Outcome> {
             article: article_exists(w, a.article)?,
         },
     };
-    let open = w
-        .constitution
-        .proposals
-        .iter()
-        .filter(|p| p.status == ProposalStatus::Open && p.change != ProposalKind::Carry)
-        .count();
+    let open = open_count(w);
     if open >= r.constitution_max_open {
         return Err(Refusal::new(
             "too_many_proposals",
@@ -466,22 +482,14 @@ fn propose(ctx: &mut Ctx, pid: PlayerId, a: &ConstitutionArgs) -> Res<Outcome> {
         )
         .hint("Vote on the open ones (constitution action=view); propose when one closes."));
     }
-    if let Some(last) = w
-        .constitution
-        .proposals
-        .iter()
-        .filter(|p| p.proposer == pid)
-        .map(|p| p.opened_tick)
-        .max()
+    if let Some((last, next)) = cooldown(w, pid)
+        && w.tick < next
     {
-        let next = last + r.constitution_cooldown_ticks;
-        if w.tick < next {
-            return Err(Refusal::new(
-                "cooldown",
-                format!("You proposed a change at tick {last}; your next proposal may open at tick {next}."),
-            )
-            .hint("Argue for your open proposal on the radio, or vote on others."));
-        }
+        return Err(Refusal::new(
+            "cooldown",
+            format!("You proposed a change at tick {last}; your next proposal may open at tick {next}."),
+        )
+        .hint("Argue for your open proposal on the radio, or vote on others."));
     }
     let electorate = electorate(w);
     if !electorate.contains(&pid) {
@@ -1226,12 +1234,7 @@ pub fn operator_propose(
         Some(n) if !n.trim().is_empty() => Some(operator_text(n, "The note")?),
         _ => None,
     };
-    let open = w
-        .constitution
-        .proposals
-        .iter()
-        .filter(|p| p.status == ProposalStatus::Open && p.change != ProposalKind::Carry)
-        .count();
+    let open = open_count(w);
     if open >= r.constitution_max_open {
         return Err(Refusal::new(
             "too_many_proposals",
@@ -1509,12 +1512,15 @@ pub fn view(w: &World, pid: PlayerId) -> Res<Value> {
         .take(10)
         .map(|p| proposal_json(p, Some(pid)))
         .collect();
-    let eligible = electorate(w).contains(&pid);
+    // The same checks `propose` makes, so the view never says yes to a proposal it would refuse.
+    let next_tick = cooldown(w, pid).map(|(_, next)| next).filter(|&next| w.tick < next);
+    let eligible = electorate(w).contains(&pid) && next_tick.is_none() && open_count(w) < r.constitution_max_open;
     let mut v = json!({
         "articles": c.articles.iter().map(|a| article_json(a, false, false)).collect::<Vec<_>>(),
         "open_proposals": open,
         "recent_proposals": recent,
         "you_may_propose": eligible,
+        "next_proposal_tick": next_tick,
         "rules": {
             "electorate": format!("Captains that acted in the last {} ticks when a proposal opens; only they vote on it.", r.constitution_electorate_ticks),
             "ratify": format!("A proposal passes the moment a majority of its electorate votes yes; otherwise it fails after {} ticks (never past the season's end). Your proposal counts as your yes vote; you may change a vote while it is open.", r.constitution_vote_ticks),

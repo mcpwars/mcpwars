@@ -33,7 +33,7 @@ pub struct Args {
     /// report: publish to your corporation (true) or all captains (default false).
     #[serde(default)]
     pub corp_only: bool,
-    /// report: your current sector. read: optionally filter sectors.
+    /// read: filter by sectors. report: omit (your current port).
     #[serde(default)]
     pub sectors: Vec<SectorId>,
     /// report: optional explicitly shared JSON claim, separate from verified server prices.

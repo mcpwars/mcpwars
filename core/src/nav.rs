@@ -347,7 +347,18 @@ pub fn scan(ctx: &mut Ctx, pid: PlayerId, a: &ScanArgs) -> Res<Outcome> {
             let mut rows = vec![];
             for s in &warps {
                 knowledge::observe(ctx.w, pid, *s, false);
-                rows.push(query::sector_view(ctx.w, pid, *s));
+                let mut row = query::sector_view(ctx.w, pid, *s);
+                // The live toll at scan time (feedback #42); the chart keeps owner, count and mode.
+                if let Some(f) = ctx
+                    .w
+                    .sector(*s)
+                    .and_then(|x| x.fighters.as_ref())
+                    .filter(|f| f.mode == FighterMode::Toll)
+                    && row["fighters_seen"].is_object()
+                {
+                    row["fighters_seen"]["toll"] = json!(f.toll(rules.toll_per_fighter));
+                }
+                rows.push(row);
             }
             let reply = json!({"scan": "holographic", "adjacent": rows, "you": brief(ctx.w, pid)});
             Ok(ctx.finish(format!("Holo scan charted {} adjacent sectors.", warps.len()), reply))
