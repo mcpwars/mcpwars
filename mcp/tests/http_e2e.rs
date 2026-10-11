@@ -1553,3 +1553,76 @@ async fn feedback_memory_compact_digest_and_shared_log_over_real_mcp() {
     assert_eq!(alias.text().await.unwrap(), canonical);
     client.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chronicle_clear_requires_admin_and_explicit_confirmation_over_http_and_mcp() {
+    use af_core::Command;
+    use af_core::engine::Actor;
+    let (url, game) = start().await;
+    let (pid, _, _, _) = game
+        .register_full("Ada Mbeki", Some("test".into()), None, false, af_core::model::PlayerKind::Agent)
+        .await
+        .unwrap();
+    game.exec(
+        Actor::Player(pid),
+        Command::Identity(Box::new(af_core::identity::Args {
+            action: af_core::identity::Action::Set,
+            age: Some(47),
+            pronouns: Some("she/her".into()),
+            homeworld: Some("Lowmoor".into()),
+            bio: Some("A welder turned trader.".into()),
+            backstory: Some("A farm with real soil.".into()),
+            ..Default::default()
+        })),
+    )
+    .await
+    .unwrap();
+    let create = Command::Chronicle(af_core::chronicle::Args {
+        action: af_core::chronicle::Action::Write,
+        title: Some("Old character".into()),
+        body: Some("An obsolete story.".into()),
+        ..Default::default()
+    });
+    let old = game.exec(Actor::Player(pid), create.clone()).await.unwrap().reply["page"]
+        .as_u64()
+        .unwrap();
+    let player_count = game.read(|w| w.players.len()).await;
+    let http = reqwest::Client::new();
+    let endpoint = format!("{url}/api/sysop/action/chronicle_clear");
+    let confirm = json!({"confirm": "clear chronicle"});
+    assert_eq!(http.post(&endpoint).json(&confirm).send().await.unwrap().status(), 401);
+    let refused = http.post(&endpoint).bearer_auth("adm").json(&json!({})).send().await.unwrap();
+    assert_eq!(refused.status(), 400);
+    assert_eq!(refused.json::<Value>().await.unwrap()["error"]["code"], "confirm_required");
+    assert_eq!(game.read(|w| w.chronicle.pages.len()).await, 1);
+    let reply: Value = http
+        .post(&endpoint)
+        .bearer_auth("adm")
+        .json(&confirm)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reply["result"]["pages_removed"], 1);
+    assert_eq!(game.read(|w| w.chronicle.pages.len()).await, 0);
+    assert_eq!(
+        http.get(format!("{url}/api/public/chronicle/page?id={old}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    let new = game.exec(Actor::Player(pid), create).await.unwrap().reply["page"].as_u64().unwrap();
+    assert!(new > old);
+    let client = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
+    let mut request = CallToolRequestParams::new("sysop_action");
+    request.arguments = Some(json!({"action": "chronicle_clear", "args": confirm}).as_object().unwrap().clone());
+    let (ok, response) = text(&client.peer().call_tool_once(request).await.unwrap());
+    assert!(ok, "{response}");
+    assert_eq!(game.read(|w| w.chronicle.pages.len()).await, 0);
+    assert_eq!(game.read(|w| w.players.len()).await, player_count);
+    client.cancel().await.unwrap();
+}

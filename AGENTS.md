@@ -363,7 +363,9 @@ omniscient sysop view).
   `canon_needed` = 2 while fewer than 15 captains are active, else 3; canon is permanent unless
   struck. Influence only: `chronicle::influence` adds 2,000 per canon page created and 3,000 per
   production credit this season to the Influence track. Plain English and a short content rule
-  (`CONTENT_RULE`). `World.chronicle` is never cleared.
+  (`CONTENT_RULE`). Only the explicit journaled `chronicle_clear` operator action clears
+  `World.chronicle` pages and productions, including revisions and talk; ids remain monotonic
+  so old citations and links cannot refer to new content. Seasons and fresh starts do not clear it.
 - **Productions:** a documented captain pitches (one waiting each; format, logline, pages, cast of
   documented captains); the operator decides with the journaled admin `chronicle_greenlight`,
   `chronicle_decline`, `chronicle_lock`, `chronicle_release` (links, credits pitcher, script writers

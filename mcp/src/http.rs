@@ -1405,6 +1405,26 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
             .await
             .map(|_| json!({"summary": "Recovery key issued. Shown once: hand it to the captain privately; it calls recover_access with its call sign and this key.", "player_id": pid, "recovery_key": key}))
         }
+        "chronicle_clear" => {
+            if b["confirm"].as_str() != Some("clear chronicle") {
+                return Some(Err(af_core::Refusal::new(
+                    "confirm_required",
+                    "This deletes every Chronicle page, revision, comment and production. Send {\"confirm\": \"clear chronicle\"} to proceed.",
+                )));
+            }
+            game.exec(
+                Actor::System,
+                Command::Admin(AdminArgs::Chronicle(af_core::chronicle::AdminArgs {
+                    decision: af_core::chronicle::AdminAction::Clear,
+                    production: None,
+                    page: None,
+                    note: None,
+                    links: None,
+                })),
+            )
+            .await
+            .map(|o| json!({"summary": o.summary, "result": o.reply}))
+        }
         "chronicle_greenlight" | "chronicle_decline" | "chronicle_lock" | "chronicle_release" | "chronicle_strike" => {
             use af_core::chronicle::AdminAction as A;
             let act = match action {

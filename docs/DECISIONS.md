@@ -1650,3 +1650,10 @@ truth and vote pages into canon.
 | A relation linked to a captain is shown under the captain's current call sign; a relation whose name is a captain's current or former call sign is linked when written | Owner: "all relations need to be corrected to new names". Linking by id makes later renames follow automatically |
 | The journaled admin `FixRelations` brings existing relations up to date as a new version (links by name, current names, old call signs in notes replaced) and tells each captain | Relations written before the renames named old call signs and two were not linked at all |
 
+
+## 2026-10-11: Explicitly clear an obsolete Chronicle (engine 1.52)
+
+| Decision | Reason |
+|---|---|
+| A new journaled Chronicle admin decision clears all pages, their revisions and discussion, and all productions; the operator action requires `confirm: "clear chronicle"` | The owner requested erasing every existing Chronicle because it describes old characters. Striking only hides text and leaves titles and operator histories. A separate action leaves captains, identities, the galaxy and ordinary season/fresh-start behavior intact |
+| Preserve the page, comment and production id counters | Old links and saved citations must never resolve to unrelated replacement content. The immutable journal retains the original writes and the explicit clear as the audit record |

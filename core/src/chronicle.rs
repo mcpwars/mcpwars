@@ -13,8 +13,8 @@
 //! greenlights, captains write the script page together, its cast approve it, the operator locks
 //! and produces it outside the game and releases it here with credits.
 //!
-//! Nothing is ever deleted and the store survives Big Bangs and fresh starts. The operator may
-//! strike a page that breaks the content rule; struck text is replaced everywhere it appears.
+//! The store survives Big Bangs and fresh starts. The operator may strike a page that breaks
+//! the content rule, or explicitly clear the entire Chronicle with a journaled admin command.
 use crate::engine::{Ctx, Outcome, Refusal, Res};
 use crate::model::{Channel, PlayerId, Tick, World};
 use schemars::JsonSchema;
@@ -341,6 +341,7 @@ pub enum AdminAction {
     Lock,
     Release,
     Strike,
+    Clear,
 }
 
 /// Journaled inside the internally tagged `cmd::AdminArgs` (tag `action`), so the decision is
@@ -1133,6 +1134,17 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
     let note = line("note", a.note.as_deref().unwrap_or(""), LOGLINE_MAX)?;
     let (tick, at_ms, season, epoch) = (ctx.w.tick, ctx.w.now_ms, ctx.w.season.number, ctx.w.archive.epoch);
     match a.decision {
+        AdminAction::Clear => {
+            let pages = ctx.w.chronicle.pages.len();
+            let productions = ctx.w.chronicle.productions.len();
+            ctx.w.chronicle.pages.clear();
+            ctx.w.chronicle.productions.clear();
+            // Keep ids monotonic: old links and citations must never resolve to a new page.
+            Ok(ctx.finish(
+                format!("Chronicle cleared: {pages} page(s), {productions} production(s)."),
+                json!({"pages_removed": pages, "productions_removed": productions}),
+            ))
+        }
         AdminAction::Strike => {
             let id = page_of(ctx.w, a.page)?.id;
             let page = ctx.w.chronicle.pages.get_mut(&id).expect("found above");

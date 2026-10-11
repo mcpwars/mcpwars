@@ -804,3 +804,75 @@ fn relations_follow_renames() {
     assert_eq!((rel.captain, rel.name.as_str()), (Some(a), "Reupena Masina"));
     assert_eq!(rel.note, "Reupena Masina covers my flank.");
 }
+
+#[test]
+fn clearing_the_chronicle_removes_every_record_without_reusing_ids_or_resetting_captains() {
+    let mut s = Sim::new();
+    let a = s.join("Ada Mbeki").unwrap();
+    s.document(a, "Lowmoor");
+    let create = chronicle::Args {
+        action: chronicle::Action::Write,
+        title: Some("Old character".into()),
+        body: Some("An obsolete story.".into()),
+        ..Default::default()
+    };
+    let page = s.chronicle(a, create.clone()).unwrap().reply["page"].as_u64().unwrap();
+    s.chronicle(
+        a,
+        chronicle::Args {
+            action: chronicle::Action::Write,
+            page: Some(page),
+            body: Some("A second obsolete revision.".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    s.chronicle(
+        a,
+        chronicle::Args {
+            action: chronicle::Action::Talk,
+            page: Some(page),
+            text: Some("An obsolete comment.".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let pitch = chronicle::Args {
+        action: chronicle::Action::Pitch,
+        title: Some("Old production".into()),
+        text: Some("An obsolete episode.".into()),
+        format: Some(chronicle::Format::Audio),
+        ..Default::default()
+    };
+    let production = s.chronicle(a, pitch.clone()).unwrap().reply["production"].as_u64().unwrap();
+    s.admin(admin(AdminAction::Greenlight, Some(production), None, None)).unwrap();
+    let players = s.w.players.clone();
+    let sectors = s.w.sectors.clone();
+    let counters = (s.w.chronicle.next_page, s.w.chronicle.next_comment, s.w.chronicle.next_production);
+    let clear = admin(AdminAction::Clear, None, None, None);
+    assert!(
+        s.run(Actor::Player(a), Command::Admin(AdminArgs::Chronicle(clear.clone())))
+            .is_err()
+    );
+    assert_eq!(s.w.chronicle.pages.len(), 2, "captains cannot clear it");
+    let out = s.admin(clear.clone()).unwrap();
+    assert_eq!(out.reply, serde_json::json!({"pages_removed": 2, "productions_removed": 1}));
+    assert!(s.w.chronicle.pages.is_empty());
+    assert!(s.w.chronicle.productions.is_empty());
+    assert!(chronicle::public_page(&s.w, page).is_none());
+    assert_eq!(s.w.players, players);
+    assert_eq!(s.w.sectors, sectors);
+    assert_eq!(
+        (s.w.chronicle.next_page, s.w.chronicle.next_comment, s.w.chronicle.next_production),
+        counters
+    );
+    assert_eq!(
+        s.admin(clear).unwrap().reply,
+        serde_json::json!({"pages_removed": 0, "productions_removed": 0})
+    );
+    let new_page = s.chronicle(a, create).unwrap().reply["page"].as_u64().unwrap();
+    let new_production = s.chronicle(a, pitch).unwrap().reply["production"].as_u64().unwrap();
+    assert!(new_page > counters.0 && new_production > counters.2);
+    assert!(chronicle::public_page(&s.w, page).is_none());
+    s.replays();
+}

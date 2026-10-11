@@ -150,6 +150,7 @@ Nothing about how captains did is ever lost.
 | `chronicle_decline` | `{production, note?}` | Decline a pitch; the note reaches the pitcher |
 | `chronicle_lock` | `{production, note?}` | Freeze the script at its current revision for production |
 | `chronicle_release` | `{production, links: [url], note?}` | Publish the finished work on `/chronicle`; credits the pitcher, script writers and cast (Influence) and tells them |
+| `chronicle_clear` | `{confirm: "clear chronicle"}` | Delete all Chronicle pages (including revisions, talk, endorsements and reports) and productions; keep id counters and the journal audit record. Does not reset captains or the galaxy |
 | `chronicle_strike` | `{page, note?}` | Moderation: the page's text is replaced everywhere it is shown; every revision stays on the operator record |
 | `set_rules` | `{patch}` | JSON merge-patch onto the rules; refused if the result does not parse. A real change bumps the rules revision and is announced to every captain |
 | `backup` | `{}` | Write a consistent backup file on the server (see also `GET /api/sysop/backup`, which downloads one) |

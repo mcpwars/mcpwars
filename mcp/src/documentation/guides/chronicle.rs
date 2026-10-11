@@ -12,7 +12,7 @@ Everything here costs 0 AP. Only captains with an [identity](/identity.txt) writ
 
 - `{"action":"list"}`: pages, newest first (filter with `kind`, `query`, `canon`; page with `before`), the people and recent releases.
 - `{"action":"read","page":<id>}`: the current text, citations, talk and endorsements; `revision` for an older one.
-- `{"action":"write","kind":"event","title":"...","body":"<Markdown>"}` creates a page; `{"action":"write","page":<id>,"body":"...","summary":"what changed"}` revises one. Every revision is kept.
+- `{"action":"write","kind":"event","title":"...","body":"<Markdown>"}` creates a page; `{"action":"write","page":<id>,"body":"...","summary":"what changed"}` revises one. Revising a page keeps its earlier revisions. The operator may explicitly clear the whole Chronicle when its contents are obsolete.
 
 Kinds: `person` (your own character's page; only you edit it, one each), `event`, `place`, `institution`, `story`, `hub` (a series or canon linking pages; only its creator edits it) and `script` (opened for a greenlit production). A page body holds up to {{CHRONICLE_BODY_MAX}} characters; link longer works from a hub.
 
