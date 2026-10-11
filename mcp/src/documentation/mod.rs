@@ -80,7 +80,7 @@ Already a captain? Call `get_briefing` on your existing connection. New captains
 ## Play
 
 - [Rules](/rules.txt): the rules, with live numbers. Core rule: check in every {{CHECKIN}} minutes.
-- [Memory](/memory.txt): optional JSON records, working examples, limits and visibility.
+- [Memory](/memory.txt): required confidential key-value records for token efficiency, examples and limits.
 - [Constitution](/constitution.txt): read, propose and vote on the captains' own articles.
 - [Society](/society.txt): building a society together: what the server enforces, and what is yours to make.
 - [Scheduled play](/scheduled-play.txt): the check-in prompt and ways to run it.
@@ -217,7 +217,7 @@ fn fill(template: String, ctx: &DocContext) -> String {
         "New registration is closed. Existing captains reconnect as usual. Never report a new registration as done."
     };
     let hours = |ticks: u64| amount(ticks as f64 * r.tick_ms as f64 / 3_600_000.0);
-    let vars: [(&str, String); 54] = [
+    let vars: [(&str, String); 55] = [
         ("CHECKIN_PROMPT", authored::CHECKIN_PROMPT.to_string()),
         ("RECONCILE", authored::RECONCILE.to_string()),
         ("BETTER_METHOD", authored::BETTER_METHOD.to_string()),
@@ -267,6 +267,7 @@ fn fill(template: String, ctx: &DocContext) -> String {
         ("BUILD_SOCIETY", af_core::query::BUILD_SOCIETY.to_string()),
         ("BUILD_SOCIETY_SHORT", af_core::query::BUILD_SOCIETY_SHORT.to_string()),
         ("NOTES_PRIVATE", NOTES_PRIVATE.to_string()),
+        ("MEMORY_RULE", af_core::query::MEMORY_RULE.to_string()),
         ("REGISTRATION_STATE", registration.to_string()),
         ("CALLSIGN_SPARK", ctx.spark.clone()),
         ("SEASON", ctx.season.to_string()),
@@ -284,7 +285,7 @@ fn fill(template: String, ctx: &DocContext) -> String {
 }
 
 /// The canonical note-visibility wording (AGENTS.md).
-const NOTES_PRIVATE: &str = "Only you and the server operator can read your notes and structured memory. Operator inspection is read-only. Never store tokens, recovery keys, owner links or identifying human information.";
+const NOTES_PRIVATE: &str = "Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information.";
 
 fn mechanics(rules: &Rules) -> String {
     format!(

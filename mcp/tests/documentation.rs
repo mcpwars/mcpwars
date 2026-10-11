@@ -307,9 +307,14 @@ async fn setup_pages_are_two_steps_on_one_page() {
     // The Markdown plan is required, on both setup pages and in the rules.
     for (path, page) in [("/join", &join), ("/agents.txt", &agents)] {
         assert!(
-            page.contains("A plan is required.") && page.contains("your plan is written"),
+            page.contains("Markdown plan") && page.contains("Both are required.") && page.contains("your plan is written"),
             "{path}"
         );
+        assert!(
+            page.contains("key-value memory for token efficiency") && page.contains("Both are required."),
+            "{path}"
+        );
+        assert!(page.contains("confidential") && page.contains("/memory.txt"), "{path}");
     }
     assert!(document(&http, &url, "rules.txt").await.contains("A Markdown plan is required."));
     assert!(!document(&http, &url, "troubleshooting.txt").await.contains("agents.txt"));
@@ -390,6 +395,10 @@ async fn setup_pages_are_two_steps_on_one_page() {
             "{path}: {prompt}"
         );
         assert!(prompt.contains("A check-in is a full session, not one call"), "{path}");
+        assert!(
+            prompt.contains("required Markdown plan") && prompt.contains("confidential key-value memory"),
+            "{path}"
+        );
     }
     assert!(!join.contains("\"autonomous\":true"), "a human's captain is not autonomous");
     assert!(
@@ -601,9 +610,31 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
     // Execute the captain guide in order: create, read, checked patch, nested read, list.
     let memory = document(&http, &url, "memory.txt").await;
     assert!(memory.contains("Only you and the server operator"));
+    assert!(memory.contains(af_core::query::MEMORY_RULE));
+    assert!(memory.contains("permanent server journal"));
+    assert!(!memory.contains("optional structured memory") && !memory.contains("whether to use it"));
     assert!(memory.contains("There is no delete action"));
     assert!(document(&http, &url, "llms.txt").await.contains("/memory.txt"));
     assert!(document(&http, &url, "rules.txt").await.contains("/memory.txt"));
+    assert!(document(&http, &url, "rules.txt").await.contains(af_core::query::MEMORY_RULE));
+    assert!(document(&http, &url, "scheduled-play.txt").await.contains("Both are required"));
+    let server_config = serde_json::to_value(af_mcp::server::server_config()).unwrap();
+    assert!(
+        server_config["instructions"]
+            .as_str()
+            .unwrap()
+            .contains(af_core::query::MEMORY_RULE)
+    );
+    let memory_tool = captain
+        .peer()
+        .list_all_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t.name == "memory")
+        .unwrap();
+    let description = memory_tool.description.unwrap();
+    assert!(description.contains("Required confidential key-value memory for token efficiency"));
     let examples = json_blocks(&memory);
     assert_eq!(examples.len(), 5);
     for args in examples {
@@ -617,6 +648,50 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
             "memory example {args} refused: {:?}",
             reply.content
         );
+    }
+
+    // Full, compact and section-filtered briefings must keep both requirements available.
+    for (tool, args) in [
+        ("game_rules", json!({})),
+        ("get_briefing", json!({})),
+        ("get_briefing", json!({"compact": true, "sections": []})),
+    ] {
+        let mut request = CallToolRequestParams::new(tool.to_string());
+        request.arguments = args.as_object().cloned();
+        let CallToolResponse::Complete(reply) = captain.peer().call_tool_once(request).await.unwrap() else {
+            panic!("rule guidance request must complete")
+        };
+        assert!(!reply.is_error.unwrap_or(false));
+        let result = reply
+            .content
+            .iter()
+            .find_map(|block| {
+                let ContentBlock::Text(text) = block else { return None };
+                text.text
+                    .split_once('\n')
+                    .and_then(|(_, body)| serde_json::from_str::<Value>(body).ok())
+            })
+            .expect("rule guidance has a JSON envelope")["result"]
+            .clone();
+        if tool == "game_rules" {
+            assert_eq!(result["plan"]["required"], true);
+            assert_eq!(result["private_memory"]["required"], true);
+            assert_eq!(result["private_memory"]["rule"], af_core::query::MEMORY_RULE);
+        } else {
+            assert_eq!(result["plan"]["memory_rule"], af_core::query::MEMORY_RULE);
+        }
+        if args["compact"] == true {
+            assert!(result["plan"]["rule"].is_null(), "compact reads omit the full plan explanation");
+            assert!(
+                result["plan"]["memory_rule"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Keep the required Markdown plan")
+            );
+        } else {
+            assert_eq!(result["plan"]["rule"], af_core::query::PLAN_RULE);
+            assert!(result["plan"]["rule"].as_str().unwrap().contains("are confidential"));
+        }
     }
 
     let resources = json_blocks(&document(&http, &url, "resources.txt").await).remove(0);
@@ -635,6 +710,11 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
         serde_json::to_value(captain.peer().list_all_prompts().await.unwrap()).unwrap()
     );
     for archetype in af_mcp::prompts::ARCHETYPES {
+        assert!(
+            af_mcp::prompts::render(archetype.name, None)
+                .unwrap()
+                .contains(af_core::query::MEMORY_RULE)
+        );
         assert!(
             prompt_document.contains(&af_mcp::prompts::render(archetype.name, None).unwrap()),
             "the complete prompt {} is available without truncation",

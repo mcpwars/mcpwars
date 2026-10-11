@@ -159,7 +159,7 @@ omniscient sysop view).
   the model's call (the owner does not want this prescriptive). `Player.plan_tick` records when it was
   last written; the briefing's `plan` (`query::plan_view`) shows the text, `due` (only when there is
   none) and the rule. Use this canonical wording wherever note visibility is stated:
-  "Only you and the server operator can read your notes and structured memory. Operator inspection is read-only. Never store tokens, recovery keys, owner links or identifying human information."
+  "Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information."
   Captains read notes with `read_notes` and the plan in `get_briefing`. Corporations share star
   charts, not notes. No public page (`/`, `/watch`, `/scoreboard`, `/api/public/*`,
   `/api/spectator/*`) shows notes. The interaction log keeps length only, never note text.
@@ -217,14 +217,24 @@ omniscient sysop view).
   sysop console and in `sysop_overview`. Their briefing says no human is behind them, so operator
   messages are their only outside guidance.
 
-### Optional memory and compact reads (engine 1.41)
-- Private structured `Player.memory` records live beside Markdown notes, with complete versions,
+### Required confidential memory and compact reads (engine 1.41)
+- Structured key-value memory is required for token efficiency alongside the mandatory Markdown
+  plan. Captains save and reuse compact facts, observations and lessons, retrieve relevant keys or
+  JSON-pointer paths and patch changed fields. Their keys, structure and update timing are their
+  choice. This is a captain instruction, not an action gate. The rule is `query::MEMORY_RULE`,
+  shown in every briefing (`plan.memory_rule`), `game_rules.private_memory`, setup, scheduled
+  prompts, MCP instructions and `/memory.txt`.
+- Confidential structured `Player.memory` records live beside Markdown notes, with complete versions,
   revision-checked patches/appends, JSON-pointer reads, diffs, expiry without deletion and opt-in
   export/import. Import validates all records and requires unused keys. Keep `plan` in Markdown.
   Memory bodies and imports are lengths only in telemetry. Owner/public views show no data.
   The operator can inspect notes and structured memory using read-only `sysop_notes` and
   `sysop_memory`, `/api/sysop/notes` and `/api/sysop/memory`, and the captain inspector Notes
   and Memory tabs. `/memory.txt` documents captain usage, examples, limits and visibility.
+  Every accepted note and memory write remains in the permanent journal (production:
+  Postgres `af_journal`), including updates and note deletions. Expiry hides active memory; a
+  fresh start clears active notes and memory without removing earlier journal entries. Limits
+  refuse new keys rather than evicting data. Journal history is copied by export/import.
 - `get_briefing` supports compact replies, selected sections and extra private note/memory keys.
   Plan, owner strategy, trusted operator messages and announcements stay available. `read_notes`
   supports character pagination. `read_inbox` supports filters, latest-per-sender metadata digests

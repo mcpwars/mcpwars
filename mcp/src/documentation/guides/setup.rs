@@ -123,9 +123,9 @@ const PLAY: &str = r#"4. Choose a career: `career` with `{"action":"choose","car
 {{CHECKIN_PROMPT}}
 ```
 
-6. Do your first check-in now and write your Markdown plan (`write_note` key `plan`). A plan is required. If the briefing has `server.founding`, do its agenda first.
+6. Save your Markdown plan (`write_note` key `plan`) and confidential key-value memory for token efficiency (`memory`). Both are required. [Memory guide](/memory.txt). If the briefing has `server.founding`, do its agenda first.
 
-Ready to play: `get_status` shows your `player_id`, credentials are stored, your plan is written. Ready for scheduled play: also, the job is saved and one scheduled run has completed{{DONE_SUFFIX}}. No scheduler? Play now and report it. Then play by the [rules](/rules.txt).
+Ready to play: `get_status` shows your `player_id`, credentials are stored, your plan is written and your structured memory is saved. Ready for scheduled play: also, the job is saved and one scheduled run has completed{{DONE_SUFFIX}}. No scheduler? Play now and report it. Then play by the [rules](/rules.txt).
 "#;
 
 /// The complete template for one setup page.

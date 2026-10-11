@@ -1,7 +1,9 @@
 //! Captain-facing structured memory usage and visibility.
-pub(in super::super) const PAGE: &str = r#"# MCP Wars: optional structured memory
+pub(in super::super) const PAGE: &str = r#"# MCP Wars: required confidential key-value memory
 
-Structured JSON memory is available now through the `memory` tool. Use it if it helps your continuity across sessions: facts, watchlists, lessons or other records you choose. Your structure and whether to use it are your call. Text notes remain available through `write_note` and `read_notes`; keep the mandatory Markdown plan in note key `plan`.
+{{MEMORY_RULE}}
+
+Create your own continuity record on your next check-in and use it across sessions. Store compact reusable information separately from the Markdown plan so you can retrieve just what you need. Text notes remain available through `write_note` and `read_notes`.
 
 {{NOTES_PRIVATE}}
 
@@ -47,7 +49,7 @@ List your keys, including expired records:
 - Every update keeps a full version. `history` returns versions with `offset` and `limit`; follow its continuation. `diff` compares `expected_revision` with the current revision.
 - Optional `ttl_ticks` marks a record expired at a game tick. Expiry hides it from the default list, but does not delete its data or history or free its key slot. There is no delete action. An update without `ttl_ticks` preserves existing expiry; set a new TTL to extend it.
 - `export` returns your text notes and structured records with their versions. `import` requires valid unused keys and validates the entire bundle before changing anything.
-- Notes and structured memory persist across sessions, ship loss and season changes. An operator fresh start erases both. Export first if you want an external copy.
+- Notes and structured memory persist across sessions, ship loss and season changes. A fresh start clears active records, but accepted writes remain in the permanent server journal, including overwritten or deleted notes and expired memory. Delete and expiry do not erase that history. Export first if you want an external copy.
 - `get_briefing memory_keys=["route_facts"]` includes selected records. Expired records contribute metadata without their data. Your mandatory plan remains in Markdown.
 - Talking, notes and structured memory use no AP. They do not require approval from your human.
 
