@@ -300,11 +300,9 @@ impl Args {
 pub fn documented(w: &World, pid: PlayerId) -> bool {
     match w.players.get(&pid) {
         Some(p) if p.kind == PlayerKind::Npc || p.npc.is_some() => true,
-        Some(_) => w
-            .identities
-            .get(&pid)
-            .and_then(Identity::current)
-            .is_some_and(|v| gender(&v.pronouns).is_some()),
+        Some(_) => w.identities.get(&pid).is_some_and(|i| {
+            i.current().is_some_and(|v| gender(&v.pronouns).is_some()) && !(w.rename_required.contains(&pid) && i.renamed_tick.is_none())
+        }),
         None => false,
     }
 }
@@ -316,7 +314,11 @@ pub fn gate(w: &World, pid: PlayerId) -> Res<()> {
             "identity_required",
             "You have no complete identity yet, so you cannot spend action points. Reading, radio, notes and the identity tool stay free.",
         )
-        .hint("Invent the character you play and record them: identity action=set with age, pronouns (he/him or she/her: every character is male or female), homeworld, bio and backstory (0 AP). Guide: /identity.txt."));
+        .hint(if rename_pending(w, pid) {
+            "Your one rename is mandatory: identity action=set name=\"<your character's name>\" (a real character's name, sharing no word with your old call sign), with age, pronouns (he/him or she/her), homeworld, bio and backstory if you have not written them (0 AP). Guide: /identity.txt."
+        } else {
+            "Invent the character you play and record them: identity action=set with age, pronouns (he/him or she/her: every character is male or female), homeworld, bio and backstory (0 AP). Guide: /identity.txt."
+        }));
     }
     Ok(())
 }
@@ -335,6 +337,28 @@ pub fn normalize_pronouns(s: &str) -> Option<&'static str> {
         "sheher" | "she" | "her" | "sheherhers" | "female" | "woman" => Some("she/her"),
         _ => None,
     }
+}
+
+/// Must this captain still use its mandatory rename?
+pub fn rename_pending(w: &World, pid: PlayerId) -> bool {
+    w.rename_required.contains(&pid) && w.identities.get(&pid).is_none_or(|i| i.renamed_tick.is_none())
+}
+
+/// List every current captain that has not renamed (engine 1.48).
+pub fn require_rename(ctx: &mut Ctx) -> Res<Outcome> {
+    let ids: Vec<PlayerId> = ctx
+        .w
+        .players
+        .values()
+        .filter(|p| p.npc.is_none() && p.kind != PlayerKind::Npc)
+        .filter(|p| ctx.w.identities.get(&p.id).is_none_or(|i| i.renamed_tick.is_none()))
+        .map(|p| p.id)
+        .collect();
+    ctx.w.rename_required.extend(ids.iter().copied());
+    Ok(ctx.finish(
+        format!("{} captain(s) must rename.", ids.len()),
+        json!({"rename_required": ids.len()}),
+    ))
 }
 
 /// The refusal for a name that is overused by models.
@@ -376,7 +400,7 @@ pub fn card(w: &World, pid: PlayerId) -> Option<Value> {
 pub fn briefing(w: &World, pid: PlayerId) -> Value {
     let Some(p) = w.players.get(&pid) else { return Value::Null };
     let ident = w.identities.get(&pid);
-    match ident.and_then(Identity::current).filter(|v| gender(&v.pronouns).is_some()) {
+    match ident.and_then(Identity::current).filter(|_| documented(w, pid)) {
         Some(v) => {
             let why = match v.why.trim_end() {
                 "" => String::new(),
@@ -401,6 +425,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Value {
             "ap_blocked": w.rules.identity_required,
             "action": {"tool": "identity", "arguments": {"action": "set", "age": "<18 to 120>", "pronouns": "<he/him or she/her>", "homeworld": "<...>", "bio": "<public>", "backstory": "<private Markdown>"}},
             "gender": "Every character is male or female: pronouns he/him or she/her.",
+            "rename_required": rename_pending(w, pid),
             "guide": "/identity.txt",
         }),
     }
@@ -481,6 +506,7 @@ pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
                 }),
                 "versions": ident.map_or(0, |i| i.versions.len()),
                 "rename_available": ident.is_none_or(|i| i.renamed_tick.is_none()),
+                "rename_required": rename_pending(w, pid),
                 "former_names": ident.map(|i| i.former_names.clone()).unwrap_or_default(),
                 "recent": story(w, pid, true, None, 5),
                 "rule": RULE,
@@ -732,6 +758,19 @@ fn set(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
                 "Names are 2-24 characters: letters, digits, spaces, - _ ' . Nothing was stored.",
             ));
         }
+        let words = |s: &str| -> Vec<String> {
+            s.split(|c: char| !c.is_alphanumeric())
+                .filter(|w| w.len() > 1)
+                .map(str::to_lowercase)
+                .collect()
+        };
+        let old_words = words(&old_name);
+        if let Some(w) = words(n).into_iter().find(|w| old_words.contains(w)) {
+            return Err(Refusal::new(
+                "name_too_close",
+                format!("'{w}' is part of your old call sign; your character's name must be new. Nothing was stored."),
+            ));
+        }
         if let Some(word) = overused(n) {
             return Err(Refusal::new(
                 "name_overused",
@@ -856,6 +895,7 @@ pub fn operator_view(w: &World) -> Value {
                 "versions": i.map(|i| i.versions.clone()).unwrap_or_default(),
                 "former_names": i.map(|i| i.former_names.clone()).unwrap_or_default(),
                 "renamed_tick": i.and_then(|i| i.renamed_tick),
+                "rename_required": rename_pending(w, p.id),
                 "log_entries": i.map_or(0, |i| i.log.len()),
                 "moments": i.map_or(0, |i| i.moments.len()),
             })

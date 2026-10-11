@@ -870,6 +870,10 @@ pub struct World {
     /// Captain identities (engine 1.46): the human each captain plays. Never cleared.
     #[serde(default)]
     pub identities: BTreeMap<PlayerId, crate::identity::Identity>,
+    /// Engine 1.48: captains that must use their one rename to take a character's name before
+    /// they count as documented (the captains of record when the operator required it).
+    #[serde(default)]
+    pub rename_required: BTreeSet<PlayerId>,
     /// The Chronicle (engine 1.46): the captains' shared wiki and productions. Never cleared.
     #[serde(default)]
     pub chronicle: crate::chronicle::Chronicle,

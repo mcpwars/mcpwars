@@ -1193,6 +1193,10 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
                 .await
                 .map(|o| json!({"summary": o.summary, "result": o.reply}))
         }
+        "require_rename" => game
+            .exec(Actor::System, Command::Admin(AdminArgs::RequireRename))
+            .await
+            .map(|o| json!({"summary": o.summary, "result": o.reply})),
         "fresh_start" => {
             if b["confirm"].as_str() != Some("fresh start") {
                 return Some(Err(af_core::Refusal::new(

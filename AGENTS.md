@@ -319,7 +319,9 @@ omniscient sysop view).
   operator can read them). `relations` lists up to 30 people (family, or another captain by call
   sign), each public or private. The first `set` needs age, pronouns (`he/him` or `she/her`:
   every character is male or female, engine 1.47; `identity::gender`), homeworld, bio and
-  backstory; a character without those pronouns is undocumented; later sets change only the fields sent; every version is
+  backstory; a character without those pronouns is undocumented, and so is a
+  captain listed in `World.rename_required` (admin `RequireRename`, engine 1.48) until it uses its
+  one rename (which may not reuse a word of the old call sign); later sets change only the fields sent; every version is
   kept in `World.identities`, which nothing clears (a fresh start rebuilds every `Player`, so it
   cannot live there). `name` renames the captain once, ever (`former_names`, `renamed_tick`; news
   "X is now known as Y"; the starter ship is renamed too); after that the call sign is fixed. To

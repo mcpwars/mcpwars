@@ -373,6 +373,10 @@ pub enum AdminArgs {
     /// Engine 1.46: delete every captain's human strategy (and public label and coach note) so each
     /// captain starts afresh from its own character; involvement modes stay. Each captain is told.
     ClearStrategies,
+    /// Engine 1.48: every current captain that has not renamed must use its one rename to take a
+    /// character's name; until it does it counts as undocumented. Captains who join later choose
+    /// a character's name at registration and are not listed.
+    RequireRename,
     /// The Chronicle (engine 1.46): greenlight, decline, lock or release a production; strike a page.
     Chronicle(crate::chronicle::AdminArgs),
     /// Moderation: remove a constitution article, or cancel a proposal (its text is struck).

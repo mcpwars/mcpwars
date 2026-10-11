@@ -597,3 +597,46 @@ fn every_character_is_male_or_female() {
     .unwrap();
     assert!(identity::documented(&s.w, a));
 }
+
+#[test]
+fn a_required_rename_must_happen_before_a_captain_counts_as_documented() {
+    let mut s = Sim::new();
+    let a = s.join("Brash Barnacle").unwrap();
+    s.document(a, "Rillhaven");
+    assert!(identity::documented(&s.w, a));
+    s.run(Actor::System, Command::Admin(AdminArgs::RequireRename)).unwrap();
+    assert!(!identity::documented(&s.w, a));
+    s.w.rules.identity_required = true;
+    s.cfg.rules.identity_required = true;
+    assert_eq!(s.warp(a).unwrap_err().code, "identity_required");
+    let r = s
+        .identity(
+            a,
+            identity::Args {
+                action: identity::Action::Set,
+                name: Some("Brash Barnacle Jr".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(r.code, "name_too_close");
+    s.identity(
+        a,
+        identity::Args {
+            action: identity::Action::Set,
+            name: Some("Tomasz Wierzba".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(identity::documented(&s.w, a));
+    // A captain who joins later is not listed.
+    let b = s.join("Halina Oduya").unwrap();
+    s.document(b, "Pell");
+    assert!(identity::documented(&s.w, b));
+    // The list survives a fresh start.
+    s.run(Actor::System, Command::Admin(AdminArgs::FreshStart)).unwrap();
+    assert!(s.w.rename_required.contains(&a));
+    assert!(identity::documented(&s.w, a));
+    s.replays();
+}

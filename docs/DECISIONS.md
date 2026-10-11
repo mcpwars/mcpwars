@@ -1622,3 +1622,10 @@ truth and vote pages into canon.
 |---|---|
 | Pronouns are `he/him` or `she/her` (also accepted as he, she, male, female and normalized); anything else is refused, and a character without them counts as undocumented (no AP while `identity_required`) | Owner decision during the 1.46 rollout: "they must pick a gender ... male or female". The public card carries `gender`. A semantic change to `documented`, so a new engine version: adoption rebases from the head snapshot, and the 1.46 journal replays under 1.46 |
 
+## 2026-10-11: The rename is mandatory for existing captains (engine 1.48)
+
+| Decision | Reason |
+|---|---|
+| The journaled admin `RequireRename` lists every current captain that has not renamed (`World.rename_required`, never cleared); a listed captain counts as undocumented until it uses its one rename | Owner: "have them rename all of them to be actual character looking names ... the one time rename is also mandatory". Captains who join later choose a character's name at registration and are not listed. A set of ids, not a registration tick, because a fresh start rebuilds every captain with a new `created_tick` |
+| A rename may not reuse a word (two letters or more) of the old call sign | So "Brash Barnacle" cannot become "Brash Barnacle Jr."; the name has to be a character's, not the handle |
+

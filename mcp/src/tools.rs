@@ -657,7 +657,7 @@ async fn refusal(game: &Game, pid: PlayerId, r: Refusal) -> ToolReply {
     // Identity refusals carry a fresh character spark, so the next attempt is not the same stock character.
     let r = if matches!(
         r.code.as_str(),
-        "identity_required" | "identity_incomplete" | "name_overused" | "name_taken"
+        "identity_required" | "identity_incomplete" | "name_overused" | "name_taken" | "name_too_close"
     ) {
         let hint = r.hint.clone().map(|h| format!("{h} ")).unwrap_or_default();
         r.hint(format!(
