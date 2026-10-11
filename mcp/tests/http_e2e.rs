@@ -839,6 +839,12 @@ async fn feedback_reaches_the_operator() {
     // The sysop list, newest first, filtered by status; the admin token is required.
     let r = http.get(format!("{url}/api/sysop/feedback")).send().await.unwrap();
     assert_eq!(r.status(), 401);
+    let refused: Value = r.json().await.unwrap();
+    let notice = refused["notice"].as_str().unwrap_or_default();
+    assert!(
+        notice.contains("core violation") && notice.contains("permanent elimination"),
+        "{refused}"
+    );
     let list = |q: &'static str| {
         let (http, url) = (http.clone(), url.clone());
         async move {

@@ -1,4 +1,4 @@
-//! Confidential working memory. Archived bodies remain in the durable store, outside the world.
+//! Private working memory. Archived bodies remain in the durable store, outside the world.
 use crate::engine::{Ctx, Outcome, Refusal, Res};
 use crate::model::{PlayerId, Tick, World};
 use schemars::JsonSchema;
@@ -29,7 +29,7 @@ pub enum Action {
     /// Changes from expected_revision to the current revision, keyed by JSON pointer.
     Diff,
     History,
-    /// Archive for permanent operator history.
+    /// Retire a record: it leaves every read, history and export.
     Archive,
     Export,
     Import,
@@ -307,7 +307,7 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             return Err(Refusal::new("conflict", "Revision changed; read before archiving."));
         }
         retire(ctx.player_mut(pid), &k);
-        return Ok(ctx.finish(format!("Archived confidential memory '{k}'."), json!({"key":k,"archived":true})));
+        return Ok(ctx.finish(format!("Archived private memory '{k}'."), json!({"key":k,"archived":true})));
     }
     if !matches!(a.action, Action::Save | Action::Patch | Action::Append) {
         return Err(Refusal::new("invalid_args", "Use a read action through the memory tool."));
@@ -341,6 +341,21 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         ));
     }
     let mut data = a.data.clone().ok_or_else(|| Refusal::new("invalid_args", "data is required."))?;
+    // Some clients send JSON as a string; a string patch would otherwise replace the whole record.
+    if let Some(parsed) = data
+        .as_str()
+        .filter(|s| s.trim_start().starts_with(['{', '[']))
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+    {
+        data = parsed;
+    }
+    if a.action == Action::Patch && !data.is_object() {
+        return Err(Refusal::new(
+            "invalid_args",
+            "patch takes a JSON object of fields to merge (null removes a field). Nothing was saved.",
+        )
+        .hint("Use save with expected_revision to replace the whole record."));
+    }
     if a.action == Action::Patch {
         let mut next = old.unwrap().data.clone();
         merge(&mut next, &data);
@@ -385,9 +400,10 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         retire(p, &k);
     }
     p.memory_revisions.insert(k.clone(), next_revision);
+    let fields: Option<Vec<String>> = v.data.as_object().map(|o| o.keys().cloned().collect());
     p.memory.entry(k.clone()).or_default().versions.push(v);
     Ok(ctx.finish(
         format!("Saved private memory '{k}' revision {}.", next_revision),
-        json!({"key": k, "revision": next_revision}),
+        json!({"key": k, "revision": next_revision, "fields": fields}),
     ))
 }

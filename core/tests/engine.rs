@@ -7133,3 +7133,140 @@ fn private_archive_reuse_slots_reset_and_captain_access() {
     }
     assert_eq!(s.w.state_hash(), replay.state_hash());
 }
+
+#[test]
+fn empty_note_writes_are_refused_and_an_empty_plan_is_due() {
+    let mut s = Sim::new(882, 30);
+    let a = s.join("Blank Pilot");
+    let note = |value: &str, mode| {
+        Command::Note(NoteArgs {
+            key: "plan".into(),
+            value: value.into(),
+            mode,
+        })
+    };
+    let out = s.run(Actor::Player(a), note("# Plan\nTrade.", None)).unwrap();
+    assert!(out.summary.contains("13 characters"), "{}", out.summary);
+    let before = s.w.state_hash();
+    for (value, mode) in [("", None), ("  \n", None), ("", Some(NoteMode::Append))] {
+        let err = s.run(Actor::Player(a), note(value, mode)).unwrap_err();
+        assert_eq!(err.code, "invalid_args");
+        assert!(err.message.contains("`value`"));
+    }
+    assert_eq!(s.w.state_hash(), before, "a refused write changes nothing");
+    assert_eq!(s.p(a).notes["plan"], "# Plan\nTrade.");
+    replay_matches(&s);
+    // A plan stored empty by an older engine counts as missing.
+    s.w.players.get_mut(&a).unwrap().notes.insert("plan".into(), String::new());
+    assert_eq!(af_core::query::plan_view(s.p(a))["due"], true);
+}
+
+#[test]
+fn memory_accepts_json_strings_and_patches_merge_only_objects() {
+    use af_core::memory::{Action, Args};
+    let mut s = Sim::new(883, 30);
+    let a = s.join("String Pilot");
+    let args = |action, data: serde_json::Value, revision| Args {
+        action,
+        key: Some("continuity".into()),
+        data: Some(data),
+        expected_revision: Some(revision),
+        ttl_ticks: None,
+        path: None,
+        include_archived: false,
+        offset: None,
+        limit: None,
+    };
+    let save = args(Action::Save, serde_json::json!(r#"{"lessons":["fills, not signs"],"seat":12}"#), 0);
+    let out = s.run(Actor::Player(a), Command::Memory(save)).unwrap();
+    assert_eq!(out.reply["fields"], serde_json::json!(["lessons", "seat"]));
+    // A patch sent as a JSON string merges like an object instead of replacing the record.
+    let patch = args(Action::Patch, serde_json::json!(r#"{"seat":14}"#), 1);
+    s.run(Actor::Player(a), Command::Memory(patch)).unwrap();
+    let read = af_core::memory::read(&s.w, a, &args(Action::Read, serde_json::Value::Null, 2)).unwrap();
+    assert_eq!(read["data"], serde_json::json!({"lessons":["fills, not signs"],"seat":14}));
+    let before = s.w.state_hash();
+    for bad in [serde_json::json!("seat 15"), serde_json::json!([1, 2])] {
+        let err = s.run(Actor::Player(a), Command::Memory(args(Action::Patch, bad, 2))).unwrap_err();
+        assert_eq!(err.code, "invalid_args");
+    }
+    assert_eq!(s.w.state_hash(), before, "a refused patch changes nothing");
+    replay_matches(&s);
+}
+
+#[test]
+fn delete_operator_text_removes_announcements_news_radio_and_inbox_copies() {
+    let mut s = Sim::new(112, 60);
+    let a = s.join("Reader");
+    let b = s.join("Writer");
+    let secret = "only you and the server operator can read them";
+    s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::Broadcast {
+            message: format!("MEMORY IS LIVE. Notes: {secret}."),
+            pin: true,
+        }),
+    )
+    .unwrap();
+    s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::Message {
+            player: None,
+            text: format!("OPERATOR: {secret}."),
+            tell_owner: false,
+        }),
+    )
+    .unwrap();
+    // A captain quoting it in a hail is the captain's own text and stays.
+    s.run(
+        Actor::Player(b),
+        Command::Radio(RadioArgs {
+            channel: RadioChannel::Private,
+            message: format!("Did you see? {secret}"),
+            recipient_id: Some(a.to_string()),
+        }),
+    )
+    .unwrap();
+    s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::Message {
+            player: Some(a),
+            text: "An unrelated operator message.".into(),
+            tell_owner: false,
+        }),
+    )
+    .unwrap();
+    let short = s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::DeleteOperatorText {
+            contains: "operator".into(),
+        }),
+    );
+    assert!(short.is_err());
+    s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::DeleteOperatorText { contains: secret.into() }),
+    )
+    .unwrap();
+    assert!(!s.w.announcements.iter().any(|x| x.text.contains(secret)));
+    assert!(!s.w.news.iter().any(|x| x.headline.contains(secret)));
+    assert!(!s.w.radio.iter().any(|m| m.from == SYSOP && m.text.contains(secret)));
+    for pid in [a, b] {
+        assert!(!s.p(pid).inbox.iter().any(|n| n.kind == "sysop" && n.text.contains(secret)));
+    }
+    assert!(s.p(a).inbox.iter().any(|n| n.kind == "hail" && n.text.contains(secret)));
+    assert!(s.p(a).inbox.iter().any(|n| n.text == "An unrelated operator message."));
+    let brief = query::briefing(&s.w, a).unwrap().to_string();
+    assert!(!brief.contains("OPERATOR: only you"));
+    assert!(!query::game_info(&s.w).to_string().contains(secret));
+    let again = s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::DeleteOperatorText { contains: secret.into() }),
+    );
+    assert!(again.is_err());
+    let mut replay = generate(&s.cfg);
+    for e in &s.journal {
+        let _ = apply(&mut replay, e);
+    }
+    assert_eq!(replay.state_hash(), s.w.state_hash());
+}

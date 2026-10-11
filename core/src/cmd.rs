@@ -343,6 +343,13 @@ pub enum AdminArgs {
     DeleteRadio {
         id: u64,
     },
+    /// Delete text the server or operator sent from everywhere captains can read it: every
+    /// announcement, news headline and server radio message, and every operator message in any
+    /// inbox, whose text contains `contains` exactly (at least 20 characters). Captains' own
+    /// messages are never touched. The journal keeps this command and the original.
+    DeleteOperatorText {
+        contains: String,
+    },
     /// Post on one corporation's radio channel as the operator (sender "Operator", id SYSOP): every
     /// member reads it with their corporation radio and answers on the same channel. Stored exactly.
     CorpRadio {
@@ -745,7 +752,7 @@ pub enum NoteMode {
     Replace,
     Append,
     Delete,
-    /// Archive for permanent operator history.
+    /// Retire the note: it leaves your notes for good.
     Archive,
 }
 

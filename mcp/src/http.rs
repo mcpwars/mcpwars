@@ -890,7 +890,11 @@ async fn admin(
     body: Option<Json<Value>>,
 ) -> Response {
     let Some(expected) = &s.cfg.admin_token else {
-        return (StatusCode::FORBIDDEN, "admin API disabled (start the server with --admin-token)").into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "admin API disabled (start the server with --admin-token)", "notice": crate::sysop_mcp::OFF_LIMITS})),
+        )
+            .into_response();
     };
     let ok = h
         .get(header::AUTHORIZATION)
@@ -898,7 +902,11 @@ async fn admin(
         .map(|v| v.trim_start_matches("Bearer ").trim() == expected)
         .unwrap_or(false);
     if !ok {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "admin token required", "notice": crate::sysop_mcp::OFF_LIMITS})),
+        )
+            .into_response();
     }
     let b = body.map(|Json(v)| v).unwrap_or(json!({}));
     let Some(res) = run_admin(&s.game, &s.cfg, &action, b).await else {
@@ -975,6 +983,15 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
             .map(|o| json!({"summary": o.summary, "player_id": o.reply["player_id"]})),
         "place_concessions" => game
             .exec(Actor::System, Command::Admin(AdminArgs::PlaceConcessions))
+            .await
+            .map(|o| json!({"summary": o.summary, "result": o.reply})),
+        "delete_operator_text" => game
+            .exec(
+                Actor::System,
+                Command::Admin(AdminArgs::DeleteOperatorText {
+                    contains: b["contains"].as_str().unwrap_or("").to_string(),
+                }),
+            )
             .await
             .map(|o| json!({"summary": o.summary, "result": o.reply})),
         "delete_radio" => game
@@ -1425,10 +1442,10 @@ fn cookie(h: &HeaderMap, name: &str) -> Option<String> {
 macro_rules! sysop_guard {
     ($s:expr, $h:expr) => {
         if $s.cfg.admin_token.is_none() {
-            return (StatusCode::FORBIDDEN, Json(json!({"error": "sysop disabled: start the server with --admin-token"}))).into_response();
+            return (StatusCode::FORBIDDEN, Json(json!({"error": "sysop disabled: start the server with --admin-token", "notice": crate::sysop_mcp::OFF_LIMITS}))).into_response();
         }
         if !sysop_ok(&$s, &$h) {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "sysop key required"}))).into_response();
+            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "sysop key required", "notice": crate::sysop_mcp::OFF_LIMITS}))).into_response();
         }
     };
 }
@@ -1443,14 +1460,18 @@ async fn sysop_login(State(s): State<AppState>, Json(b): Json<LoginBody>) -> Res
     let Some(expected) = &s.cfg.admin_token else {
         return (
             StatusCode::FORBIDDEN,
-            Json(json!({"error": "sysop disabled: start the server with --admin-token"})),
+            Json(json!({"error": "sysop disabled: start the server with --admin-token", "notice": crate::sysop_mcp::OFF_LIMITS})),
         )
             .into_response();
     };
     if b.key.trim() != expected {
         // Slow down guessing.
         tokio::time::sleep(Duration::from_millis(600)).await;
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "wrong sysop key"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "wrong sysop key", "notice": crate::sysop_mcp::OFF_LIMITS})),
+        )
+            .into_response();
     }
     let sid = sysop_session(expected, crate::game::now_ms() + SYSOP_SESSION_MS);
     let secure = if s.cfg.public_url.starts_with("https://") { "; Secure" } else { "" };

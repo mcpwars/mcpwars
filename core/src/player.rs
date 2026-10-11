@@ -866,6 +866,39 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
             }
             Ok(ctx.finish(format!("Radio message {id} removed."), json!({})))
         }
+        AdminArgs::DeleteOperatorText { contains } => {
+            if contains.trim().chars().count() < 20 {
+                return Err(Refusal::new(
+                    "invalid_args",
+                    "Give at least 20 characters of the exact text to delete.",
+                ));
+            }
+            let hit = |t: &str| t.contains(contains.as_str());
+            let w = &mut *ctx.w;
+            let before = (w.announcements.len(), w.news.len(), w.radio.len());
+            w.announcements.retain(|a| !hit(&a.text) && !hit(&a.title));
+            w.news.retain(|n| !hit(&n.headline));
+            w.radio.retain(|m| m.from != SYSOP || !hit(&m.text));
+            let (mut notices, mut captains) = (0usize, 0usize);
+            for p in w.players.values_mut() {
+                let n = p.inbox.len();
+                p.inbox.retain(|x| x.kind != "sysop" || !hit(&x.text));
+                if p.inbox.len() < n {
+                    notices += n - p.inbox.len();
+                    captains += 1;
+                }
+            }
+            let (announcements, news, radio) = (before.0 - w.announcements.len(), before.1 - w.news.len(), before.2 - w.radio.len());
+            if announcements + news + radio + notices == 0 {
+                return Err(Refusal::new("not_found", "No operator text contains that."));
+            }
+            Ok(ctx.finish(
+                format!(
+                    "Deleted {announcements} announcement(s), {news} news item(s), {radio} radio message(s) and {notices} operator message(s) from {captains} inbox(es)."
+                ),
+                json!({"announcements": announcements, "news": news, "radio": radio, "operator_messages": notices, "captains": captains}),
+            ))
+        }
         AdminArgs::LayoutDepth => {
             let n = crate::galaxy::layout_depth(ctx.w);
             Ok(ctx.finish(

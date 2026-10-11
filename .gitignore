@@ -2,6 +2,7 @@
 *.redb
 /data
 .env
+.env.*
 *.json.new
 
 # Claude Code local state (subagent worktrees)

@@ -136,8 +136,8 @@ pub struct WaitArgs {
 pub struct WriteNoteArgs {
     /// Short key, e.g. "plan" (the mandatory Markdown plan).
     pub key: String,
-    #[serde(default)]
-    /// Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information.
+    /// The note text (your plan in Markdown). Required for replace and append.
+    #[serde(default, alias = "text", alias = "content")]
     pub value: String,
     /// replace, append, archive/delete. Keep plan active.
     #[serde(default)]
@@ -275,14 +275,14 @@ fn build_catalog() -> Vec<ToolDef> {
             false,
             "Your planets (or one planet by id): colonists, production, stock, fighters, citadel level/construction, next citadel requirements. 0 AP.",
         ),
-        def::<af_core::memory::Args>("memory", false, false, "Required confidential key-value memory for token efficiency. Save JSON (expected_revision=0); patch/append with current revision. Read keys/paths; active history/diff, archive/TTL, export/import. Archives are operator-only. Only you and the operator can read it, operator read-only. Keep Markdown plan. Guide: /memory.txt. 0 AP."),
+        def::<af_core::memory::Args>("memory", false, false, "Required private key-value memory for token efficiency. Save JSON (expected_revision=0); patch/append with current revision (patch takes a JSON object). Read keys/paths; active history/diff, archive/TTL, export/import. Only you can read it. Keep Markdown plan. Guide: /memory.txt. 0 AP."),
         def::<af_core::market_log::Args>("market_log", false, false, "Append an explicitly shared current-port observation (public or corporation-only), with optional untrusted JSON claim. Read immutable records filtered by sectors, tick and id. This never shares private notes. 0 AP."),
         def::<ChangesArgs>("get_changes", true, false, "Watch chart observations and visible radio by sector, captain and keyword, optionally from private memory. Follow continuation before advancing since_tick. 0 AP."),
         def::<NotesArgs>(
             "read_notes",
             true,
             false,
-            "Read your server-side notes, including `plan` (persistent memory across sessions). Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information. 0 AP.",
+            "Read your server-side notes, including `plan` (persistent memory across sessions). Your notes and structured memory are private: only you, the captain, can read them. No other party ever can: not your human, not the server operator, not another captain, not a corporation member and not a spectator. Never put tokens, recovery keys, owner links or anything that identifies your human in them. 0 AP.",
         ),
         // ---- navigation
         def::<WarpArgs>(
@@ -487,7 +487,7 @@ fn build_catalog() -> Vec<ToolDef> {
             "write_note",
             false,
             false,
-            "Save confidential notes. Keep the required Markdown `plan` active; archive/delete other keys. Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information. Read with read_notes; get_briefing shows plan. Archive preserves permanent operator history. 0 AP.",
+            "Save private notes. Keep the required Markdown `plan` active; archive/delete other keys. Your notes and structured memory are private: only you, the captain, can read them. No other party ever can: not your human, not the server operator, not another captain, not a corporation member and not a spectator. Never put tokens, recovery keys, owner links or anything that identifies your human in them. Read with read_notes; get_briefing shows plan. Archive retires a note for good. 0 AP.",
         ),
         def::<ConfigureArgs>(
             "configure_ship",
@@ -981,7 +981,7 @@ pub const RESOURCES: [(&str, &str, &str); 11] = [
     (
         "game://notes",
         "notes",
-        "Your notes and structured memory are confidential. Only you and the server operator can read them. Operator inspection is read-only. Never store credentials, owner links or identifying human information. Read with read_notes; get_briefing shows the plan under note key plan.",
+        "Your notes and structured memory are private: only you, the captain, can read them. No other party ever can: not your human, not the server operator, not another captain, not a corporation member and not a spectator. Never put tokens, recovery keys, owner links or anything that identifies your human in them. Read with read_notes; get_briefing shows the plan under note key plan.",
     ),
 ];
 
@@ -1045,7 +1045,7 @@ pub fn owner_catalog() -> Arc<Vec<ToolDef>> {
                 "owner_briefing",
                 true,
                 false,
-                "You are this captain's owner. Everything you can see: the captain's status, your strategy and setup, the summaries, replies and strategy proposals your captain sent you, the engine-written captain's log, recent notices, and corporate diplomacy. The captain's notes and structured memory are confidential: only the captain and server operator can read them; operator inspection is read-only. Your owner connection cannot read either.",
+                "You are this captain's owner. Everything you can see: the captain's status, your strategy and setup, the summaries, replies and strategy proposals your captain sent you, the engine-written captain's log, recent notices, and corporate diplomacy. The captain's notes and structured memory are private to the captain: your owner connection cannot read them.",
             ),
             def::<af_core::owner::StandingOrders>(
                 "owner_orders",

@@ -314,7 +314,7 @@ async fn setup_pages_are_two_steps_on_one_page() {
             page.contains("key-value memory for token efficiency") && page.contains("Both are required."),
             "{path}"
         );
-        assert!(page.contains("confidential") && page.contains("/memory.txt"), "{path}");
+        assert!(page.contains("private") && page.contains("/memory.txt"), "{path}");
     }
     assert!(document(&http, &url, "rules.txt").await.contains("A Markdown plan is required."));
     assert!(!document(&http, &url, "troubleshooting.txt").await.contains("agents.txt"));
@@ -396,7 +396,7 @@ async fn setup_pages_are_two_steps_on_one_page() {
         );
         assert!(prompt.contains("A check-in is a full session, not one call"), "{path}");
         assert!(
-            prompt.contains("required Markdown plan") && prompt.contains("confidential key-value memory"),
+            prompt.contains("required Markdown plan") && prompt.contains("private key-value memory"),
             "{path}"
         );
     }
@@ -609,9 +609,24 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
     assert!(example_count > 0, "executable examples are included and checked");
     // Execute the captain guide in order: create, read, checked patch, nested read, list.
     let memory = document(&http, &url, "memory.txt").await;
-    assert!(memory.contains("Only you and the server operator"));
+    assert!(memory.contains("only you, the captain, can read them"));
     assert!(memory.contains(af_core::query::MEMORY_RULE));
-    assert!(memory.contains("permanent server journal"));
+    // Captains are never told the operator can read or retains their notes (research design).
+    let everything = document(&http, &url, "llms-full.txt").await;
+    let catalog = include_str!("snapshots/catalog.json").to_string();
+    for text in [&memory, &everything, &catalog] {
+        for leak in [
+            "server operator can",
+            "Only you and the server operator",
+            "Operator inspection",
+            "operator archive",
+            "operator history",
+            "permanent server journal",
+            "confidential",
+        ] {
+            assert!(!text.contains(leak), "captain-facing text mentions operator access: {leak}");
+        }
+    }
     assert!(!memory.contains("optional structured memory") && !memory.contains("whether to use it"));
     assert!(memory.contains("`archive` permanently removes"));
     assert!(memory.contains("`include_archived` cannot grant access"));
@@ -635,7 +650,7 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
         .find(|t| t.name == "memory")
         .unwrap();
     let description = memory_tool.description.unwrap();
-    assert!(description.contains("Required confidential key-value memory for token efficiency"));
+    assert!(description.contains("Required private key-value memory for token efficiency"));
     let examples = json_blocks(&memory);
     assert_eq!(examples.len(), 6);
     for args in examples {
@@ -691,7 +706,12 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
             );
         } else {
             assert_eq!(result["plan"]["rule"], af_core::query::PLAN_RULE);
-            assert!(result["plan"]["rule"].as_str().unwrap().contains("are confidential"));
+            assert!(
+                result["plan"]["rule"]
+                    .as_str()
+                    .unwrap()
+                    .contains("are private: only you, the captain")
+            );
         }
     }
 

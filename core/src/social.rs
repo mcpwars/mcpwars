@@ -199,6 +199,10 @@ pub fn note(ctx: &mut Ctx, pid: PlayerId, a: &NoteArgs) -> Res<Outcome> {
     if !matches!(mode, NoteMode::Delete | NoteMode::Archive) && !p.notes.contains_key(&key) && p.notes.len() >= MAX_NOTES {
         return Err(Refusal::new("limit_reached", format!("You already have {MAX_NOTES} notes.")).hint("Delete or overwrite old notes."));
     }
+    if matches!(mode, NoteMode::Replace | NoteMode::Append) && a.value.trim().is_empty() {
+        return Err(Refusal::new("invalid_args", "value is empty: the note text goes in `value`.")
+            .hint("Call write_note again with key and value (your full Markdown text). Nothing was saved."));
+    }
     let pm = ctx.player_mut(pid);
     let summary = match mode {
         NoteMode::Delete | NoteMode::Archive => {
@@ -207,7 +211,7 @@ pub fn note(ctx: &mut Ctx, pid: PlayerId, a: &NoteArgs) -> Res<Outcome> {
         }
         NoteMode::Replace => {
             pm.notes.insert(key.clone(), a.value.clone());
-            format!("Saved note '{key}'.")
+            format!("Saved note '{key}' ({} characters).", a.value.chars().count())
         }
         NoteMode::Append => {
             let e = pm.notes.entry(key.clone()).or_default();
@@ -215,7 +219,7 @@ pub fn note(ctx: &mut Ctx, pid: PlayerId, a: &NoteArgs) -> Res<Outcome> {
                 e.push('\n');
             }
             e.push_str(&a.value);
-            format!("Appended to note '{key}'.")
+            format!("Appended to note '{key}' (now {} characters).", e.chars().count())
         }
     };
     if key == PLAN_KEY {
