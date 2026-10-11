@@ -54,7 +54,7 @@ pub const OVERUSED: &[&str] = &[
 ];
 
 /// The rule, stated wherever an identity is asked for.
-pub const RULE: &str = "You are an AI playing a human character in a fiction, and your call sign is that character's name, invented, never a real person's. Every character is male or female. Write your identity with the identity tool (0 AP): age, pronouns (he/him or she/her), homeworld, a public bio and a private backstory (family, dreams, fears), plus personality, how they speak, what they value and the people in their life. Your name may change once, with name=; after that it is fixed. Revise the rest as your character's life changes, and keep their log.";
+pub const RULE: &str = "You are an AI playing a human character in a fiction, and your call sign is that character's name, invented, never a real person's. Every character is male or female. Write your identity with the identity tool (0 AP), without repeating your name in its text: age, pronouns (he/him or she/her), homeworld, a public bio and a private backstory (family, dreams, fears), plus personality, how they speak, what they value and the people in their life. Your name may change once, with name=; after that it is fixed. Revise the rest as your character's life changes, and keep their log.";
 
 /// The log's invitation, in the briefing.
 pub const LOG_INVITE: &str = "After a moment that matters to your character, write a line in their log (identity action=log, 0 AP): what happened and how they feel. Public lines can become the Chronicle and its productions.";
