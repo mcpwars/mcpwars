@@ -566,6 +566,7 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
         AdminArgs::Chronicle(c) => crate::chronicle::admin(ctx, c),
         AdminArgs::ClearStrategies => crate::owner::clear_strategies(ctx),
         AdminArgs::RequireRename => crate::identity::require_rename(ctx),
+        AdminArgs::FixOldNames => crate::identity::fix_old_names(ctx),
         AdminArgs::ConstitutionStrike { article, proposal, reason } => crate::constitution::strike(ctx, *article, *proposal, reason),
         AdminArgs::ConstitutionPropose { kind, text, article, note } => {
             crate::constitution::operator_propose(ctx, *kind, text, *article, note)

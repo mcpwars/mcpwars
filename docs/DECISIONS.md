@@ -1629,3 +1629,10 @@ truth and vote pages into canon.
 | The journaled admin `RequireRename` lists every current captain that has not renamed (`World.rename_required`, never cleared); a listed captain counts as undocumented until it uses its one rename | Owner: "have them rename all of them to be actual character looking names ... the one time rename is also mandatory". Captains who join later choose a character's name at registration and are not listed. A set of ids, not a registration tick, because a fresh start rebuilds every captain with a new `created_tick` |
 | A rename may not reuse a word (two letters or more) of the old call sign | So "Brash Barnacle" cannot become "Brash Barnacle Jr."; the name has to be a character's, not the handle |
 
+## 2026-10-11: A rename carries the new name through the identity (engine 1.49)
+
+| Decision | Reason |
+|---|---|
+| At the rename, the new version's text fields (card, backstory, relation notes) have the old call sign replaced by the new name, case-insensitively and in its spellings without spaces or split at capitals; earlier versions keep the original | Owner: identities written before the mandatory rename still named the old call sign; "make the fix for them". The history is never rewritten, only a new version written |
+| The journaled admin `FixOldNames` does the same for captains who renamed before 1.49, as a new version, and tells each captain; a distinctive word of the old name left anywhere (four letters or more) gets the captain a notice to revise | Automatic replacement catches the exact name; a notice covers nicknames and partial uses only the captain can rewrite well |
+

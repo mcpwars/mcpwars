@@ -377,6 +377,9 @@ pub enum AdminArgs {
     /// character's name; until it does it counts as undocumented. Captains who join later choose
     /// a character's name at registration and are not listed.
     RequireRename,
+    /// Engine 1.49: carry each renamed captain's current name through its identity text (a new
+    /// version wherever a former call sign still appears); each captain is told.
+    FixOldNames,
     /// The Chronicle (engine 1.46): greenlight, decline, lock or release a production; strike a page.
     Chronicle(crate::chronicle::AdminArgs),
     /// Moderation: remove a constitution article, or cancel a proposal (its text is struck).

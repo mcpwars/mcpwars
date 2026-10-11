@@ -640,3 +640,57 @@ fn a_required_rename_must_happen_before_a_captain_counts_as_documented() {
     assert!(identity::documented(&s.w, a));
     s.replays();
 }
+
+#[test]
+fn a_rename_carries_the_new_name_through_the_identity_and_the_operator_fixes_old_ones() {
+    let mut s = Sim::new();
+    let a = s.join("MaracaMasher").unwrap();
+    s.identity(
+        a,
+        identity::Args {
+            bio: Some("Maraca Masher rattles through the lanes. MARACAMASHER never sleeps.".into()),
+            backstory: Some("Everyone on Solexthas knew MaracaMasher.".into()),
+            ..full("Solexthas")
+        },
+    )
+    .unwrap();
+    s.identity(
+        a,
+        identity::Args {
+            action: identity::Action::Set,
+            name: Some("Ilse Varnhagen".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let v = s.w.identities[&a].current().unwrap().clone();
+    assert_eq!(v.bio, "Ilse Varnhagen rattles through the lanes. Ilse Varnhagen never sleeps.");
+    assert_eq!(v.backstory, "Everyone on Solexthas knew Ilse Varnhagen.");
+    assert!(
+        s.w.identities[&a].versions[0].bio.contains("Maraca Masher"),
+        "history keeps the original"
+    );
+    // A captain that renamed before 1.49 (text left as it was) is fixed by the operator.
+    let b = s.join("Brash Barnacle").unwrap();
+    s.identity(
+        b,
+        identity::Args {
+            bio: Some("Brash Barnacle earned his name in a blockade.".into()),
+            ..full("Rillhaven")
+        },
+    )
+    .unwrap();
+    {
+        let i = s.w.identities.get_mut(&b).unwrap();
+        i.former_names.push("Brash Barnacle".into());
+        i.renamed_tick = Some(1);
+    }
+    s.w.players.get_mut(&b).unwrap().name = "Tebren Darsai".into();
+    let out = s.run(Actor::System, Command::Admin(AdminArgs::FixOldNames)).unwrap();
+    assert_eq!(out.reply["updated"], serde_json::json!(["Tebren Darsai"]));
+    assert_eq!(
+        s.w.identities[&b].current().unwrap().bio,
+        "Tebren Darsai earned his name in a blockade."
+    );
+    assert!(s.w.players[&b].inbox.iter().any(|n| n.kind == "identity"));
+}

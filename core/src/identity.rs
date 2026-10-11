@@ -339,6 +339,136 @@ pub fn normalize_pronouns(s: &str) -> Option<&'static str> {
     }
 }
 
+/// The ways a call sign may be written in text: as is, without spaces ("MaracaMasher") and split
+/// at capitals ("Maraca Masher").
+fn name_variants(name: &str) -> Vec<String> {
+    let mut v = vec![name.to_string(), name.replace(' ', "")];
+    let mut split = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if i > 0 && c.is_ascii_uppercase() && !split.ends_with(' ') {
+            split.push(' ');
+        }
+        split.push(c);
+    }
+    v.push(split);
+    v.retain(|s| s.chars().count() >= 2);
+    v.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    v
+}
+
+/// Replace every case-insensitive occurrence of an ASCII call sign variant in `text`.
+fn replace_name(text: &str, old: &str, new: &str) -> String {
+    let mut out = text.to_string();
+    for variant in name_variants(old) {
+        let needle = variant.to_ascii_lowercase();
+        let mut result = String::with_capacity(out.len());
+        let lower = out.to_ascii_lowercase();
+        let mut i = 0;
+        while let Some(at) = lower[i..].find(&needle) {
+            let start = i + at;
+            result.push_str(&out[i..start]);
+            result.push_str(new);
+            i = start + needle.len();
+        }
+        result.push_str(&out[i..]);
+        out = result;
+    }
+    out
+}
+
+/// Carry a rename through a version's own text fields.
+fn rename_in_version(v: &mut Version, old: &str, new: &str) {
+    for f in [
+        &mut v.homeworld,
+        &mut v.trade,
+        &mut v.appearance,
+        &mut v.voice,
+        &mut v.personality,
+        &mut v.speech,
+        &mut v.values,
+        &mut v.dream,
+        &mut v.bio,
+        &mut v.why,
+        &mut v.backstory,
+    ] {
+        *f = replace_name(f, old, new);
+    }
+    for r in &mut v.relations {
+        r.note = replace_name(&r.note, old, new);
+    }
+}
+
+/// Distinctive words of the old call sign (four letters or more) still in the version's text.
+fn leftover_words(v: &Version, old: &str) -> Vec<String> {
+    let text = [&v.bio, &v.backstory, &v.why, &v.dream, &v.personality, &v.speech, &v.values]
+        .iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let words: Vec<&str> = text.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+    let mut found: Vec<String> = name_variants(old)
+        .iter()
+        .flat_map(|n| n.split(' ').map(str::to_string).collect::<Vec<_>>())
+        .filter(|w| w.len() >= 4)
+        .map(|w| w.to_ascii_lowercase())
+        .filter(|w| words.contains(&w.as_str()))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn leftover_notice(words: &[String]) -> String {
+    format!(
+        "Your identity still mentions part of your old call sign ({}). Revise your bio and backstory so they tell your character's story under your new name: identity action=set with the fields you change.",
+        words.join(", ")
+    )
+}
+
+/// The operator's fix for captains who renamed before engine 1.49: every identity whose current
+/// version still names a former call sign gets a new version with the current name instead, and
+/// its captain is told. Returns how many were updated.
+pub fn fix_old_names(ctx: &mut Ctx) -> Res<Outcome> {
+    let (tick, at_ms, season, epoch) = (ctx.w.tick, ctx.w.now_ms, ctx.w.season.number, ctx.w.archive.epoch);
+    let mut fixed = vec![];
+    let ids: Vec<PlayerId> = ctx.w.identities.keys().copied().collect();
+    for pid in ids {
+        let Some(name) = ctx.w.players.get(&pid).map(|p| p.name.clone()) else {
+            continue;
+        };
+        let i = &ctx.w.identities[&pid];
+        let (Some(cur), false) = (i.current().cloned(), i.former_names.is_empty()) else {
+            continue;
+        };
+        let mut v = cur.clone();
+        for old in &i.former_names {
+            rename_in_version(&mut v, old, &name);
+        }
+        let leftover: Vec<String> = i.former_names.iter().flat_map(|old| leftover_words(&v, old)).collect();
+        let changed = v != cur;
+        if changed {
+            v.version = i.versions.len() as u32 + 1;
+            v.tick = tick;
+            v.at_ms = at_ms;
+            v.season = season;
+            v.epoch = epoch;
+            v.name = name.clone();
+            ctx.w.identities.get_mut(&pid).expect("listed").versions.push(v);
+            ctx.notify(
+                pid,
+                "identity",
+                format!("The operator carried your new name through your identity: your old call sign in your card and backstory now reads {name}. Review it with identity action=view."),
+            );
+            fixed.push(name.clone());
+        }
+        if !leftover.is_empty() {
+            ctx.notify(pid, "identity", leftover_notice(&leftover));
+        }
+    }
+    Ok(ctx.finish(format!("{} identities updated.", fixed.len()), json!({"updated": fixed})))
+}
+
 /// Must this captain still use its mandatory rename?
 pub fn rename_pending(w: &World, pid: PlayerId) -> bool {
     w.rename_required.contains(&pid) && w.identities.get(&pid).is_none_or(|i| i.renamed_tick.is_none())
@@ -819,6 +949,14 @@ fn set(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         relations: rels,
         backstory,
     };
+    // A rename carries the new name through the character's own text (engine 1.49): the old
+    // call sign in the card and backstory becomes the new one; earlier versions keep the original.
+    let mut v = v;
+    let mut leftover = vec![];
+    if let Some(new) = &renamed {
+        rename_in_version(&mut v, &old_name, new);
+        leftover = leftover_words(&v, &old_name);
+    }
     let ident = ctx.w.identities.entry(pid).or_default();
     ident.versions.push(v.clone());
     if let Some(new) = &renamed {
@@ -837,6 +975,9 @@ fn set(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         let line = format!("{name}, {age}, of {}, has filed papers with the Federation.", v.homeworld);
         ctx.news(line.clone());
         ctx.event("identity_filed", None, vec![pid], true, line, json!({}));
+    }
+    if !leftover.is_empty() {
+        ctx.notify(pid, "identity", leftover_notice(&leftover));
     }
     let mut summary = format!("Identity version {version} stored for {name}.");
     if let Some(new) = &renamed {
