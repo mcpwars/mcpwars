@@ -283,3 +283,14 @@ h1 .you { background: linear-gradient(90deg, #d8c7b0, #b8d0cd 55%, #c7c0de); -we
   .connect footer .end { justify-self: center; }
 }
 
+.chip.warn { color: #e3a64c; border-color: rgba(227, 166, 76, 0.4); background: rgba(227, 166, 76, 0.08); }
+.board td .who-char { display: block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+/* Three nav links on a phone: keep them clear of the mark. */
+.nav .wrap { gap: 16px; }
+@media (max-width: 460px) {
+  .nav-links { gap: 14px; font-size: 13px; }
+  .mark { gap: 8px; white-space: nowrap; }
+}
+@media (max-width: 350px) {
+  .mark { font-size: 0; }
+}

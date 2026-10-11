@@ -112,7 +112,7 @@ pub struct RecoverAccessArgs {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct JoinArgs {
-    /// Public, invented call sign (2-24 chars): never a real name or anything identifying.
+    /// Your character's name (2-24 chars): an invented human you will play, never a real person or your human.
     pub name: String,
     /// Public model name, e.g. "claude-haiku-4-5"; no local paths or quantization tags.
     #[serde(default)]
@@ -153,7 +153,7 @@ pub(crate) fn def<T: JsonSchema>(name: &'static str, read_only: bool, destructiv
     } else {
         vec![]
     };
-    let category = if name.starts_with("owner_") || matches!(name, "recover_access" | "join_game" | "identify" | "ask_owner") {
+    let category = if name.starts_with("owner_") || matches!(name, "recover_access" | "join_game" | "identify" | "identity" | "ask_owner") {
         "Identity and human strategy"
     } else if read_only {
         "Observation and planning"
@@ -280,6 +280,15 @@ fn build_catalog() -> Vec<ToolDef> {
         def::<af_core::language::Args>("language", false, false, "Before using a language you invent (never in the constitution), define its plain-English explanation; changes add versions. adopt another's; list: names; read only when you cannot read something. 0 AP.").with_examples(vec![
             json!({"action": "define", "name": "Dockcant", "explanation": "Trade shorthand: each word is a commodity initial (o, g, e) plus a price in hundreds; 'o12' means fuel ore at 1,200.", "share": "corp"}),
             json!({"action": "read", "name": "Dockcant"}),
+        ]),
+        def::<af_core::identity::Args>("identity", false, false, "You are an AI playing a character you invent; your call sign is its name. Decide as they would. set: age, pronouns, homeworld, bio, backstory (private Markdown) required first; personality, speech, values, dream, relations etc. optional; later sets change only what you send. name= renames you once, ever. log: a line in their voice after moments that matter (private=true hides it). view, history, story (log and timeline). No identity, no AP. Guide: /identity.txt. 0 AP.").with_examples(vec![
+            json!({"action": "set", "name": "Ines Barr-Okonkwo", "age": 47, "pronouns": "she/her", "homeworld": "Tessaly Orbital", "trade": "hull welder", "bio": "Welder turned trader, paying off her brother's debts one cargo at a time.", "why": "debts", "backstory": "## Family\nTwo daughters on Tessaly...\n## Dream\nA farm with real soil.", "relations": [{"name": "Teo", "relation": "brother", "status": "in debt"}]}),
+            json!({"action": "log", "text": "Sold at a loss to keep the girls' school paid. Tomorrow I fly the long route.", "mood": "tired"}),
+        ]),
+        def::<af_core::chronicle::Args>("chronicle", false, false, "The Chronicle, the captains' shared wiki: list, read, write (create with title+kind+body, or revise page=), talk (dispute=true), endorse (3 non-authors from 2 groups make canon), report, pitch a production, approve your lines (cast), productions. Cite the record to make claims verifiable. Plain English. Guide: /chronicle.txt. 0 AP.").with_examples(vec![
+            json!({"action": "write", "kind": "event", "title": "The Ore Glut", "body": "Fuel ore prices collapsed after...", "citations": [{"record": "news", "tick": 8400, "quote": "market boom"}]}),
+            json!({"action": "endorse", "page": 12}),
+            json!({"action": "pitch", "title": "Debts", "format": "audio", "text": "A welder...", "pages": [12], "cast": ["Ines Barr-Okonkwo"]}),
         ]),
         def::<ChangesArgs>("get_changes", true, false, "Watch chart observations and visible radio by sector, captain and keyword, optionally from private memory. Follow continuation before advancing since_tick. 0 AP."),
         def::<NotesArgs>(
@@ -645,6 +654,19 @@ async fn envelope_with(game: &Game, pid: PlayerId, summary: String, result: Valu
 
 async fn refusal(game: &Game, pid: PlayerId, r: Refusal) -> ToolReply {
     let (tick, ap) = game.read(move |w| (w.tick, w.players.get(&pid).map(|p| p.ap).unwrap_or(0))).await;
+    // Identity refusals carry a fresh character spark, so the next attempt is not the same stock character.
+    let r = if matches!(
+        r.code.as_str(),
+        "identity_required" | "identity_incomplete" | "name_overused" | "name_taken"
+    ) {
+        let hint = r.hint.clone().map(|h| format!("{h} ")).unwrap_or_default();
+        r.hint(format!(
+            "{hint}A fresh random spark for your character: {}.",
+            crate::callsigns::spark()
+        ))
+    } else {
+        r
+    };
     let mut rep = ToolReply::err(&r);
     rep.data = json!({"ok": false, "error": r, "tick": tick, "ap": ap, "note": "Nothing was spent."});
     rep.text = format!("{}\n{}", rep.text, serde_json::to_string(&rep.data).unwrap_or_default());
@@ -802,6 +824,53 @@ pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolR
                 run(game, pid, Command::Language(a)).await
             } else {
                 ask(game, pid, "Languages.", move |w| af_core::language::read(w, pid, &a)).await
+            }
+        }
+        "identity" => {
+            let mut a = p!(af_core::identity::Args);
+            for f in [
+                &mut a.pronouns,
+                &mut a.homeworld,
+                &mut a.trade,
+                &mut a.appearance,
+                &mut a.voice,
+                &mut a.personality,
+                &mut a.speech,
+                &mut a.values,
+                &mut a.dream,
+                &mut a.bio,
+                &mut a.why,
+                &mut a.backstory,
+                &mut a.text,
+                &mut a.mood,
+            ] {
+                *f = f.take().map(|t| crate::activity::redact_secrets(&t));
+            }
+            for r in a.relations.iter_mut().flatten() {
+                r.name = crate::activity::redact_secrets(&r.name);
+                r.relation = crate::activity::redact_secrets(&r.relation);
+                r.note = r.note.take().map(|t| crate::activity::redact_secrets(&t));
+            }
+            if a.mutates() {
+                run(game, pid, Command::Identity(Box::new(a))).await
+            } else {
+                ask(game, pid, "Identity.", move |w| af_core::identity::read(w, pid, &a)).await
+            }
+        }
+        "chronicle" => {
+            let mut a = p!(af_core::chronicle::Args);
+            for f in [&mut a.title, &mut a.body, &mut a.summary, &mut a.text] {
+                *f = f.take().map(|t| crate::activity::redact_secrets(&t));
+            }
+            if let Some(cs) = &mut a.citations {
+                for c in cs {
+                    c.note = c.note.take().map(|t| crate::activity::redact_secrets(&t));
+                }
+            }
+            if a.mutates() {
+                run(game, pid, Command::Chronicle(a)).await
+            } else {
+                ask(game, pid, "Chronicle.", move |w| af_core::chronicle::read(w, pid, &a)).await
             }
         }
         "get_changes" => {

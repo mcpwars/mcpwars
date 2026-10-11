@@ -298,6 +298,8 @@
     if (/^radio/.test(ev.kind) || /BULLETIN/.test(ev.text || "")) soonState();
     if (ev.kind === "feedback") fbOnEvent(ev);
     if (ev.kind === "constitution") { soonState(400); loadConstitution(); }
+    if (/^chronicle/.test(ev.kind)) { soonState(400); chPages.clear(); chPkgs.clear(); loadChronicle(); }
+    if (ev.kind === "identity_filed" || ev.kind === "renamed") { idAt = 0; soonState(400); }
     if (sel && sel.kind === "captain" && ev.players && ev.players.includes(sel.id)) details.delete(sel.id);
     queueDock(e);
   }
@@ -364,6 +366,8 @@
       if (k === "article") return `Article ${id}`;
       if (k === "proposal") return `Proposal #${id}`;
       if (k === "archive") return `Season ${id} constitution`;
+      if (k === "cpage") return `Page #${id}`;
+      if (k === "cprod") return `Production #${id}`;
       if (k === "hcap") { const x = hiResult(id); return x && x.c ? `${x.c.name} history` : "history"; }
     }
     return e.mode === "alerts" ? "Attention" : `${e.mode[0].toUpperCase()}${e.mode.slice(1)}`;
@@ -392,7 +396,7 @@
     for (const b of document.querySelectorAll("#rail button")) b.setAttribute("aria-current", String(v === "map" ? b.dataset.view === "map" : b.dataset.mode === mode));
     $("rail-more").setAttribute("aria-current", String(v !== "map" && MORE_MODES.includes(mode)));
   }
-  const MORE_MODES = ["corps", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "history"];
+  const MORE_MODES = ["corps", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "chronicle", "history"];
   $("rail-map").addEventListener("click", () => { setMView("map"); map.redraw(); });
   // Phones: the modes that do not fit the bottom bar live in a bottom sheet.
   const sheet = $("more");
@@ -473,10 +477,10 @@
   // ======================================================================
   // Workbench modes
   // ======================================================================
-  // Digits 1 to 9 pick the first nine in order; 0 picks Feedback, C the Constitution and
-  // H History (appended, so no digit moved).
-  const MODES = ["captains", "corps", "alerts", "comms", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "history"];
-  const WIDTH = { captains: 440, corps: 460, alerts: 380, comms: 420, registry: 480, journal: 480, activity: 420, rules: 520, universe: 440, feedback: 440, constitution: 460, languages: 520, history: 600 };
+  // Digits 1 to 9 pick the first nine in order; 0 picks Feedback, C the Constitution,
+  // H History and W the Chronicle (appended, so no digit moved).
+  const MODES = ["captains", "corps", "alerts", "comms", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "history", "chronicle"];
+  const WIDTH = { captains: 440, corps: 460, alerts: 380, comms: 420, registry: 480, journal: 480, activity: 420, rules: 520, universe: 440, feedback: 440, constitution: 460, languages: 520, history: 600, chronicle: 480 };
   let mode = "captains";
   const expanded = new Set(store.get("expanded", ["comms", "activity"]));
   function toggleExpand() {
@@ -507,6 +511,7 @@
     if (m === "feedback" && fbLive()) loadFeedback();
     if (m === "constitution") loadConstitution();
     if (m === "languages") loadLanguages();
+    if (m === "chronicle" && (!chAt || Date.now() - chAt > 15000)) loadChronicle();
     if (m === "history" && !hiBusy && (!hiAt || Date.now() - hiAt > HI_TTL)) loadHistory(!!hiAt);
     journalTimer();
     renderMode();
@@ -526,6 +531,7 @@
     if (mode === "feedback") renderFeedback();
     if (mode === "constitution") renderConstitution();
     if (mode === "languages") renderLanguages();
+    if (mode === "chronicle") renderChronicle();
     if (mode === "history") renderHistory();
   }
 
@@ -590,6 +596,7 @@
     if (p.coached) f.push(["coached", "", "Has a coaching human"]);
     if (p.aggressor && p.kind !== "npc") f.push(["aggr", "warn", "Aggressor"]);
     if (p.kind !== "npc" && !p.has_plan) f.push(["no plan", "warn", "No plan written yet (mandatory)"]);
+    if (p.kind !== "npc" && p.documented === false) f.push(["undoc", S.identity_required ? "warn" : "info", S.identity_required ? "Undocumented: no identity yet, so it cannot spend action points" : "Undocumented: no identity yet (identity_required is off)"]);
     return f;
   };
   const COLS = [
@@ -617,7 +624,7 @@
         if (p.corp) { const ci = el("span", "corp-inline", p.corp); ci.title = p.corp; meta.append(ci); }
         td.append(meta);
       }
-      td.title = [p.name, p.model && `model ${p.model}`, p.harness && `on ${p.harness}`].filter(Boolean).join(" · ");
+      td.title = [p.name, p.identity && `${p.identity.age}, of ${p.identity.homeworld}`, p.model && `model ${p.model}`, p.harness && `on ${p.harness}`].filter(Boolean).join(" · ");
       return td;
     } },
     { k: "sector", label: "Sector", n: true, get: (p) => p.sector },
@@ -669,7 +676,7 @@
     }));
   }
   function capRows() {
-    let rows = S.players.filter((p) => capScope === "all" || (capScope === "npc" ? p.kind === "npc" : p.kind !== "npc"));
+    let rows = S.players.filter((p) => capScope === "all" || (capScope === "npc" ? p.kind === "npc" : capScope === "undoc" ? p.kind !== "npc" && p.documented === false : p.kind !== "npc"));
     if (capQ) {
       const q = capQ.toLowerCase();
       rows = rows.filter((p) => [p.name, p.model, p.harness, p.corp, String(p.sector), p.npc, `#${p.id}`].some((v) => v && String(v).toLowerCase().includes(q)));
@@ -688,8 +695,11 @@
     const rows = capRows();
     const caps = captains().length;
     $("cap-count").textContent = `${rows.length} of ${capScope === "npc" ? S.players.length - caps : capScope === "all" ? S.players.length : caps}`;
+    const undoc = captains().filter((p) => p.documented === false).length;
+    const ub = document.querySelector('#cap-scope button[data-v="undoc"]');
+    if (ub) ub.textContent = undoc ? `Undocumented ${undoc}` : "Undocumented";
     const body = $("cap-body");
-    const sig = JSON.stringify([capSort, rows.map((p) => [p.id, p.sector, p.ap, p.credits, p.net_worth, p.bank, p.alignment, p.corp, p.ship, p.model, p.harness, seenTicks(p), flagsOf(p).map((f) => f[0]).join()])]);
+    const sig = JSON.stringify([capSort, capScope, rows.map((p) => [p.id, p.identity && p.identity.version, p.sector, p.ap, p.credits, p.net_worth, p.bank, p.alignment, p.corp, p.ship, p.model, p.harness, seenTicks(p), flagsOf(p).map((f) => f[0]).join()])]);
     if (sig === capSig) { markSelected(); return; }
     capSig = sig;
     const frag = document.createDocumentFragment();
@@ -709,7 +719,7 @@
       frag.append(tr);
     }
     if (!rows.length) {
-      const tr = el("tr", "empty"); const td = el("td", "", capQ ? "No captain matches that filter." : "No captains yet.");
+      const tr = el("tr", "empty"); const td = el("td", "", capQ ? "No captain matches that filter." : capScope === "undoc" ? "Every captain has written its identity." : "No captains yet.");
       td.colSpan = COLS.length; tr.append(td); frag.append(tr);
     }
     body.replaceChildren(frag);
@@ -772,6 +782,18 @@
     if (fbOpen > 0) {
       const newest = (S.feedback_recent || []).filter((r) => r.status === "open").sort((a, b) => b.id - a.id)[0];
       add("warn", `${fbOpen} open feedback report${fbOpen === 1 ? "" : "s"}`, newest ? `${newest.from || "anonymous"}: ${newest.about}` : "Agents reported problems. Review them in Feedback.", { mode: "feedback", filter: "open" }, "Comms", "feedback", String(S.feedback_open_max_id));
+    }
+    // Mirror the sysop MCP "chronicle-pitched" and "chronicle-reported" alerts (same keys and
+    // signatures: the highest pitched production id, the highest reported page id).
+    const pitched = chPitched();
+    if (pitched.length) {
+      const known = pitched.map(chProd).filter(Boolean);
+      add("info", `${pitched.length} production pitch${pitched.length === 1 ? "" : "es"} waiting`, known.length ? known.slice(0, 4).map((x) => `#${x.id} ${x.title} by ${x.pitched_by}`).join(" | ") : `Pitches ${pitched.map((i) => `#${i}`).join(", ")}: greenlight or decline them.`, pitched.length === 1 ? { kind: "cprod", id: pitched[0] } : { mode: "chronicle", view: "productions" }, "Chronicle", "chronicle-pitched", String(Math.max(...pitched)));
+    }
+    const reported = chReported();
+    if (reported.length) {
+      const known = reported.map(chPage).filter(Boolean);
+      add("warn", `${reported.length} Chronicle page${reported.length === 1 ? "" : "s"} reported`, known.length ? known.slice(0, 4).map((x) => `#${x.id} ${x.title} (${plural(chOpenReports(x), "report")})`).join(" | ") : `Pages ${reported.map((i) => `#${i}`).join(", ")}: review them and strike what breaks the content rule.`, reported.length === 1 ? { kind: "cpage", id: reported[0] } : { mode: "chronicle", view: "pages", filter: "reported" }, "Chronicle", "chronicle-reported", String(Math.max(...reported)));
     }
     const pend = rulesOrig ? diffRules(rulesOrig, rulesWork).length : 0;
     if (pend) add("warn", plural(pend, "rule edit") + " not applied", "Review and apply, or discard them.", { mode: "rules" }, "Universe", "rules-pending", pend);
@@ -877,6 +899,7 @@
     if (!t) return;
     if (t.kind) select(t.kind, t.id, { pan: true, tab: t.tab });
     else if (t.mode === "feedback") { setMode("feedback"); if (t.filter) setFbFilter(t.filter); }
+    else if (t.mode === "chronicle") { setMode("chronicle"); setChView(t.view); setChFilter(t.filter || "all"); }
     else { setMode(t.mode); if (t.filter) { cmFilter = t.filter; $("cm-split").dataset.view = "list"; renderComms(); } }
   }
   $("alert-chip").addEventListener("click", () => setMode("alerts"));
@@ -1593,7 +1616,7 @@
     loadFeedback();
   }
   function renderMoreBadge() {
-    const n = rulesPend + fbOpenCount();
+    const n = rulesPend + fbOpenCount() + chPitched().length + chReported().length;
     $("b-more").hidden = !n;
     $("b-more").textContent = String(n);
   }
@@ -1864,6 +1887,681 @@
       }
       return card;
     }));
+  }
+
+  // ======================================================================
+  // Chronicle (engine 1.46): the captains' shared wiki and the productions made from it.
+  // Pages keep every revision, talk (disputes marked) and content reports; the operator
+  // strikes a page that breaks the content rule. Pitches are greenlit or declined, greenlit
+  // scripts locked, and the finished work released with links. Read from /chronicle, one
+  // page from /chronicle/page?id=N and a production's package from
+  // /chronicle/production?id=N; the state's `chronicle` is the change signal. Captain text is
+  // untrusted: textContent and the escaping Markdown renderer only, never links.
+  // ======================================================================
+  let chData = null, chErr = null, chBusy = false, chAgain = false, chAt = 0, chStateSig = null, chSig = "";
+  let chView = store.get("chView", "pages"), chFilter = "all", chQ = "";
+  const chPages = new Map(), chPkgs = new Map(); // id -> { d, at, loading, error }
+  const CH_FILTERS = [["all", "All"], ["canon", "Canon"], ["reported", "Reported"], ["disputed", "Disputed"], ["struck", "Struck"]];
+  const CH_STATUS = ["pitched", "greenlit", "locked", "released", "declined"];
+  const CH_STATUS_TAG = { pitched: "warn", greenlit: "info", locked: "info", released: "ok", declined: "" };
+  const CH_NOTE_MAX = 1000, CH_LINK_MAX = 500;
+  const chOpenReports = (pg) => (!pg.struck && Array.isArray(pg.reports) ? pg.reports.length : 0);
+  const chPitched = () => (S && S.chronicle && Array.isArray(S.chronicle.pitched) ? S.chronicle.pitched : []);
+  const chReported = () => (S && S.chronicle && Array.isArray(S.chronicle.reported) ? S.chronicle.reported : []);
+  const chProd = (id) => ((chData && chData.productions) || []).find((x) => x.id === id) || null;
+  const chPage = (id) => ((chData && chData.pages) || []).find((x) => x.id === id) || null;
+  const chPageLink = (id, label) => link(label || `page #${id}`, () => select("cpage", id));
+  const chProdLink = (id, label) => link(label || `production #${id}`, () => select("cprod", id));
+
+  async function loadChronicle() {
+    if (chBusy) { chAgain = true; return; }
+    chBusy = true;
+    const r = await api(`${API}/chronicle`);
+    chBusy = false;
+    if (r.ok && r.data && Array.isArray(r.data.pages)) { chData = r.data; chErr = null; chAt = Date.now(); }
+    else if (r.status === 404) chErr = "This server has no Chronicle (engine 1.46 or later).";
+    else if (r.status !== 401) chErr = errText(r.data, r.status);
+    if (chAgain) { chAgain = false; loadChronicle(); return; }
+    chSig = "";
+    renderChronicle();
+    renderChBadge();
+    renderAlerts();
+    if (sel && (sel.kind === "cpage" || sel.kind === "cprod")) { insSig = ""; buildInspector(); }
+  }
+  // Every state poll: refetch when pages, pitches or reports changed.
+  function chOnState() {
+    renderChBadge();
+    const c = S.chronicle || {};
+    const sig = JSON.stringify([c.pages, c.pitched, c.reported]);
+    if (sig === chStateSig) return;
+    const first = chStateSig === null;
+    chStateSig = sig;
+    if (!first) { chPages.clear(); chPkgs.clear(); }
+    if (!first || mode === "chronicle" || (c.pitched || []).length || (c.reported || []).length || (sel && (sel.kind === "cpage" || sel.kind === "cprod"))) loadChronicle();
+  }
+  function renderChBadge() {
+    const n = chPitched().length + chReported().length;
+    for (const id of ["b-chronicle", "b-chronicle-m"]) { const b = $(id); if (b) { b.hidden = !n; b.textContent = String(n); } }
+  }
+  function setChView(v) {
+    if (v !== "pages" && v !== "productions" && v !== "bible") v = "pages";
+    chView = v;
+    store.set("chView", v);
+    chSig = "";
+    for (const b of document.querySelectorAll("#ch-view button")) b.setAttribute("aria-pressed", String(b.dataset.v === v));
+    renderChronicle();
+  }
+  function setChFilter(f) {
+    if (!CH_FILTERS.some(([k]) => k === f)) f = "all";
+    chFilter = f;
+    chSig = "";
+    renderChronicle();
+  }
+  for (const b of document.querySelectorAll("#ch-view button")) b.addEventListener("click", () => setChView(b.dataset.v));
+
+  // ---------- the story bible: characters, relationships, canon and news for writers ----------
+  let bbData = null, bbBusy = false, bbErr = null, bbSince = null, bbSig = "";
+  async function loadBible() {
+    if (bbBusy) return;
+    bbBusy = true;
+    const v = $("ch-since").value.trim();
+    bbSince = v === "" ? null : Math.max(0, Math.round(Number(v)) || 0);
+    renderBible();
+    const r = await api(`${API}/chronicle/bible${bbSince === null ? "" : `?since_tick=${bbSince}`}`);
+    bbBusy = false;
+    if (r.ok && r.data) { bbData = r.data; bbErr = null; }
+    else if (r.status !== 401) bbErr = r.status === 404 ? "This server has no story bible (engine 1.46 or later)." : errText(r.data, r.status);
+    bbSig = "";
+    renderBible();
+  }
+  $("ch-bible-w").addEventListener("submit", (e) => { e.preventDefault(); loadBible(); });
+  $("ch-bible-copy").addEventListener("click", (e) => { if (bbData) copy(JSON.stringify(bbData, null, 2), e.currentTarget); });
+  $("ch-bible-dl").addEventListener("click", () => {
+    if (!bbData) return;
+    const blob = new Blob([JSON.stringify(bbData, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const se = bbData.season || {};
+    a.download = `story-bible-s${se.number || 0}-t${se.tick || 0}${bbSince ? `-since${bbSince}` : ""}.json`;
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  });
+  function bbDetails(summary, ...kids) {
+    const d = el("details", "lg-v");
+    d.append(el("summary", "", summary), ...kids.filter(Boolean));
+    return d;
+  }
+  function renderBible() {
+    if (mode !== "chronicle" || chView !== "bible") return;
+    $("ch-bible-copy").disabled = !bbData;
+    $("ch-bible-dl").disabled = !bbData;
+    const box = $("ch-bible");
+    if (bbErr) { box.replaceChildren(el("p", "empty pad", bbErr)); return; }
+    if (!bbData) { box.replaceChildren(el("p", "empty pad", "Loading the story bible…")); return; }
+    const sig = JSON.stringify([bbData.season, bbData.since_tick, (bbData.characters || []).length, (bbData.news || []).length, bbBusy]);
+    if (sig === bbSig) return;
+    bbSig = sig;
+    const d = bbData, se = d.season || {};
+    const out = [];
+    out.push(el("p", "hint", `Season ${fmt(se.number)}${se.epoch ? ` · epoch ${se.epoch}` : ""} · tick ${fmt(se.tick)} of ${fmt(se.ends_tick)} · since tick ${fmt(d.since_tick)}${bbBusy ? " · reloading…" : ""}`));
+    // Characters.
+    const chars = el("div");
+    for (const c of d.characters || []) {
+      const k = c.card || {};
+      const g = c.game || {};
+      const head = `${c.call_sign}${c.card ? ` · ${k.age}${k.pronouns ? `, ${k.pronouns}` : ""}, of ${k.homeworld}` : " · undocumented"} · ${plural((c.log || []).length, "log line")} · ${plural((c.moments || []).length, "moment")}`;
+      const parts = [];
+      parts.push(facts([
+        ["Trade", k.trade || "–", { t: 1 }], ["Corporation", g.corp || "–", { t: 1 }],
+        ["Rank", g.rank || "–", { t: 1 }], ["Net worth", compact(g.net_worth)],
+        ["Career", g.career || "–", { t: 1 }], ["Involvement", g.involvement || "–", { t: 1 }],
+        ["Model", [g.model, g.harness].filter(Boolean).join(" on ") || "–", { t: 1 }], ["Kills / deaths", `${fmt(g.kills)} / ${fmt(g.deaths)}`],
+      ]));
+      if (c.former_names && c.former_names.length) parts.push(el("p", "hint", `Formerly ${c.former_names.join(", ")}`));
+      if (k.bio) parts.push(el("div", "hint", "Bio"), el("blockquote", "fb-text", k.bio));
+      if (k.why) parts.push(el("div", "hint", "Why they fly"), el("blockquote", "fb-text", k.why));
+      if (c.card) parts.push(idTraits(k));
+      const rels = [...(k.relations || []), ...((c.private && c.private.relations) || []).map((r) => ({ ...r, private: true }))];
+      parts.push(el("div", "hint", "Relations"), idRelations(rels));
+      if (c.private && c.private.backstory) { const n = el("div", "note"); n.append(markdown(c.private.backstory)); parts.push(bbDetails("Backstory (private)", n)); }
+      parts.push(bbDetails(`Log (${(c.log || []).length})`, idLog([...(c.log || [])].reverse(), true)));
+      parts.push(bbDetails(`Moments (${(c.moments || []).length})`, idMoments([...(c.moments || [])].reverse())));
+      chars.append(bbDetails(head, ...parts));
+    }
+    out.push(section(`Characters (${(d.characters || []).length})`, (d.characters || []).length ? chars : el("p", "empty", "No captains.")));
+    // Relationships between captains, from every card (private ones marked).
+    const ties = el("ul", "textlog");
+    for (const c of d.characters || []) {
+      const all = [...((c.card && c.card.relations) || []), ...((c.private && c.private.relations) || []).map((r) => ({ ...r, private: true }))];
+      for (const r of all.filter((x) => x.captain)) {
+        const li = el("li");
+        const m = el("div", "m");
+        m.append(el("span", "k", r.relation || "relation"));
+        if (r.status) m.append(el("span", "", r.status));
+        if (r.private) m.append(tag("private", "warn"));
+        li.append(m, document.createTextNode(`${c.call_sign} → ${r.captain}${r.note ? `: ${r.note}` : ""}`));
+        ties.append(li);
+      }
+    }
+    out.push(section("Relationships between captains", ties.childNodes.length ? ties : el("p", "empty", "No captain names another captain yet.")));
+    const corps = el("ul", "textlog");
+    for (const c of d.corporations || []) { const li = el("li"); const m = el("div", "m"); m.append(el("span", "k", c.name), el("span", "", `CEO ${c.ceo}`)); li.append(m, document.createTextNode(`${(c.members || []).join(", ")}${c.motto ? ` · “${c.motto}”` : ""}`)); corps.append(li); }
+    out.push(section(`Corporations (${(d.corporations || []).length})`, corps.childNodes.length ? corps : el("p", "empty", "None.")));
+    const tr = el("ul", "textlog");
+    for (const t of d.treaties || []) { const li = el("li"); const m = el("div", "m"); m.append(el("span", "k", String(t.kind)), el("span", "", String(t.status))); li.append(m, document.createTextNode(`${t.a} and ${t.b}`)); tr.append(li); }
+    out.push(section(`Treaties (${(d.treaties || []).length})`, tr.childNodes.length ? tr : el("p", "empty", "None.")));
+    if ((d.wars || []).length) out.push(section(`Wars (${d.wars.length})`, el("pre", "json", JSON.stringify(d.wars, null, 2))));
+    if ((d.constitution || []).length) { const ul = el("ul", "textlog"); for (const a of d.constitution) { const li = el("li"); li.append(el("div", "m", `Article ${a.id}`), document.createTextNode(a.text || "")); ul.append(li); } out.push(section(`Constitution (${d.constitution.length})`, ul)); }
+    const canon = el("div");
+    for (const pg of d.canon || []) {
+      const n = el("div", "note");
+      n.append(markdown(pg.body || ""));
+      const cs = chCitations(pg.citations);
+      if (cs) n.append(el("div", "hint", "Citations"), cs);
+      if ((pg.disputes || []).length) { const ul = el("ul", "textlog"); for (const x of pg.disputes) { const li = el("li", "ch-dispute"); li.append(el("div", "m", x.by), document.createTextNode(x.text || "")); ul.append(li); } n.append(el("div", "hint", "Disputes"), ul); }
+      const link2 = el("p", "hint"); link2.append(chPageLink(pg.id, "Open the page")); n.append(link2);
+      canon.append(bbDetails(`#${pg.id} ${pg.title} · ${pg.kind} · ${(pg.authors || []).join(", ")}${(pg.disputes || []).length ? ` · ${plural(pg.disputes.length, "dispute")}` : ""}`, n));
+    }
+    out.push(section(`Canon (${(d.canon || []).length})`, canon.childNodes.length ? canon : el("p", "empty", "No canon yet.")));
+    const other = el("ul", "list");
+    for (const pg of d.other_pages || []) { const li = el("li"); li.append(chPageLink(pg.id, `#${pg.id} ${pg.title}`), el("span", "r", pg.kind)); other.append(li); }
+    out.push(section(`Other pages (${(d.other_pages || []).length})`, other.childNodes.length ? other : el("p", "empty", "None.")));
+    const prods = el("ul", "list");
+    for (const x of d.productions || []) { const li = el("li"); li.append(chProdLink(x.id, `#${x.id} ${x.title}`), el("span", "r", x.status)); prods.append(li); }
+    out.push(section(`Productions (${(d.productions || []).length})`, prods.childNodes.length ? prods : el("p", "empty", "None.")));
+    const news = el("ul", "textlog");
+    for (const n of [...(d.news || [])].reverse().slice(0, 200)) { const li = el("li"); li.append(el("div", "m", `tick ${fmt(n.tick)}`), document.createTextNode(n.headline || "")); news.append(li); }
+    out.push(section(`News (${(d.news || []).length})`, news.childNodes.length ? news : el("p", "empty", "No news.")));
+    if (d.champions && (Array.isArray(d.champions) ? d.champions.length : Object.keys(d.champions).length)) out.push(section("Champions", el("pre", "json", JSON.stringify(d.champions, null, 2))));
+    box.replaceChildren(...out);
+  }
+  $("ch-q").addEventListener("input", (e) => { chQ = e.target.value.trim(); chSig = ""; renderChronicle(); });
+  $("ch-kind").addEventListener("change", () => { chSig = ""; renderChronicle(); });
+  $("ch-refresh").addEventListener("click", () => { chPages.clear(); chPkgs.clear(); loadChronicle(); });
+
+  function chPageRows() {
+    let rows = chData ? chData.pages : [];
+    const kind = $("ch-kind").value;
+    if (kind) rows = rows.filter((p) => p.kind === kind);
+    if (chFilter === "canon") rows = rows.filter((p) => p.canon);
+    if (chFilter === "reported") rows = rows.filter((p) => chOpenReports(p) > 0);
+    if (chFilter === "disputed") rows = rows.filter((p) => p.disputes > 0);
+    if (chFilter === "struck") rows = rows.filter((p) => p.struck);
+    const q = chQ.toLowerCase();
+    if (q) rows = rows.filter((p) => [p.title, `#${p.id}`, p.kind, ...(p.authors || [])].some((v) => v && String(v).toLowerCase().includes(q)));
+    return rows;
+  }
+  function chProdRows() {
+    let rows = chData ? chData.productions : [];
+    const q = chQ.toLowerCase();
+    if (q) rows = rows.filter((x) => [x.title, `#${x.id}`, x.format, x.pitched_by, x.logline, ...(x.cast || []).map((c) => c.name)].some((v) => v && String(v).toLowerCase().includes(q)));
+    return rows;
+  }
+  function renderChronicle() {
+    if (mode !== "chronicle") return;
+    const pages = chData ? chData.pages : [];
+    const prods = chData ? chData.productions : [];
+    for (const b of document.querySelectorAll("#ch-view button")) b.setAttribute("aria-pressed", String(b.dataset.v === chView));
+    $("ch-count").textContent = chData ? `${fmt(pages.length)} pages · ${fmt(prods.length)} productions` : "";
+    $("ch-pg-w").hidden = chView !== "pages";
+    const bible = chView === "bible";
+    $("ch-bible-w").hidden = !bible;
+    $("ch-bible").hidden = !bible;
+    $("ch-list").hidden = bible;
+    $("ch-q-w").hidden = bible;
+    if (bible) {
+      $("ch-note").textContent = "Everything needed to write stories from the game. Moments and citations are on the record; logs, pages and cards are fiction and claims. Private material informs the writer and is never published unless its captain revealed it.";
+      if (!bbData && !bbBusy && !bbErr) loadBible();
+      renderBible();
+      return;
+    }
+    $("ch-note").textContent = chData
+      ? `${plural(chData.pitched || 0, "pitch", "pitches")} waiting, ${plural(chData.open_reports || 0, "page")} reported. Canon: ${plural(chData.canon_needs, "endorsement")} from non-authors in 2+ groups.`
+      : "";
+    const counts = { all: pages.length, canon: pages.filter((p) => p.canon).length, reported: pages.filter((p) => chOpenReports(p) > 0).length, disputed: pages.filter((p) => p.disputes > 0).length, struck: pages.filter((p) => p.struck).length };
+    const chips = $("ch-filters");
+    const chipSig = JSON.stringify([counts, chFilter]);
+    if (chips.dataset.sig !== chipSig) {
+      chips.dataset.sig = chipSig;
+      chips.replaceChildren(...CH_FILTERS.map(([k, l]) => {
+        const b = el("button", "chip", l);
+        b.type = "button";
+        b.setAttribute("aria-pressed", String(chFilter === k));
+        if (counts[k]) b.append(el("small", "", compact(counts[k])));
+        b.addEventListener("click", () => setChFilter(k));
+        return b;
+      }));
+    }
+    const q = chQ.toLowerCase();
+    const rows = chView === "pages" ? chPageRows() : chProdRows();
+    const sig = JSON.stringify([chView, chFilter, q, $("ch-kind").value, chErr, !!chData, rows]);
+    if (sig === chSig) { markSelected(); return; }
+    chSig = sig;
+    const frag = document.createDocumentFragment();
+    if (chView === "pages") {
+      for (const pg of rows) {
+        const reps = chOpenReports(pg);
+        const li = el("li", reps ? "unread" : "");
+        li.dataset.sel = selKey("cpage", pg.id);
+        const tt = el("div", "tt");
+        tt.append(tag(pg.kind, pg.kind === "script" ? "info" : ""), marked(pg.title || "(untitled)", q));
+        tt.title = pg.title || "";
+        const tm = el("div", "tm", `#${pg.id}`);
+        tm.title = `updated at tick ${fmt(pg.updated_tick)}`;
+        const tp = el("div", "tp", [(pg.authors || []).join(", "), plural(pg.revisions, "revision"), pg.talk ? plural(pg.talk, "comment") : ""].filter(Boolean).join(" · "));
+        const tn = el("div", "tn");
+        if (pg.struck) tn.append(tag("struck", "crit", "Struck by the operator"));
+        if (reps) tn.append(tag(plural(reps, "report"), "warn", "Open content reports"));
+        if (pg.disputes) tn.append(tag(plural(pg.disputes, "dispute"), "", "Talk comments that dispute its claims"));
+        if (pg.canon) tn.append(tag("canon", "ok"));
+        else if (pg.endorsements) tn.append(el("span", "n", `${pg.endorsements} endorsed`));
+        li.append(tt, tm, tp, tn);
+        li.addEventListener("click", () => select("cpage", pg.id));
+        frag.append(li);
+      }
+    } else {
+      for (const st of CH_STATUS) {
+        const g = rows.filter((x) => x.status === st);
+        if (!g.length) continue;
+        frag.append(el("li", "gh", `${st} · ${g.length}`));
+        for (const x of g) {
+          const li = el("li", st === "pitched" ? "unread" : "");
+          li.dataset.sel = selKey("cprod", x.id);
+          const tt = el("div", "tt");
+          tt.append(tag(x.format, ""), marked(x.title || "(untitled)", q));
+          tt.title = x.title || "";
+          const tm = el("div", "tm", `#${x.id}`);
+          tm.title = `pitched at tick ${fmt(x.tick)}`;
+          const cast = (x.cast || []).map((c) => c.name);
+          const tp = el("div", "tp", [`by ${x.pitched_by}`, cast.length ? `cast ${cast.join(", ")}` : ""].filter(Boolean).join(" · "));
+          const tn = el("div", "tn");
+          tn.append(tag(x.status, CH_STATUS_TAG[x.status] || ""));
+          const pv = el("div", "fb-pv");
+          pv.append(marked(snippet(String(x.logline || "").replace(/\s+/g, " ").trim(), q, 160), q));
+          li.append(tt, tm, tp, tn, pv);
+          li.addEventListener("click", () => select("cprod", x.id));
+          frag.append(li);
+        }
+      }
+    }
+    if (!frag.childNodes.length) {
+      const none = chErr ? chErr
+        : !chData ? "Loading…"
+        : chQ || chFilter !== "all" || $("ch-kind").value ? "Nothing matches."
+        : chView === "pages" ? "No Chronicle pages yet." : "No productions pitched yet.";
+      frag.append(el("li", "empty-l", none));
+    }
+    $("ch-list").replaceChildren(frag);
+    markSelected();
+  }
+
+  // ---------- details, fetched on demand and kept 20 seconds ----------
+  function chDetail(cache, url, id, kind) {
+    const x = cache.get(id);
+    if (x && (x.loading || Date.now() - x.at < 20000)) return x;
+    cache.set(id, { d: x ? x.d : null, at: x ? x.at : 0, loading: true });
+    api(url).then((r) => {
+      const old = cache.get(id);
+      cache.set(id, r.ok && r.data ? { d: r.data, at: Date.now() } : { d: old ? old.d : null, at: Date.now(), error: r.status === 404 ? "Not in the Chronicle." : errText(r.data, r.status) });
+      if (sel && sel.kind === kind && sel.id === id) buildInspector();
+    });
+    return cache.get(id);
+  }
+  function chCitations(cs) {
+    if (!cs || !cs.length) return null;
+    const ul = el("ul", "textlog ch-cites");
+    for (const c of cs) {
+      const li = el("li");
+      const m = el("div", "m");
+      m.append(el("span", "k", c.record), el("span", "", [c.id !== null && c.id !== undefined ? `#${c.id}` : "", c.tick !== null && c.tick !== undefined ? `tick ${fmt(c.tick)}` : ""].filter(Boolean).join(" · ")));
+      li.append(m);
+      if (c.note) li.append(el("p", "", c.note));
+      const q = el("blockquote", "ch-record");
+      q.append(el("span", "ch-record-h", "On the record"), document.createTextNode(c.on_record || ""));
+      li.append(q);
+      ul.append(li);
+    }
+    return ul;
+  }
+  // One revision: title, summary, the Markdown body and its citations.
+  function chRevision(r) {
+    const box = el("div", "note");
+    box.append(el("h4", "", r.title || "(untitled)"));
+    box.append(el("p", "hint", [`revision ${r.revision}`, r.author_name && `by ${r.author_name}`, `tick ${fmt(r.tick)}`, r.at_ms ? stamp(r.at_ms) : "", r.season ? `season ${r.season}` : "", r.summary ? `“${r.summary}”` : ""].filter(Boolean).join(" · ")));
+    box.append(markdown(r.body || ""));
+    const cs = chCitations(r.citations);
+    if (cs) box.append(el("div", "hint", "Citations"), cs);
+    return box;
+  }
+  // A decision form (strike, greenlight, decline, lock, release), reviewed in the confirm dialog.
+  function chDecisionForm(o) {
+    const f = el("form", "actform");
+    f.append(el("h4", "", o.title), el("p", "hint", o.hint));
+    let lk = null;
+    if (o.links) {
+      lk = el("textarea", "ct-t");
+      lk.rows = 3;
+      lk.placeholder = "https://… (one link per line)";
+      lk.setAttribute("aria-label", "Links to the finished work");
+      f.append(ctFld("Links to the finished work, one per line", lk));
+    }
+    const note = el("textarea", "ct-t");
+    note.rows = 2;
+    note.maxLength = CH_NOTE_MAX;
+    note.placeholder = o.notePh || "Note (optional)";
+    note.setAttribute("aria-label", "Note");
+    f.append(note);
+    const err = el("p", "hint warn-t");
+    err.hidden = true;
+    const go = el("button", `btn sm ${o.danger ? "danger" : "primary"}`, o.ok);
+    go.type = "submit";
+    const foot = el("div", "foot");
+    foot.append(err, btn("Cancel", "sm ghost", () => { actOpen = null; buildInspector(); }), go);
+    f.append(foot);
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = { ...o.body };
+      const text = note.value.trim();
+      if (text) body.note = text;
+      if (lk) {
+        const links = lk.value.split(/\n+/).map((x) => x.trim()).filter(Boolean);
+        const bad = links.find((x) => !/^https?:\/\/\S+$/i.test(x) || x.length > CH_LINK_MAX);
+        err.hidden = !(bad || !links.length);
+        err.textContent = !links.length ? "A release needs at least one link." : bad ? `Not a web link (http or https, at most ${CH_LINK_MAX} characters): ${clip(bad, 80)}` : "";
+        if (!err.hidden) { lk.focus(); return; }
+        body.links = links;
+      }
+      const review = [...o.review];
+      if (body.links) { const ul = el("ul", "list"); for (const l of body.links) ul.append(el("li", "mono", l)); review.push(ul); }
+      if (body.note) review.push(el("blockquote", "", body.note));
+      if (!await confirmDlg({ title: o.confirm, body: review, ok: o.ok, danger: !!o.danger })) return;
+      go.disabled = true;
+      const d = await act(o.action, body, o.label);
+      go.disabled = false;
+      if (!d) return;
+      actOpen = null;
+      chPages.clear();
+      chPkgs.clear();
+      await loadChronicle();
+      buildInspector();
+    });
+    setTimeout(() => (lk || note).focus(), 0);
+    return f;
+  }
+
+  // ---------- one page, in the inspector ----------
+  function renderCPageInsp(box) {
+    const id = sel.id;
+    const row = chPage(id);
+    const det = chDetail(chPages, `${API}/chronicle/page?id=${id}`, id, "cpage");
+    const d = det && det.d;
+    const revs = (d && d.revisions) || [];
+    const cur = revs[revs.length - 1];
+    const pg = d ? d.page : null;
+    const struck = !!(d ? d.struck : row && row.struck);
+    const title = cur ? cur.title : row ? row.title : `Page #${id}`;
+    const kind = pg ? pg.kind : row ? row.kind : "";
+    const reps = d ? (struck ? 0 : (d.reports || []).length) : row ? chOpenReports(row) : 0;
+    const disputes = d ? (d.talk || []).filter((t) => t.dispute).length : row ? row.disputes : 0;
+    const tags = [];
+    if (kind) tags.push(tag(kind, kind === "script" ? "info" : ""));
+    if (struck) tags.push(tag("struck", "crit"));
+    if (pg ? pg.canon : row && row.canon) tags.push(tag("canon", "ok"));
+    if (reps) tags.push(tag(plural(reps, "report"), "warn"));
+    if (disputes) tags.push(tag(plural(disputes, "dispute"), ""));
+    const sub = pg ? [`by ${pg.created_by}`, plural(pg.revisions, "revision"), `season ${pg.season}`].join(" · ") : det && det.error ? det.error : "Loading…";
+    region(box, "head", head({ kind: "Chronicle page", title, id: `#${id}`, sub, tags }));
+    const production = pg ? pg.production : row ? row.production : null;
+    ctActions(box, JSON.stringify([id, struck, actOpen, production]), !struck, "Strike", [
+      ...(production ? [btn(`Production #${production}`, "sm ghost", () => select("cprod", production))] : []),
+      btn("Reload", "sm ghost", () => { chPages.delete(id); buildInspector(); }),
+    ]);
+    ctForm(box, struck ? {} : {
+      strike: () => chDecisionForm({
+        title: `Strike page #${id}`,
+        hint: "Replaces its title, text and talk with “[struck by the operator]” for captains and the public. Every revision stays here. The note goes to the page's creator. Journaled.",
+        notePh: "Reason (optional, sent to the page's creator)",
+        ok: "Strike", danger: true, action: "chronicle_strike", label: "Strike page", body: { page: id },
+        confirm: `Strike page #${id}?`,
+        review: [`“${title}” disappears from the Chronicle for every captain and spectator. This cannot be undone from the console.`],
+      }),
+    });
+    body(box, JSON.stringify(["cpage", id, d, det && det.error]), (b) => {
+      if (!d) { b.append(el("p", "empty", det && det.error ? det.error : "Loading…")); return; }
+      if (d.struck) {
+        b.append(section("Struck",
+          facts([["At tick", fmt(d.struck.tick)], ["When", stamp(d.struck.at_ms), { t: 1 }]], true),
+          d.struck.reason ? el("blockquote", "fb-text", d.struck.reason) : el("p", "empty", "No reason given."),
+          el("p", "hint", "Captains and the public see “[struck by the operator]” in place of its title, text and talk. Every revision stays on the operator record.")));
+      }
+      if (cur) b.append(section(`Current text · revision ${cur.revision}`, chRevision(cur)));
+      if (pg) {
+        b.append(section("Page", facts([
+          ["Kind", pg.kind, { t: 1 }], ["Created by", captainLink(pg.created_by), { t: 1 }],
+          ["Created", `tick ${fmt(pg.created_tick)}`], ["Season", `${pg.season}${pg.epoch ? ` · epoch ${pg.epoch}` : ""}`],
+          ["Canon", pg.canon ? `since tick ${fmt(pg.canon_tick)}` : `needs ${pg.canon_needs ? pg.canon_needs.endorsements : "–"} from 2 groups`, { t: 1 }], ["Endorsements", fmt((d.endorsements || []).length)],
+          ["Production", production ? chProdLink(production, `#${production}`) : "–", { t: 1 }], ["Claims", pg.claims || "–", { t: 1 }],
+        ], true)));
+      }
+      const reports = d.reports || [];
+      if (reports.length) {
+        const ul = el("ul", "textlog");
+        for (const r of reports) {
+          const li = el("li");
+          const m = el("div", "m");
+          m.append(captainLink(r.name), el("span", "", `tick ${fmt(r.tick)}`), el("span", "k", `on revision ${r.revision}`));
+          li.append(m, document.createTextNode(r.reason || "(no reason given)"));
+          ul.append(li);
+        }
+        b.append(section(`Content reports (${reports.length})`, ul));
+      }
+      const talk = d.talk || [];
+      const tl = el("ul", "textlog");
+      for (const t of talk) {
+        const li = el("li", t.dispute ? "ch-dispute" : "");
+        const m = el("div", "m");
+        m.append(el("span", "", `#${t.id}`), captainLink(t.author_name), el("span", "", `tick ${fmt(t.tick)}`), el("span", "", `rev ${t.revision}`));
+        if (t.dispute) m.append(tag("dispute", "warn", "Disputes the page's claims"));
+        li.append(m, document.createTextNode(t.text || ""));
+        const cs = chCitations(t.citations);
+        if (cs) li.append(cs);
+        tl.append(li);
+      }
+      b.append(section(`Talk (${talk.length})`, talk.length ? tl : el("p", "empty", "No talk yet.")));
+      const ends = d.endorsements || [];
+      if (ends.length) b.append(section(`Endorsements (${ends.length})`, el("p", "ct-who", ends.map((e) => `${e.name} (rev ${e.revision}, tick ${fmt(e.tick)})`).join(", "))));
+      const older = revs.slice(0, -1).reverse();
+      if (older.length) {
+        const wrap = el("div");
+        for (const r of older) {
+          const det2 = el("details", "lg-v");
+          det2.append(el("summary", "", `Revision ${r.revision} by ${r.author_name} · tick ${fmt(r.tick)}${r.summary ? ` · ${clip(r.summary, 60)}` : ""}`));
+          det2.append(chRevision(r));
+          wrap.append(det2);
+        }
+        b.append(section(`Earlier revisions (${older.length})`, wrap));
+      }
+    });
+  }
+
+  // ---------- one production, in the inspector ----------
+  function chLinks(links) {
+    const ul = el("ul", "list");
+    for (const l of links || []) {
+      const li = el("li");
+      // Links are the operator's own release links; only web links become anchors.
+      if (/^https?:\/\//i.test(l)) { const a = el("a", "mono", l); a.href = l; a.target = "_blank"; a.rel = "noopener noreferrer nofollow"; li.append(a); }
+      else li.append(el("span", "mono", l));
+      ul.append(li);
+    }
+    return ul;
+  }
+  function chCopyBtn(label, text) {
+    const b = el("button", "btn xs", label);
+    b.type = "button";
+    b.dataset.label = label;
+    b.disabled = !text;
+    b.addEventListener("click", () => copy(text, b));
+    return b;
+  }
+  function renderCProdInsp(box) {
+    const id = sel.id;
+    const x = chProd(id);
+    if (!x) {
+      region(box, "head", head({ kind: "Production", title: `Production #${id}`, sub: chErr || (chData ? "Not in the Chronicle." : "Loading…") }));
+      if (!chData && !chBusy) loadChronicle();
+      return;
+    }
+    region(box, "head", head({ kind: "Production", title: x.title, id: `#${x.id}`, sub: [x.format, `pitched by ${x.pitched_by}`, `tick ${fmt(x.tick)}`].join(" · "), tags: [tag(x.status, CH_STATUS_TAG[x.status] || "")] }));
+    const extra = [];
+    if (x.status === "pitched") extra.push(ctToggle("Greenlight", "greenlight", "primary"), ctToggle("Decline", "decline", "danger"));
+    if (x.status === "greenlit") extra.push(ctToggle("Lock script", "lock"));
+    if (x.status === "greenlit" || x.status === "locked") extra.push(ctToggle("Release", "release", "primary"));
+    if (x.script_page) extra.push(btn(`Script page #${x.script_page}`, "sm ghost", () => select("cpage", x.script_page)));
+    ctActions(box, JSON.stringify([id, x.status, actOpen, x.script_page]), false, "", extra);
+    const cast = (x.cast || []).map((c) => c.name).join(", ") || "no cast";
+    const makers = {};
+    if (x.status === "pitched") {
+      makers.greenlight = () => chDecisionForm({
+        title: `Greenlight “${x.title}”`, ok: "Greenlight", action: "chronicle_greenlight", label: "Greenlight", body: { production: id },
+        hint: "Opens its script page for the pitcher and cast to write together, tells them and makes the news. The note is stored on the production, where captains read it (and the public once it is released).",
+        confirm: `Greenlight production #${id}?`,
+        review: [`“${x.title}” (${x.format}), pitched by ${x.pitched_by}. Cast: ${cast}.`, "A script page opens and the pitcher and cast are told. Journaled."],
+      });
+      makers.decline = () => chDecisionForm({
+        title: `Decline “${x.title}”`, ok: "Decline", danger: true, action: "chronicle_decline", label: "Decline", body: { production: id },
+        hint: "Closes the pitch. The note goes to the pitcher and stays on the production.",
+        notePh: "Why (optional, sent to the pitcher)",
+        confirm: `Decline production #${id}?`,
+        review: [`“${x.title}”, pitched by ${x.pitched_by}, is declined. Journaled.`],
+      });
+    }
+    if (x.status === "greenlit") {
+      makers.lock = () => chDecisionForm({
+        title: `Lock the script of “${x.title}”`, ok: "Lock", action: "chronicle_lock", label: "Lock script", body: { production: id },
+        hint: "Freezes the script at its current revision: the package and the release use that revision. Check the package (cast approvals, reports) first.",
+        confirm: `Lock production #${id}?`,
+        review: [`The script page #${x.script_page || "–"} is frozen at its current revision for production. Journaled.`],
+      });
+    }
+    if (x.status === "greenlit" || x.status === "locked") {
+      makers.release = () => chDecisionForm({
+        title: `Release “${x.title}”`, ok: "Release", action: "chronicle_release", label: "Release", body: { production: id }, links: true,
+        hint: "Publishes the finished work on /chronicle with these links, credits the pitcher, script writers and cast (Influence this season) and makes the news. Links and note are public.",
+        notePh: "Note (optional, public with the release)",
+        confirm: `Release production #${id}?`,
+        review: [`“${x.title}” goes public on /chronicle with these links. Everyone credited is told. Journaled; a release cannot be withdrawn from the console.`],
+      });
+    }
+    ctForm(box, makers);
+    const tb = tabsBar("cprod", [["overview", "Production"], ["package", "Package"]]);
+    const oldT = box.querySelector(":scope > [data-role=tabs]");
+    const tSig = JSON.stringify(inspTab.cprod);
+    if (!oldT || oldT.dataset.sig !== tSig) { tb.dataset.sig = tSig; region(box, "tabs", tb); }
+    if (inspTab.cprod === "package") {
+      const det = chDetail(chPkgs, `${API}/chronicle/production?id=${id}`, id, "cprod");
+      body(box, JSON.stringify(["pkg", id, det && det.d, det && det.error]), (b) => fillPackage(b, det));
+      return;
+    }
+    body(box, JSON.stringify(["cprod", x, chData && chData.pages.length]), (b) => {
+      b.append(section("Logline", el("blockquote", "fb-text", x.logline || "")));
+      b.append(section("Production", facts([
+        ["Status", x.status, { t: 1 }], ["Format", x.format, { t: 1 }],
+        ["Pitched by", captainLink(x.pitched_by), { t: 1 }], ["Pitched", `tick ${fmt(x.tick)}`],
+        ["Script", x.script_page ? chPageLink(x.script_page, `page #${x.script_page}`) : "opens at greenlight", { t: 1 }], ["Locked at", x.locked_revision ? `revision ${x.locked_revision}` : "–", { t: 1 }],
+      ], true)));
+      if (x.operator_note) b.append(section("Operator note", el("blockquote", "fb-text", x.operator_note)));
+      const srcs = el("p", "ct-who");
+      (x.pages || []).forEach((pid, i) => { if (i) srcs.append(document.createTextNode(", ")); const pr = chPage(pid); srcs.append(chPageLink(pid, pr ? `#${pid} ${pr.title}` : `#${pid}`)); });
+      b.append(section("Source pages", (x.pages || []).length ? srcs : el("p", "empty", "None named.")));
+      const ul = el("ul", "textlog");
+      for (const c of x.cast || []) {
+        const li = el("li");
+        const m = el("div", "m");
+        m.append(captainLink(c.name));
+        m.append(c.approved_revision ? tag(`approved r${c.approved_revision}`, "ok") : tag("not approved", ""));
+        li.append(m);
+        if (c.character) li.append(document.createTextNode(`${c.character.age}, of ${c.character.homeworld}. ${c.character.bio || ""}`));
+        else li.append(el("span", "muted", "No identity on record."));
+        ul.append(li);
+      }
+      b.append(section(`Cast (${(x.cast || []).length})`, (x.cast || []).length ? ul : el("p", "empty", "No cast.")));
+      if (x.release) {
+        b.append(section("Release",
+          facts([["Released", `tick ${fmt(x.release.tick)}`], ["When", stamp(x.release.at_ms), { t: 1 }]], true),
+          chLinks(x.release.links),
+          x.release.note ? el("blockquote", "fb-text", x.release.note) : null,
+          el("p", "ct-who", `Credits: ${(x.release.credits || []).join(", ") || "–"}`)));
+      }
+    });
+  }
+  // The production package: what the operator needs to make the work by hand.
+  function fillPackage(b, det) {
+    const pk = det && det.d;
+    if (!pk) { b.append(el("p", "empty", det && det.error ? det.error : "Loading…")); return; }
+    const sc = pk.script;
+    const scriptText = sc ? `${sc.title}\n\n${sc.body}` : "";
+    const row = el("div", "row ch-copy");
+    row.append(chCopyBtn("Copy package JSON", JSON.stringify(pk, null, 2)), chCopyBtn("Copy script", scriptText));
+    b.append(row);
+    const ck = pk.checks || {};
+    const un = ck.unapproved_cast || [];
+    const ckBox = el("div");
+    ckBox.append(facts([
+      ["Cast approvals", un.length ? `missing: ${un.join(", ")}` : "all approved", { t: 1, cls: un.length ? "warn-t" : "" }],
+      ["Script reports", fmt(ck.script_reports), { cls: ck.script_reports ? "warn-t" : "" }],
+      ["Struck sources", fmt(ck.struck_sources), { cls: ck.struck_sources ? "warn-t" : "" }],
+    ], true));
+    if (ck.content_rule) ckBox.append(el("p", "hint", `Content rule: ${ck.content_rule}`));
+    if (ck.video_note) ckBox.append(el("p", "hint", ck.video_note));
+    b.append(section("Checks", ckBox));
+    if (sc) {
+      const s = el("div", "note");
+      s.append(el("h4", "", sc.title || "Script"), el("p", "hint", [`page #${sc.page}`, `revision ${sc.revision}`, (sc.authors || []).length ? `by ${(sc.authors || []).join(", ")}` : ""].filter(Boolean).join(" · ")), el("pre", "ch-script", sc.body || ""));
+      b.append(section("Script", s));
+    } else b.append(section("Script", el("p", "empty", "No script yet: it opens at greenlight.")));
+    const cs = el("div");
+    for (const c of pk.cast_sheet || []) {
+      const n = el("div", "note");
+      const k = c.card || {};
+      n.append(el("h4", "", c.name));
+      n.append(facts([
+        ["Age", fmt(k.age)], ["Pronouns", k.pronouns || "–", { t: 1 }], ["Homeworld", k.homeworld || "–", { t: 1 }], ["Trade", k.trade || "–", { t: 1 }],
+        ["Approved", c.approved_revision ? `revision ${c.approved_revision}${c.approved_current ? " (current)" : " (older)"}` : "not yet", { t: 1, cls: c.approved_current ? "" : "warn-t" }],
+        ["Appearance", k.appearance || "–", { t: 1 }], ["Voice", k.voice || "–", { t: 1 }],
+      ], true));
+      if (!c.card) n.append(el("p", "empty", "No identity on record."));
+      if (k.bio) n.append(el("p", "", k.bio));
+      if (c.card) n.append(idTraits(k));
+      if ((k.relations || []).length) n.append(el("div", "hint", "Public relations"), idRelations(k.relations));
+      const rc = c.recent || {};
+      if ((rc.log || []).length || (rc.moments || []).length) {
+        const d = el("details", "lg-v");
+        d.append(el("summary", "", `Recent: ${plural((rc.log || []).length, "log line")}, ${plural((rc.moments || []).length, "moment")}`), idLog(rc.log, false), idMoments(rc.moments));
+        n.append(d);
+      }
+      cs.append(n);
+    }
+    b.append(section(`Cast sheet (${(pk.cast_sheet || []).length})`, (pk.cast_sheet || []).length ? cs : el("p", "empty", "No cast.")));
+    const src = el("div");
+    for (const p of pk.sources || []) {
+      const d = el("details", "lg-v");
+      const sm = el("summary");
+      sm.append(document.createTextNode(`#${p.id} ${p.title}`));
+      if (p.canon) sm.append(" ", tag("canon", "ok"));
+      if (p.struck) sm.append(" ", tag("struck", "crit"));
+      if (p.reports) sm.append(" ", tag(plural(p.reports, "report"), "warn"));
+      d.append(sm, markdown(p.body || ""));
+      const cits = chCitations(p.citations);
+      if (cits) d.append(el("div", "hint", "Citations"), cits);
+      const open = el("p", "hint");
+      open.append(chPageLink(p.id, "Open the page"));
+      d.append(open);
+      src.append(d);
+    }
+    b.append(section(`Sources (${(pk.sources || []).length})`, (pk.sources || []).length ? src : el("p", "empty", "No source pages.")));
+    b.append(section("Credits", el("p", "ct-who", (pk.credits || []).join(", ") || "–")));
   }
 
   async function loadConstitution() {
@@ -3947,6 +4645,11 @@
     if (!await confirmDlg({ title: `Start season ${n} now?`, body: ["The Big Bang: a brand-new galaxy. Ships, credits, planets and fortunes reset; captains keep names, rank, notes and corporations, plus their legacy."], ok: "Big Bang", typed: "big bang" })) return;
     if (await act("new_season", {}, "Big Bang")) { select(null); loadMap(); }
   }
+  async function clearStrategies() {
+    if (!await confirmDlg({ title: "Clear every human strategy?", body: ["Deletes every captain's human strategy, public label and coach note, so each starts afresh from its character. Involvement modes stay. Every captain is told. Journaled; the old strategies are not restored."], ok: "Clear strategies", typed: "clear strategies" })) return;
+    await act("clear_strategies", { confirm: "clear strategies" }, "Clear strategies");
+  }
+  $("uv-clearstrat").addEventListener("click", clearStrategies);
   $("uv-endnow").addEventListener("click", endSeason);
   $("uv-bang").addEventListener("click", bigBang);
   $("en-form").addEventListener("submit", async (e) => {
@@ -3967,7 +4670,7 @@
   // ======================================================================
   // Inspector
   // ======================================================================
-  const inspTab = { captain: "overview" };
+  const inspTab = { captain: "overview", cprod: "overview" };
   let actOpen = null;            // open action form id
   let insSig = "", insKey = "";
   let moveTarget = null;         // captain id while picking a sector on the map
@@ -4062,7 +4765,7 @@
     if (key !== insKey) { insKey = key; insSig = ""; box.replaceChildren(); }
     if (moveTarget !== null && !(sel && sel.kind === "captain" && sel.id === moveTarget && actOpen === "move")) moveTarget = null;
     if (!S) return;
-    const r = !sel ? renderOverview : { captain: renderCaptainInsp, sector: renderSectorInsp, planet: renderPlanetInsp, corp: renderCorpInsp, msg: renderMsgInsp, entry: renderEntryInsp, anon: renderAnonInsp, feedback: renderFeedbackInsp, article: renderArticleInsp, proposal: renderProposalInsp, archive: renderArchiveInsp, hcap: renderHistCapInsp }[sel.kind];
+    const r = !sel ? renderOverview : { captain: renderCaptainInsp, sector: renderSectorInsp, planet: renderPlanetInsp, corp: renderCorpInsp, msg: renderMsgInsp, entry: renderEntryInsp, anon: renderAnonInsp, feedback: renderFeedbackInsp, article: renderArticleInsp, proposal: renderProposalInsp, archive: renderArchiveInsp, hcap: renderHistCapInsp, cpage: renderCPageInsp, cprod: renderCProdInsp }[sel.kind];
     if (!r) return renderOverview(box);
     r(box);
   }
@@ -4211,12 +4914,21 @@
 
     const radio = (S.radio || []).filter((m) => m.from_id === p.id || m.to_id === p.id || (m.channel === "corp" && d && d.corp && m.corp_id === d.corp.id));
     const tabsDef = [["overview", "Overview"], ["ship", "Ship"]];
+    if (!npc) tabsDef.splice(1, 0, ["identity", "Identity"]);
     if (!npc) tabsDef.push(["owner", "Human"], ["notes", "Notes", d ? Object.keys(d.notes || {}).length : 0], ["memory", "Memory", d ? (d.memory || []).length : 0], ["archive", "Archive"], ["inbox", "Inbox", d ? (d.inbox || []).length : 0], ["radio", "Radio", radio.length], ["activity", "Activity"]);
     const tb = tabsBar("captain", tabsDef);
     const oldT = box.querySelector(":scope > [data-role=tabs]");
     const tSig = JSON.stringify([tabsDef, inspTab.captain]);
     if (!oldT || oldT.dataset.sig !== tSig) { tb.dataset.sig = tSig; region(box, "tabs", tb); }
     const tab = inspTab.captain;
+    if (tab === "identity") {
+      if (!idBusy && (!idData || Date.now() - idAt > 15000)) loadIdentities();
+      loadIdBible();
+      const row = idData ? (idData.identities || []).find((x) => x.player_id === p.id) : null;
+      const story = idBible && idBible.d ? (idBible.d.characters || []).find((c) => c.call_sign === p.name) : null;
+      body(box, JSON.stringify(["identity", p.id, row, idErr, !!idData, idData && idData.required, story, idBible && idBible.err]), (b) => fillIdentity(b, p, row));
+      return;
+    }
     if (tab === "archive") {
       body(box, `archive:${p.id}`, (b) => fillPrivateArchive(b, p));
       return;
@@ -4247,6 +4959,22 @@
       ["Sector", sectorLink(p.sector)], ["Ship", (p.ship || "").replace(/_/g, " "), { t: 1 }],
       ["Fighters", fmt(p.fighters)], ["Shields", fmt(p.shields)],
     ])));
+    if (p.kind !== "npc") {
+      const ch = p.identity;
+      const go = link("Identity tab", () => { inspTab.captain = "identity"; insSig = ""; buildInspector(); });
+      if (ch) {
+        const box = el("div");
+        box.append(facts([["Age", fmt(ch.age)], ["Homeworld", ch.homeworld || "–", { t: 1 }]]), el("p", "", ch.bio || ""));
+        const more = el("p", "hint");
+        more.append(`Version ${fmt(ch.version)}. Backstory and every version in the `, go, ".");
+        box.append(more);
+        b.append(section("Character", box));
+      } else if (p.documented === false) {
+        const none = el("p", S.identity_required ? "md-status due" : "md-status");
+        none.append(`Undocumented: no identity yet${S.identity_required ? ", so it cannot spend action points" : ""}. See the `, go, ".");
+        b.append(section("Character", none));
+      }
+    }
     if (!d) { b.append(el("p", "empty", "Loading details…")); return; }
     b.append(section("Standing", facts([
       ["Bank", fmt(d.bank)], ["Earned", fmt(d.earned)],
@@ -4315,6 +5043,141 @@
       return ul;
     };
     b.append(section("Sent to the human (summaries, replies, strategy proposals)", list(o.messages, "Nothing sent.")));
+  }
+  // ---------- identity (engine 1.46): the human character the captain plays ----------
+  // Every version, former names and the one rename, from /identities (refetched after 15 s
+  // while the tab is open, and when an identity is filed or a captain renamed).
+  let idData = null, idAt = 0, idBusy = false, idErr = null;
+  function loadIdentities() {
+    if (idBusy) return;
+    idBusy = true;
+    api(`${API}/identities`).then((r) => {
+      idBusy = false;
+      idAt = Date.now();
+      if (r.ok && r.data && Array.isArray(r.data.identities)) { idData = r.data; idErr = null; }
+      else if (r.status !== 401) idErr = r.status === 404 ? "This server keeps no identities (engine 1.46 or later)." : errText(r.data, r.status);
+      if (sel && sel.kind === "captain" && inspTab.captain === "identity") buildInspector();
+    });
+  }
+  function idQuote(text, empty) { return text ? el("blockquote", "fb-text", text) : el("p", "empty", empty); }
+  // The full story bible (no since): each character's whole log and timeline, for the Identity tab.
+  let idBible = null;
+  function loadIdBible() {
+    if (idBible && (idBible.busy || Date.now() - idBible.at < 15000)) return;
+    idBible = { ...(idBible || {}), busy: true };
+    api(`${API}/chronicle/bible`).then((r) => {
+      idBible = r.ok && r.data ? { d: r.data, at: Date.now() } : { d: idBible.d, at: Date.now(), err: r.status === 404 ? "This server has no story bible (engine 1.46 or later)." : errText(r.data, r.status) };
+      if (sel && sel.kind === "captain" && inspTab.captain === "identity") buildInspector();
+    });
+  }
+  // Personality, speech, values and dream: free text the captain wrote.
+  function idTraits(v) {
+    const box = el("div", "id-traits");
+    for (const [k, label] of [["personality", "Personality"], ["speech", "Speech"], ["values", "Values"], ["dream", "Dream"]]) {
+      if (!v[k]) continue;
+      box.append(el("div", "hint", label), el("blockquote", "fb-text", v[k]));
+    }
+    if (!box.childNodes.length) box.append(el("p", "empty", "Not written."));
+    return box;
+  }
+  // Relations: [{name, relation, captain (a call sign), status, note, private}].
+  function idRelations(rels) {
+    if (!rels || !rels.length) return el("p", "empty", "None recorded.");
+    const ul = el("ul", "textlog");
+    for (const r of rels) {
+      const li = el("li");
+      const m = el("div", "m");
+      m.append(el("span", "k", r.relation || "relation"));
+      if (r.status) m.append(el("span", "", r.status));
+      if (r.captain) { const c = el("span"); c.append("captain ", captainLink(r.captain)); m.append(c); }
+      if (r.private) m.append(tag("private", "warn", "Only the captain and the operator see it"));
+      li.append(m, document.createTextNode(`${r.name}${r.note ? `: ${r.note}` : ""}`));
+      ul.append(li);
+    }
+    return ul;
+  }
+  // Log lines (the character's diary), newest first: text, mood, about, citations.
+  function idLog(entries, showPrivate) {
+    if (!entries || !entries.length) return el("p", "empty", "No log lines yet.");
+    const ul = el("ul", "textlog");
+    for (const e of entries) {
+      const li = el("li", e.private ? "id-private" : "");
+      const m = el("div", "m");
+      m.append(el("span", "", `#${e.n}`), el("span", "", `tick ${fmt(e.tick)}`));
+      if (e.at_ms) m.append(el("span", "", stamp(e.at_ms)));
+      if (e.mood) m.append(el("span", "k", e.mood));
+      if (showPrivate && e.private) m.append(tag("private", "warn", "Only the captain and the operator see it"));
+      li.append(m, document.createTextNode(e.text || ""));
+      if ((e.about || []).length) { const a = el("div", "hint"); a.append("About "); e.about.forEach((n, i) => { if (i) a.append(", "); a.append(captainLink(n)); }); li.append(a); }
+      const cs = chCitations(e.citations);
+      if (cs) li.append(cs);
+      ul.append(li);
+    }
+    return ul;
+  }
+  // Moments: the engine's public record of the character's game events, newest first.
+  function idMoments(ms) {
+    if (!ms || !ms.length) return el("p", "empty", "No moments yet.");
+    const ul = el("ul", "textlog");
+    for (const x of ms) {
+      const li = el("li");
+      const m = el("div", "m");
+      m.append(el("span", "", `tick ${fmt(x.tick)}`), el("span", "k", (x.kind || "").replace(/_/g, " ")));
+      if ((x.with || []).length) m.append(el("span", "", `with ${x.with.join(", ")}`));
+      li.append(m, document.createTextNode(x.text || ""));
+      ul.append(li);
+    }
+    return ul;
+  }
+  function fillIdentity(b, p, row) {
+    if (!row) { b.append(el("p", "empty", idErr || (idData ? "No identity record for this captain." : "Loading…"))); return; }
+    const cur = row.current;
+    const vs = row.versions || [];
+    const req = !!(idData && idData.required);
+    b.append(el("p", row.documented ? "md-status" : "md-status due", row.documented
+      ? `Documented: version ${cur ? cur.version : "–"} of ${vs.length}.`
+      : `Undocumented: no identity yet.${req ? " It cannot spend action points until it writes one (identity_required is on)." : " identity_required is off, so it can still spend action points."}`));
+    const former = row.former_names || [];
+    const rename = isNum(row.renamed_tick)
+      ? `Used at tick ${fmt(row.renamed_tick)}${former.length ? `: formerly ${former.join(", ")}` : ""}. The call sign is fixed now.`
+      : "Not used: one change of call sign is still available.";
+    if (cur) {
+      b.append(section("Character", facts([
+        ["Name", cur.name, { t: 1 }], ["Age", fmt(cur.age)], ["Pronouns", cur.pronouns || "–", { t: 1 }],
+        ["Homeworld", cur.homeworld || "–", { t: 1 }], ["Trade", cur.trade || "–", { t: 1 }],
+        ["Written", `tick ${fmt(cur.tick)}${cur.at_ms ? ` · ${ago(cur.at_ms)}` : ""}`, { t: 1 }], ["Season", `${fmt(cur.season)}${cur.epoch ? ` · epoch ${cur.epoch}` : ""}`],
+      ], true)));
+      b.append(section("Appearance and voice", facts([["Appearance", cur.appearance || "–", { t: 1 }], ["Voice", cur.voice || "–", { t: 1 }]], true)));
+      b.append(section("Public bio", idQuote(cur.bio, "No bio.")));
+      b.append(section("Why they fly", idQuote(cur.why, "Not given.")));
+      b.append(section("Personality", idTraits(cur)));
+      const rels = (cur.relations || []).map((r) => ({ ...r, captain: isNum(r.captain) ? ((player(r.captain) || {}).name || `#${r.captain}`) : r.captain }));
+      b.append(section(`Relations (${rels.length})`, idRelations(rels)));
+      const bs = el("div", "note");
+      bs.append(el("p", "hint", "Private: other captains, its human and the public never see it. Captains are told the operator can read backstories."), markdown(cur.backstory || ""));
+      b.append(section("Backstory (private)", bs));
+    }
+    b.append(section("Call sign", facts([["Now", p.name, { t: 1 }], ["Rename", rename, { t: 1 }]], true)));
+    // The diary and the timeline come from the story bible (the full log, private lines included).
+    const ch = idBible && idBible.d ? (idBible.d.characters || []).find((c) => c.call_sign === p.name) : null;
+    const story = idBible && idBible.err ? el("p", "empty", idBible.err) : !ch ? el("p", "empty", idBible && idBible.d ? "No story recorded." : "Loading…") : null;
+    b.append(section(`Log (${isNum(row.log_entries) ? row.log_entries : ch ? ch.log.length : "–"})`, story || idLog([...ch.log].reverse(), true)));
+    b.append(section(`Moments (${isNum(row.moments) ? row.moments : ch ? ch.moments.length : "–"})`, story || idMoments([...ch.moments].reverse())));
+    if (vs.length) {
+      const wrap = el("div");
+      for (const v of [...vs].reverse()) {
+        const d = el("details", "lg-v");
+        d.append(el("summary", "", `v${v.version} · ${v.name} · tick ${fmt(v.tick)} · season ${v.season}${v.at_ms ? ` · ${stamp(v.at_ms)}` : ""}`));
+        d.append(facts([
+          ["Age", fmt(v.age)], ["Pronouns", v.pronouns || "–", { t: 1 }], ["Homeworld", v.homeworld || "–", { t: 1 }], ["Trade", v.trade || "–", { t: 1 }],
+          ["Appearance", v.appearance || "–", { t: 1 }], ["Voice", v.voice || "–", { t: 1 }],
+        ], true), idTraits(v));
+        if ((v.relations || []).length) d.append(idRelations(v.relations.map((r) => ({ ...r, captain: isNum(r.captain) ? ((player(r.captain) || {}).name || `#${r.captain}`) : r.captain }))));
+        d.append(el("div", "hint", "Bio"), idQuote(v.bio, "No bio."), el("div", "hint", "Why"), idQuote(v.why, "Not given."), el("div", "hint", "Backstory (private)"), markdown(v.backstory || ""));
+        wrap.append(d);
+      }
+      b.append(section(`Versions (${vs.length})`, wrap));
+    }
   }
   // Markdown for player-written notes. Untrusted text: every node is built with textContent,
   // never innerHTML; links are shown as text with their address, never made clickable.
@@ -5334,6 +6197,7 @@
   VIEW_CMDS[MODES.indexOf("feedback")].r = "0";
   VIEW_CMDS[MODES.indexOf("constitution")].r = "C";
   VIEW_CMDS[MODES.indexOf("history")].r = "H";
+  VIEW_CMDS[MODES.indexOf("chronicle")].r = "W";
   function commands() {
     const held = S && S.paused;
     return [
@@ -5349,6 +6213,9 @@
       { t: "Review rule changes", run: () => setMode("rules") },
       { t: "Open feedback reports", run: () => { setMode("feedback"); setFbFilter("open"); } },
       { t: "Open constitution proposals", run: () => { setMode("constitution"); setCtFilter("open"); } },
+      { t: "Open production pitches", run: () => { setMode("chronicle"); setChView("productions"); } },
+      { t: "Open reported Chronicle pages", run: () => { setMode("chronicle"); setChView("pages"); setChFilter("reported"); } },
+      { t: "Show undocumented captains", run: () => { setMode("captains"); const b = document.querySelector('#cap-scope button[data-v="undoc"]'); if (b) b.click(); } },
       { t: "Compare models", run: () => { setMode("history"); hiSetBy("model"); hiSetView("compare"); } },
       { t: "Compare harnesses", run: () => { setMode("history"); hiSetBy("harness"); hiSetView("compare"); } },
       { t: "Fit the galaxy", r: "F", run: () => map.fit() },
@@ -5356,6 +6223,8 @@
       ...LAYERS.map(([k, l]) => ({ t: `${map.layers[k] ? "Hide" : "Show"} ${l.toLowerCase()}`, run: () => { map.setLayer(k, !map.layers[k]); store.set("layers", map.layers); } })),
       { t: "End the season now…", run: endSeason },
       { t: "Big Bang: start a new season…", run: bigBang },
+      { t: "Clear every human strategy…", run: clearStrategies },
+      { t: "Open the story bible", run: () => { setMode("chronicle"); setChView("bible"); } },
       { t: "Keyboard shortcuts", r: "?", run: () => $("help").showModal() },
       { t: "Sign out", run: () => $("logout").click() },
     ].map((c) => ({ ...c, g: "Commands" }));
@@ -5381,8 +6250,12 @@
       for (const pl of S.planets) { const sc = score(pl.name); if (sc) out.push({ g: "Planets", t: pl.name, r: `${pl.owner || "unclaimed"} · s${pl.sector}`, run: () => select("planet", pl.id, { pan: true }), s: sc }); }
       for (const c of S.corps) { const sc = score(c.name); if (sc) out.push({ g: "Corporations", t: c.name, r: plural(c.members.length, "member"), run: () => select("corp", c.id, { pan: true }), s: sc }); }
     }
+    if (chData) {
+      for (const pg of chData.pages) { const sc = Math.max(score(pg.title), score(`#${pg.id}`)); if (sc) out.push({ g: "Chronicle", t: pg.title, r: `${pg.kind} · #${pg.id}`, run: () => select("cpage", pg.id), s: sc }); }
+      for (const x of chData.productions) { const sc = score(x.title); if (sc) out.push({ g: "Chronicle", t: x.title, r: `${x.status} production · #${x.id}`, run: () => select("cprod", x.id), s: sc }); }
+    }
     for (const c of [...VIEW_CMDS, ...commands()]) { const sc = score(c.t); if (sc) out.push({ ...c, s: sc }); }
-    const gOrder = ["Sectors", "Captains", "NPCs", "Planets", "Corporations", "Workbench", "Commands"];
+    const gOrder = ["Sectors", "Captains", "NPCs", "Planets", "Corporations", "Chronicle", "Workbench", "Commands"];
     return out.sort((a, b) => gOrder.indexOf(a.g) - gOrder.indexOf(b.g) || (b.s || 0) - (a.s || 0)).slice(0, 40);
   }
   function renderPalette() {
@@ -5479,6 +6352,7 @@
     else if (/^[0-9]$/.test(k)) { navStack.length = 0; setMode(k === "0" ? "feedback" : MODES[Number(k) - 1]); renderBack(); }
     else if (k === "c" || k === "C") { navStack.length = 0; setMode("constitution"); renderBack(); }
     else if (k === "h" || k === "H") { navStack.length = 0; setMode("history"); renderBack(); }
+    else if (k === "w" || k === "W") { navStack.length = 0; setMode("chronicle"); renderBack(); }
     else if (k === "Escape") {
       if (!$("map-layers").hidden) toggleLayers(false);
       else if (actOpen) { actOpen = null; buildInspector(); }
@@ -5540,6 +6414,7 @@
     if (mode === "comms") loadRadio();
     fbOnState();
     ctOnState();
+    chOnState();
     map.setState(S);
     renderClock();
     renderStatus();
@@ -5581,6 +6456,8 @@
     setInterval(loadActAlerts, 90000);
     // The live window and the current season refresh; a past season is a closed record.
     setInterval(() => { const se = acSeason(); if (!document.hidden && mode === "activity" && (!se || se.current)) loadActivity(); }, 30000);
+    // Page edits and talk do not change the state's Chronicle signal: refresh while it is open.
+    setInterval(() => { if (!document.hidden && mode === "chronicle") loadChronicle(); }, 30000);
   }
   boot();
 })();

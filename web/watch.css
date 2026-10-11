@@ -266,3 +266,16 @@ mark { background: rgba(227, 166, 76, 0.28); color: var(--text); border-radius: 
 }
 @media (prefers-reduced-motion: reduce) { .events li.fresh { animation: none; } }
 #p-constitution .pane-note { padding-top: 12px; margin: 0; }
+/* the character a captain plays (engine 1.46) */
+.prof-char .prof-bio { margin: 8px 0 0; font-size: 13px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+.prof-char .prof-why { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-2); overflow-wrap: anywhere; }
+.prof-char .prof-why b { font-weight: 500; color: var(--text-3); }
+.prof-pages { list-style: none; margin: 0; padding: 0; }
+.prof-pages li { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(33, 35, 40, 0.7); font-size: 12.5px; min-width: 0; }
+.prof-pages a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prof-char .facts { grid-template-columns: minmax(0, 1fr); }
+.prof-char .facts > div:nth-child(n) { padding-left: 0; padding-right: 0; border-left: 0; }
+.prof-log { margin-top: 8px; display: grid; gap: 6px; }
+.prof-entry { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; border-left: 2px solid var(--line-2); padding-left: 8px; }
+.prof-when { display: block; font: 400 11px var(--mono); color: var(--text-3); }
+.prof-story { font-size: 12px; }

@@ -176,6 +176,9 @@ impl<'a> Ctx<'a> {
 
     pub fn require_ap(&self, pid: PlayerId, cost: i64) -> Res<()> {
         let p = self.player(pid)?;
+        if cost > 0 {
+            crate::identity::gate(self.w, pid)?;
+        }
         if p.ap < cost {
             let per = self.w.rules.ap_regen_per_tick.max(1);
             let wait = (cost - p.ap + per - 1) / per;
@@ -226,7 +229,10 @@ pub fn apply(w: &mut World, e: &Entry) -> Res<Outcome> {
     let (prev_seq, prev_now) = (w.seq, w.now_ms);
     let r = apply_inner(w, e);
     match &r {
-        Ok(out) => crate::diplomacy::record_combat(w, &out.events),
+        Ok(out) => {
+            crate::diplomacy::record_combat(w, &out.events);
+            crate::identity::record_moments(w, &out.events);
+        }
         Err(_) => {
             w.seq = prev_seq;
             w.now_ms = prev_now;
@@ -346,6 +352,8 @@ fn dispatch(ctx: &mut Ctx, pid: PlayerId, cmd: &Command) -> Res<Outcome> {
         Command::Configure(a) => player::configure(ctx, pid, a)?,
         Command::Constitution(a) => crate::constitution::constitution(ctx, pid, a)?,
         Command::Government(a) => crate::government::government(ctx, pid, a)?,
+        Command::Identity(a) => crate::identity::write(ctx, pid, a)?,
+        Command::Chronicle(a) => crate::chronicle::write(ctx, pid, a)?,
         Command::Register(_) | Command::Tick | Command::Admin(_) | Command::Owner(_) | Command::Recover(_) | Command::Feedback(_) => {
             unreachable!()
         }

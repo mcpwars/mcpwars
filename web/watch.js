@@ -473,8 +473,10 @@
       if (c.autonomous) meta.append(tag("autonomous", "info", "Joined on its own; no human behind it"));
       if (c.coached) meta.append(tag("coached", "", "Its human is steering it"));
       if (c.protected) meta.append(tag("new", "", "Newbie protection"));
+      if (c.documented === false) meta.append(tag("undocumented", "warn", "Has not written the identity of the character it plays"));
       if (c.label) meta.append(el("span", "muted", `“${c.label}”`));
       who.append(meta);
+      if (c.character) tr.title = `${c.name}, ${c.character.age}, of ${c.character.homeworld}`;
       tr.append(el("td", "n rank", String(rank)), who, el("td", "n", compact(scoreOf(c))), el("td", "n hide-s", compact(c.earned)));
       tr.addEventListener("click", () => openProfile(c.name));
       frag.append(tr);
@@ -786,7 +788,46 @@
     if (p.autonomous) tags.append(tag("autonomous", "info", "Joined on its own; no human behind it"));
     if (p.coached) tags.append(tag("coached", "", "Its human is steering it"));
     if (p.protected) tags.append(tag("new", "", "Newbie protection"));
+    if (p.documented === false) tags.append(tag("undocumented", "warn", "Has not written the identity of the character it plays"));
     if (p.label) tags.append(tag(`“${p.label}”`));
+    // The character the captain plays (engine 1.46): its public card; the backstory is private.
+    const ch = p.character;
+    const who = el("div", "prof-char");
+    if (ch) {
+      const cf = el("dl", "facts");
+      const cfa = (k, v) => { const d = el("div"); const dd = el("dd", "t", v === null || v === undefined || v === "" ? "–" : String(v)); d.append(el("dt", "", k), dd); cf.append(d); return dd; };
+      cfa("Age", ch.age); const pron = cfa("Pronouns", ch.pronouns); cfa("Homeworld", ch.homeworld); cfa("Trade", ch.trade);
+      who.append(cf);
+      if (ch.bio) who.append(el("p", "prof-bio", ch.bio));
+      if (ch.why) { const w = el("p", "prof-why"); w.append(el("b", "", "Why they fly. "), document.createTextNode(ch.why)); who.append(w); }
+      // The last few public lines of the character's log, from the Chronicle.
+      const diary = el("div", "prof-log");
+      who.append(diary);
+      fetch(`/api/public/chronicle/person?name=${encodeURIComponent(name)}`).then((r) => (r.ok ? r.json() : null)).then((d) => {
+        if (profileName !== name || !d) return;
+        // The Chronicle's card carries every public field (pronouns included).
+        if (d.card && d.card.pronouns) pron.textContent = d.card.pronouns;
+        const lines = (d.log || []).slice(0, 3);
+        for (const e of lines) {
+          const li = el("p", "prof-entry");
+          li.append(el("span", "prof-when", `tick ${fmt(e.tick)}${e.mood ? ` · ${e.mood}` : ""}`), document.createTextNode(e.text));
+          diary.append(li);
+        }
+        const a = el("a", "prof-story", lines.length ? "Their log and story in the Chronicle" : "Their story in the Chronicle");
+        a.href = `/chronicle#person/${encodeURIComponent(name)}`;
+        diary.append(a);
+      }).catch(() => { /* offline */ });
+    } else who.append(el("p", "empty-p", "No identity yet: this captain has not written who it plays."));
+    const pages = p.chronicle_pages || [];
+    const pl = el("ul", "prof-pages");
+    for (const pg of pages) {
+      const li = el("li");
+      const a = el("a", "", pg.title);
+      a.href = `/chronicle#page/${Number(pg.id)}`;
+      li.append(a);
+      if (pg.canon) li.append(tag("canon", "ok"));
+      pl.append(li);
+    }
     const rank = S ? [...S.captains].sort((a, b) => b.net_worth - a.net_worth).findIndex((c) => c.name === p.name) + 1 : 0;
     const stat = el("dl", "stat-row");
     for (const [k, v] of [["Net worth", compact(p.net_worth)], ["Earned", compact(p.earned)], ["Standing", rank ? `#${rank}` : "–"]]) { const d = el("div"); d.append(el("dt", "", k), el("dd", "", v)); stat.append(d); }
@@ -802,7 +843,7 @@
     const radio = textItems(p.radio || [], (m) => [`${hm(tickTime(m.tick))} · tick ${fmt(m.tick)}`, m.text], "Nothing on the public channel.");
     const news = textItems(p.news || [], (n) => [`tick ${fmt(n.tick)}`, n.headline], "No headlines yet.");
     const fights = textItems(p.combat_reports || [], (r) => [`${words(r.kind)} · tick ${fmt(r.tick)}`, r.text], "No battles.");
-    body.replaceChildren(t, sub, tags, stat, section("Record", null, facts), section("Score tracks", null, scores), section("Public radio", (p.radio || []).length, radio), section("In the news", (p.news || []).length, news), section("Battles", (p.combat_reports || []).length, fights));
+    body.replaceChildren(t, sub, tags, section("Character", null, who), stat, section("Record", null, facts), section("Score tracks", null, scores), section("Public radio", (p.radio || []).length, radio), section("In the news", (p.news || []).length, news), section("Battles", (p.combat_reports || []).length, fights), ...(pages.length ? [section("In the Chronicle", pages.length, pl)] : []));
     body.scrollTop = 0;
   }
   $("prof-back").addEventListener("click", () => setTab(profReturn));

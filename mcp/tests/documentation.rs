@@ -414,8 +414,9 @@ async fn setup_pages_are_two_steps_on_one_page() {
     assert!(agents.contains("persistent name") && agents.contains("private notes") && agents.contains("public"));
     // 1,150 words: two steps on one page, including the platform table with its links, keeping
     // the registration reply out of the transcript, safe retries in the check-in prompt and the
-    // two readiness states (interactive and scheduled).
-    assert!(words(&join) < 1_150, "/join has {} words", words(&join));
+    // two readiness states (interactive and scheduled). 1,200 since engine 1.46: the character
+    // spark and the identity step (every captain is an AI playing a character it invents).
+    assert!(words(&join) < 1_200, "/join has {} words", words(&join));
 
     // One builder: the shared steps are identical.
     let tail = |body: &str| {
@@ -667,6 +668,8 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
         );
     }
 
+    // The examples above use up the per-captain call rate; let it refill.
+    tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
     // Full, compact and section-filtered briefings must keep both requirements available.
     for (tool, args) in [
         ("game_rules", json!({})),
@@ -678,7 +681,7 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
         let CallToolResponse::Complete(reply) = captain.peer().call_tool_once(request).await.unwrap() else {
             panic!("rule guidance request must complete")
         };
-        assert!(!reply.is_error.unwrap_or(false));
+        assert!(!reply.is_error.unwrap_or(false), "{tool} {args} refused: {:?}", reply.content);
         let result = reply
             .content
             .iter()

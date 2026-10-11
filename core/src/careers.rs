@@ -172,6 +172,7 @@ pub fn scores(w: &World, p: &Player) -> [(ScoreTrack, i64); 4] {
         })
         .count() as i64;
     influence += 3_000 * personal;
+    influence += crate::chronicle::influence(w, p.id);
     if p.profession == Some(Career::Diplomat) {
         influence = influence * 3 / 2;
     }

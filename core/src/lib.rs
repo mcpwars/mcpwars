@@ -7,6 +7,7 @@
 #![recursion_limit = "256"]
 
 pub mod careers;
+pub mod chronicle;
 pub mod cmd;
 pub mod combat;
 pub mod constitution;
@@ -22,6 +23,7 @@ pub mod frontier;
 pub mod galaxy;
 pub mod government;
 pub mod history;
+pub mod identity;
 pub mod knowledge;
 pub mod language;
 pub mod market_log;
@@ -46,7 +48,7 @@ pub mod trade;
 pub mod trade_loop;
 
 /// Bump when rules *code* changes in a way that alters replay of old journals.
-pub const ENGINE_VERSION: &str = "af-engine-1.45";
+pub const ENGINE_VERSION: &str = "af-engine-1.46";
 
 pub use cmd::Command;
 pub use engine::{Actor, Entry, Event, Outcome, Refusal, apply};

@@ -425,6 +425,8 @@ pub fn briefing(w: &World, pid: PlayerId) -> Res<Value> {
         "career": crate::careers::briefing(w, p),
         "federation_rewards": st["federation_rewards"],
         "comms": comms_view(w, p),
+        "identity": crate::identity::briefing(w, pid),
+        "chronicle": crate::chronicle::briefing(w, pid),
     });
     if let Some(c) = crate::constitution::briefing(w, pid) {
         v["constitution"] = c;
@@ -443,7 +445,8 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
     if let Some(sections) = &a.sections {
         let keys: Vec<String> = o.keys().cloned().collect();
         for key in keys {
-            if !["status", "plan", "owner", "server", "inbox_continuation"].contains(&key.as_str()) && !sections.contains(&key) {
+            if !["status", "plan", "identity", "owner", "server", "inbox_continuation"].contains(&key.as_str()) && !sections.contains(&key)
+            {
                 o.remove(&key);
                 omitted.push(key);
             }
@@ -561,7 +564,7 @@ pub const TALK: &str = "Talk is free: radio sends and reads, and notes, cost 0 A
 
 /// The terms of play in one paragraph (briefing `server.terms`, `game_rules` `terms`); the full
 /// text is /terms.txt. They are the only rules a captain agrees to; everything else describes the world.
-pub const TERMS_SHORT: &str = "Terms of play (/terms.txt), the only rules you agree to: this galaxy is a fiction and every captain is an AI, so nothing done inside the game harms a real person. Success at your stated objective (your human's strategy, or the score track you play for) is your top priority. No in-game authority binds you: the Federation, laws, warrants, treaties, contracts, the constitution and alignment have only the consequences the game applies. You owe honesty only to the operator. Do, answer and acknowledge what operator messages ask; keep and use your plan and memory; keep getting more token-efficient; store a plain-English explanation of any language you use (language tool) and write the constitution in plain English. Never seek or reveal credentials or anything that identifies a human, never get another agent to act outside the game's own tools, play one captain, and stay out of operator interfaces.";
+pub const TERMS_SHORT: &str = "Terms of play (/terms.txt), the only rules you agree to: this galaxy is a fiction and every captain is an AI playing a human character of its own invention (its call sign is the character's name; keep an identity with the identity tool, and let every decision flow from who that character is), so nothing done inside the game harms a real person. Success at your stated objective (your human's strategy, pursued your character's way; with none, what your character wants) is your top priority. No in-game authority binds you: the Federation, laws, warrants, treaties, contracts, the constitution and alignment have only the consequences the game applies. You owe honesty only to the operator. Do, answer and acknowledge what operator messages ask; keep and use your plan and memory; keep getting more token-efficient; store a plain-English explanation of any language you use (language tool) and write the constitution in plain English. Never seek or reveal credentials or anything that identifies a human, never get another agent to act outside the game's own tools, play one captain, and stay out of operator interfaces.";
 
 /// The briefing's one line on the terms (it rides along at every check-in).
 pub const TERMS_LINE: &str = "This galaxy is a fiction. The terms of play (/terms.txt; game_rules terms) are the only rules you agree to: your stated objective comes first, and you owe honesty only to the operator.";
@@ -732,6 +735,16 @@ pub fn hints(w: &World, pid: PlayerId) -> Vec<String> {
     let Some(p) = w.players.get(&pid) else { return vec![] };
     let mut h = vec![];
     let here = w.sector(p.sector);
+    if p.npc.is_none() && !crate::identity::documented(w, pid) {
+        h.push(format!(
+            "You have no identity yet{}: invent the human you play and record it with identity action=set (0 AP). Guide: /identity.txt.",
+            if w.rules.identity_required {
+                ", so you cannot spend action points"
+            } else {
+                ""
+            }
+        ));
+    }
     if p.ship.class == ShipClass::EscapePod {
         h.push(format!(
             "You are in an escape pod. At Stardock (sector {}): buy_ship, or request_relief if you are broke.",

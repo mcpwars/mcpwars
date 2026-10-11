@@ -35,6 +35,9 @@ const LANDING_CSS: &str = include_str!("../../web/landing.css");
 const SCOREBOARD_HTML: &str = include_str!("../../web/scoreboard.html");
 const SCOREBOARD_JS: &str = include_str!("../../web/scoreboard.js");
 const CONNECT_HTML: &str = include_str!("../../web/connect.html");
+const CHRONICLE_HTML: &str = include_str!("../../web/chronicle.html");
+const CHRONICLE_JS: &str = include_str!("../../web/chronicle.js");
+const CHRONICLE_CSS: &str = include_str!("../../web/chronicle.css");
 const CONNECT_JS: &str = include_str!("../../web/connect.js");
 
 const SYSOP_HTML: &str = include_str!("../../web/sysop.html");
@@ -137,6 +140,28 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/watch", get(page_watch))
         .route("/connect", get(page_connect))
         .route("/scoreboard", get(page_scoreboard))
+        .route("/chronicle", get(page_chronicle))
+        .route(
+            "/chronicle.js",
+            get(|| async {
+                (
+                    [
+                        (header::CONTENT_TYPE, "application/javascript"),
+                        (header::CACHE_CONTROL, ASSET_CACHE),
+                    ],
+                    CHRONICLE_JS,
+                )
+            }),
+        )
+        .route(
+            "/chronicle.css",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/css"), (header::CACHE_CONTROL, ASSET_CACHE)],
+                    CHRONICLE_CSS,
+                )
+            }),
+        )
         .route("/sitemap.xml", get(sitemap_xml))
         .route("/site.webmanifest", get(webmanifest))
         .route(
@@ -283,6 +308,8 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/public/history", get(public_history))
         .route("/api/public/seasons", get(public_seasons))
         .route("/api/public/constitution", get(public_constitution))
+        .route("/api/public/chronicle", get(public_chronicle))
+        .route("/api/public/chronicle/page", get(public_chronicle_page))
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/info", get(info))
         .route("/api/register", post(register))
@@ -323,6 +350,12 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/sysop/rules", get(sysop_rules))
         .route("/api/sysop/constitution", get(sysop_constitution))
         .route("/api/sysop/languages", get(sysop_languages))
+        .route("/api/sysop/identities", get(sysop_identities))
+        .route("/api/sysop/chronicle", get(sysop_chronicle))
+        .route("/api/sysop/chronicle/page", get(sysop_chronicle_page))
+        .route("/api/sysop/chronicle/production", get(sysop_chronicle_production))
+        .route("/api/sysop/chronicle/bible", get(sysop_chronicle_bible))
+        .route("/api/public/chronicle/person", get(public_chronicle_person))
         .route("/api/sysop/history", get(sysop_history))
         .route("/api/sysop/history/season", get(sysop_history_season))
         .route("/api/sysop/history/day", get(sysop_history_day))
@@ -579,6 +612,10 @@ async fn page_scoreboard(State(s): State<AppState>) -> Response {
     page(crate::site::render(SCOREBOARD_HTML, &s.site, &crate::site::SCOREBOARD, Some(&live)))
 }
 
+async fn page_chronicle(State(s): State<AppState>) -> Response {
+    page(crate::site::render(CHRONICLE_HTML, &s.site, &crate::site::CHRONICLE, None))
+}
+
 async fn page_watch(State(s): State<AppState>) -> Response {
     page(crate::site::render(WATCH_HTML, &s.site, &crate::site::WATCH, None))
 }
@@ -813,6 +850,52 @@ async fn public_constitution(State(s): State<AppState>, Query(q): Query<KeyQ>, h
         return StatusCode::UNAUTHORIZED.into_response();
     }
     Json(s.game.read(af_core::constitution::public_view).await).into_response()
+}
+
+/// Query parameters of the Chronicle routes (public and operator).
+#[derive(Deserialize, Default)]
+struct ChronicleQ {
+    #[serde(default)]
+    id: Option<u64>,
+    #[serde(default)]
+    kind: Option<af_core::chronicle::Kind>,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    canon: Option<bool>,
+    #[serde(default)]
+    before: Option<u64>,
+    #[serde(default)]
+    since_tick: Option<u64>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+async fn public_chronicle_person(State(s): State<AppState>, Query(q): Query<ChronicleQ>) -> Response {
+    let (name, before) = (q.name.unwrap_or_default(), q.before);
+    match s.game.read(move |w| af_core::chronicle::public_person(w, &name, before)).await {
+        Some(v) => Json(v).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "no such captain"}))).into_response(),
+    }
+}
+
+async fn public_chronicle(State(s): State<AppState>, Query(q): Query<ChronicleQ>) -> Response {
+    let a = af_core::chronicle::Args {
+        kind: q.kind,
+        query: q.query,
+        canon: q.canon,
+        before: q.before,
+        ..Default::default()
+    };
+    Json(s.game.read(move |w| af_core::chronicle::public_view(w, &a)).await).into_response()
+}
+
+async fn public_chronicle_page(State(s): State<AppState>, Query(q): Query<ChronicleQ>) -> Response {
+    let id = q.id.unwrap_or(0);
+    match s.game.read(move |w| af_core::chronicle::public_page(w, id)).await {
+        Some(v) => Json(v).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "no such page"}))).into_response(),
+    }
 }
 
 async fn spec_state(State(s): State<AppState>, Query(q): Query<KeyQ>, h: HeaderMap) -> Response {
@@ -1099,6 +1182,17 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
             .await
             .map(|o| json!({"summary": o.summary})),
         // Refuses unless the body says {"confirm": "fresh start"}: it wipes the game for everyone.
+        "clear_strategies" => {
+            if b["confirm"].as_str() != Some("clear strategies") {
+                return Some(Err(af_core::Refusal::new(
+                    "confirm_required",
+                    "This deletes every captain's human strategy, public label and coach note (involvement modes stay). Send {\"confirm\": \"clear strategies\"} to proceed.",
+                )));
+            }
+            game.exec(Actor::System, Command::Admin(AdminArgs::ClearStrategies))
+                .await
+                .map(|o| json!({"summary": o.summary, "result": o.reply}))
+        }
         "fresh_start" => {
             if b["confirm"].as_str() != Some("fresh start") {
                 return Some(Err(af_core::Refusal::new(
@@ -1286,6 +1380,31 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
             )
             .await
             .map(|_| json!({"summary": "Recovery key issued. Shown once: hand it to the captain privately; it calls recover_access with its call sign and this key.", "player_id": pid, "recovery_key": key}))
+        }
+        "chronicle_greenlight" | "chronicle_decline" | "chronicle_lock" | "chronicle_release" | "chronicle_strike" => {
+            use af_core::chronicle::AdminAction as A;
+            let act = match action {
+                "chronicle_greenlight" => A::Greenlight,
+                "chronicle_decline" => A::Decline,
+                "chronicle_lock" => A::Lock,
+                "chronicle_release" => A::Release,
+                _ => A::Strike,
+            };
+            let links = b["links"]
+                .as_array()
+                .map(|l| l.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+            game.exec(
+                Actor::System,
+                Command::Admin(AdminArgs::Chronicle(af_core::chronicle::AdminArgs {
+                    decision: act,
+                    production: b["production"].as_u64(),
+                    page: b["page"].as_u64(),
+                    note: b["note"].as_str().map(String::from),
+                    links,
+                })),
+            )
+            .await
+            .map(|o| json!({"summary": o.summary, "result": o.reply}))
         }
         "constitution_strike" => game
             .exec(
@@ -1855,6 +1974,40 @@ struct ConstitutionQ {
 /// each vote and every ballot, removed articles, operator notices and the archived seasons. With
 /// `season`, that season's constitution from the permanent record; with `proposal` or `article`,
 /// just that one. 404 for an unknown season, proposal or article.
+async fn sysop_identities(State(s): State<AppState>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    Json(s.game.read(af_core::identity::operator_view).await).into_response()
+}
+
+async fn sysop_chronicle(State(s): State<AppState>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    Json(s.game.read(af_core::chronicle::operator_view).await).into_response()
+}
+
+async fn sysop_chronicle_page(State(s): State<AppState>, Query(q): Query<ChronicleQ>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    let id = q.id.unwrap_or(0);
+    match s.game.read(move |w| af_core::chronicle::operator_page(w, id)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(r) => (StatusCode::NOT_FOUND, Json(json!({"error": r}))).into_response(),
+    }
+}
+
+async fn sysop_chronicle_production(State(s): State<AppState>, Query(q): Query<ChronicleQ>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    let id = q.id.unwrap_or(0);
+    match s.game.read(move |w| af_core::chronicle::production_package(w, id)).await {
+        Ok(v) => Json(v).into_response(),
+        Err(r) => (StatusCode::NOT_FOUND, Json(json!({"error": r}))).into_response(),
+    }
+}
+
+async fn sysop_chronicle_bible(State(s): State<AppState>, Query(q): Query<ChronicleQ>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    let since = q.since_tick;
+    Json(s.game.read(move |w| af_core::chronicle::story_bible(w, since)).await).into_response()
+}
+
 async fn sysop_languages(State(s): State<AppState>, h: HeaderMap) -> Response {
     sysop_guard!(s, h);
     Json(s.game.read(af_core::language::operator_view).await).into_response()

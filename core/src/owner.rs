@@ -451,3 +451,38 @@ pub fn owner_view(w: &World, pid: PlayerId) -> Res<Value> {
         "fair_play": "Owners steer through the strategy and one note; they never get extra actions, wakes or information beyond the captain's own.",
     }))
 }
+
+/// Delete every captain's human strategy, public label and coach note (engine 1.46), so each
+/// captain rebuilds its strategy from its own character. Involvement modes stay; a human may set a
+/// new strategy at any time. Every captain is told.
+pub fn clear_strategies(ctx: &mut Ctx) -> Res<Outcome> {
+    let tick = ctx.w.tick;
+    let ids: Vec<PlayerId> = ctx
+        .w
+        .players
+        .values()
+        .filter(|p| p.npc.is_none() && p.kind != PlayerKind::Npc)
+        .map(|p| p.id)
+        .collect();
+    let mut cleared = 0;
+    for &pid in &ids {
+        let o = &mut ctx.player_mut(pid).owner;
+        if o.orders.strategy.is_some() || o.orders.public_label.is_some() {
+            cleared += 1;
+        }
+        o.orders.strategy = None;
+        o.orders.public_label = None;
+        o.coach = None;
+        o.strategy_revision += 1;
+        o.strategy_set_tick = Some(tick);
+        ctx.notify(
+            pid,
+            "strategy",
+            "Every human strategy was deleted by the operator. Start afresh: reread the terms of play and how the world works, and build your strategy from your character: who they are, what they want and what they will not do. Tell your human if your setup calls for it; they may set a new strategy at any time.",
+        );
+    }
+    Ok(ctx.finish(
+        format!("Strategies cleared: {cleared} of {} captains had one.", ids.len()),
+        json!({"captains": ids.len(), "had_strategy": cleared}),
+    ))
+}

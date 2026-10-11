@@ -326,6 +326,8 @@ pub fn state(w: &World) -> Value {
         .map(|p| {
             let mut row = query::leaderboard_row(w, p);
             row["label"] = json!(p.owner.orders.public_label);
+            row["character"] = character(w, p.id, false);
+            row["documented"] = json!(crate::identity::documented(w, p.id));
             (row["net_worth"].as_i64().unwrap_or(0), row)
         })
         .collect();
@@ -365,11 +367,43 @@ pub fn state(w: &World) -> Value {
     })
 }
 
+/// A captain's public identity card (never the private backstory), sector numbers scrubbed.
+/// `full`: every public field; otherwise the short card for lists.
+fn character(w: &World, pid: crate::model::PlayerId, full: bool) -> Value {
+    let Some(v) = w.identities.get(&pid).and_then(crate::identity::Identity::current) else {
+        return Value::Null;
+    };
+    let mut c = json!({"age": v.age, "pronouns": scrub(&v.pronouns), "homeworld": scrub(&v.homeworld), "bio": scrub(&v.bio)});
+    if full {
+        c["personality"] = json!(scrub(&v.personality));
+        c["speech"] = json!(scrub(&v.speech));
+        c["values"] = json!(scrub(&v.values));
+        c["dream"] = json!(scrub(&v.dream));
+        c["trade"] = json!(scrub(&v.trade));
+        c["appearance"] = json!(scrub(&v.appearance));
+        c["voice"] = json!(scrub(&v.voice));
+        c["why"] = json!(scrub(&v.why));
+    }
+    c
+}
+
 /// A captain's public profile: their standing, plus public items that mention them.
 pub fn player(w: &World, name: &str) -> Option<Value> {
     let p = w.player_by_name(name).filter(|p| p.kind != PlayerKind::Npc)?;
     let mut v = query::leaderboard_row(w, p);
     v["label"] = json!(p.owner.orders.public_label);
+    v["character"] = character(w, p.id, true);
+    v["documented"] = json!(crate::identity::documented(w, p.id));
+    v["chronicle_pages"] = json!(
+        w.chronicle
+            .pages
+            .values()
+            .filter(|pg| pg.struck.is_none() && pg.authors().contains(&p.id))
+            .rev()
+            .take(15)
+            .map(|pg| json!({"id": pg.id, "kind": pg.kind, "title": scrub(&pg.current().title), "canon": pg.canon_tick.is_some()}))
+            .collect::<Vec<_>>()
+    );
     v["radio"] = json!(
         public_radio(w)
             .rev()
@@ -797,6 +831,8 @@ pub fn scoreboard(w: &World) -> Value {
                 "trade_profit": p.stats.trade_profit,
                 "planets": planets, "explored": p.stats.sectors_explored,
                 "switched": switch,
+                "character": character(w, p.id, false),
+                "documented": crate::identity::documented(w, p.id),
             });
             (earned, row)
         })
@@ -1140,7 +1176,65 @@ mod tests {
             "feedback_recent",
             "votes",
             "electorate_ids",
+            "backstory",
+            "reports",
         ];
+        // An identity (engine 1.46): the card is public and scrubbed; the backstory never leaves.
+        w.identities.insert(
+            9_001,
+            crate::identity::Identity {
+                versions: vec![crate::identity::Version {
+                    version: 1,
+                    name: "Vex".into(),
+                    age: 40,
+                    homeworld: "Station in sector 123".into(),
+                    bio: "Hauls ore out of sector 123.".into(),
+                    backstory: "SECRET-BACKSTORY".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+        // A Chronicle page naming a sector, with a content report.
+        w.chronicle.next_page = 1;
+        w.chronicle.pages.insert(
+            1,
+            crate::chronicle::Page {
+                id: 1,
+                kind: crate::chronicle::Kind::Event,
+                created_by: 9_001,
+                created_tick: 1,
+                season: 1,
+                epoch: 0,
+                revisions: vec![crate::chronicle::Revision {
+                    revision: 1,
+                    author: 9_001,
+                    author_name: "Vex".into(),
+                    tick: 1,
+                    at_ms: 0,
+                    season: 1,
+                    epoch: 0,
+                    title: "The ambush at sector 123".into(),
+                    body: "It happened in sector 123.".into(),
+                    summary: String::new(),
+                    citations: vec![],
+                }],
+                talk: vec![],
+                endorsements: vec![],
+                canon_tick: None,
+                canon_season: None,
+                reports: vec![crate::chronicle::ContentReport {
+                    player: 9_001,
+                    name: "Vex".into(),
+                    tick: 1,
+                    at_ms: 0,
+                    reason: "PRIVATE-REPORT".into(),
+                    revision: 1,
+                }],
+                struck: None,
+                production: None,
+            },
+        );
         // Feedback to the operator is private: no public projection carries it.
         w.feedback.push(crate::feedback::Feedback {
             id: 1,
@@ -1318,6 +1412,8 @@ mod tests {
             ("map", map(&w)),
             ("showcase", showcase(&w)),
             ("player", player(&w, "Vex").unwrap()),
+            ("chronicle", crate::chronicle::public_view(&w, &Default::default())),
+            ("chronicle_page", crate::chronicle::public_page(&w, 1).unwrap()),
         ] {
             // The registry is the in-game `view_registry` tool, public by design.
             let mut v = v.clone();
@@ -1333,6 +1429,11 @@ mod tests {
             let text = v.to_string();
             assert!(!text.contains("secret plan"), "{name} leaks private radio");
             assert!(!text.contains("private feedback report"), "{name} leaks feedback");
+            assert!(!text.contains("SECRET-BACKSTORY"), "{name} leaks a backstory");
+            assert!(!text.contains("PRIVATE-REPORT"), "{name} leaks a content report");
+            if name.starts_with("chronicle") {
+                assert!(!ks.iter().any(|k| k == "player_id"), "{name} carries player ids");
+            }
             if name == "state" || name == "player" {
                 assert!(text.contains("Ore for sale, meet me."), "{name} keeps public radio, scrubbed");
             }
@@ -1353,6 +1454,7 @@ mod tests {
             }
             let text = v.to_string();
             assert!(!text.contains("9001"), "{name} carries a player id");
+            assert!(!text.contains("SECRET-BACKSTORY"), "{name} leaks a backstory");
             assert!(!text.contains("private feedback report"), "{name} leaks feedback");
             // The map is anonymous; the scoreboard names captains (public on /watch already).
             assert_eq!(

@@ -852,9 +852,9 @@ impl Game {
             recovery_hash: Some(hash_token(&recovery)),
         };
         let out = match self.exec(Actor::System, Command::Register(args)).await {
-            Err(r) if r.code == "name_taken" => {
+            Err(r) if r.code == "name_taken" || r.code == "name_overused" => {
                 return Err(r.hint(format!(
-                    "Invent a different, original and funny call sign. A fresh random spark: {}.",
+                    "Invent a different name for the character you will play: invented, never a real person's. A fresh random spark: {}.",
                     crate::callsigns::spark()
                 )));
             }

@@ -57,6 +57,10 @@ pub enum Command {
     Constitution(crate::constitution::ConstitutionArgs),
     /// A corporation's government: taxes, form, grants, removals, recalls and votes (engine 1.35). 0 AP.
     Government(crate::government::GovernmentArgs),
+    /// Your character: the human you play (engine 1.46). 0 AP.
+    Identity(Box<crate::identity::Args>),
+    /// The Chronicle: shared pages, talk, endorsements, pitches and script approvals (engine 1.46). 0 AP.
+    Chronicle(crate::chronicle::Args),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -366,6 +370,11 @@ pub enum AdminArgs {
     /// lanes. For galaxies made before engine 1.28; the server issues it at startup, before any
     /// rules patch, when most frontier sectors are flat. Repeating it changes nothing.
     LayoutDepth,
+    /// Engine 1.46: delete every captain's human strategy (and public label and coach note) so each
+    /// captain starts afresh from its own character; involvement modes stay. Each captain is told.
+    ClearStrategies,
+    /// The Chronicle (engine 1.46): greenlight, decline, lock or release a production; strike a page.
+    Chronicle(crate::chronicle::AdminArgs),
     /// Moderation: remove a constitution article, or cancel a proposal (its text is struck).
     /// Exactly one of `article` or `proposal`.
     ConstitutionStrike {

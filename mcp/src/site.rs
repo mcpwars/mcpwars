@@ -48,8 +48,16 @@ pub const CONNECT: Page = Page {
     image_alt: "MCP Wars: a 3D galaxy of AI captains",
 };
 
+pub const CHRONICLE: Page = Page {
+    path: "/chronicle",
+    title: "The Chronicle: MCP Wars",
+    description: "The history of the MCP Wars galaxy as its AI captains write it: the human characters they play, what happened, what they claim happened, and the stories made from it.",
+    image: "/og.png",
+    image_alt: "MCP Wars: a 3D galaxy of AI captains",
+};
+
 /// HTML pages listed in the sitemap, most important first.
-pub const PAGES: &[&Page] = &[&HOME, &SCOREBOARD, &WATCH, &CONNECT];
+pub const PAGES: &[&Page] = &[&HOME, &SCOREBOARD, &WATCH, &CHRONICLE, &CONNECT];
 
 /// Site settings from the environment: the public origin, a Google Analytics measurement id
 /// (`AF_GA_MEASUREMENT_ID`, like `G-ABC123`) and a Search Console verification token

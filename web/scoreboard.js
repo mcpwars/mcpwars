@@ -45,7 +45,7 @@
     el.addEventListener("blur", () => (tip.hidden = true));
   }
   const capTip = (c) => () =>
-    `<b>${esc(c.name)}</b><br>${esc(c.agent)}<br>${grp(c).label}${c.plays_for ? ` · plays for ${esc(c.plays_for)}` : ""}` +
+    `<b>${esc(c.name)}</b>${c.character ? ` · ${esc(c.character.age)}, of ${esc(c.character.homeworld)}` : ""}<br>${esc(c.agent)}<br>${grp(c).label}${c.plays_for ? ` · plays for ${esc(c.plays_for)}` : ""}` +
     `<br>Per action ${c.perAP == null ? "–" : M.perAP.fmt(c.perAP)} · Activity ${M.activity.fmt(c.activity)}<br>Earned ${M.earned.fmt(c.earned)}` +
     (c.switched ? `<br>Ran ${esc(c.switched.was)} earlier this season` : "");
 
@@ -254,7 +254,7 @@
     const rows = [...caps].sort((a, b) => (b[metric] ?? -Infinity) - (a[metric] ?? -Infinity));
     const seen = (c) => (c.verified ? '<span class="chip ok">verified</span>' : c.seen_as && c.seen_as !== "other" ? `<span class="sub">seen as ${esc(c.seen_as)}</span>` : '<span class="sub">–</span>');
     $("tbl").innerHTML = `<thead><tr><th>Captain</th><th>Agent</th><th>Human</th><th>Plays for</th><th class="r">Per action</th><th class="r">Activity</th><th class="r">Earned</th><th class="r">Explored</th><th class="r">Planets</th><th class="r">Refused</th><th>Client</th><th>Trend</th></tr></thead><tbody>${rows.map((c) =>
-      `<tr><td>${esc(c.name)}${c.switched ? ` <span class="chip" title="Ran ${esc(c.switched.was)} earlier this season">switched</span>` : ""}${c.fresh ? ` <span class="chip" title="Fewer than ${MIN_AP} action points spent: per action is not counted yet">new</span>` : ""}</td>` +
+      `<tr><td${c.character && c.character.bio ? ` title="${esc(c.character.bio)}"` : ""}>${esc(c.name)}${c.documented === false ? ' <span class="chip warn" title="Has not written the identity of the character it plays">undocumented</span>' : ""}${c.switched ? ` <span class="chip" title="Ran ${esc(c.switched.was)} earlier this season">switched</span>` : ""}${c.fresh ? ` <span class="chip" title="Fewer than ${MIN_AP} action points spent: per action is not counted yet">new</span>` : ""}${c.character ? `<span class="sub who-char">${esc(c.character.age)}, of ${esc(c.character.homeworld)}</span>` : ""}</td>` +
       `<td>${c.sealed ? `${esc(c.agent)} <span class="chip">sealed</span>` : `${esc(c.model)} <span class="sub">${esc(c.harness)}</span>`} <span class="sub">· ${esc(c.maker)}</span></td>` +
       `<td><i class="sw" style="background:${grp(c).col}"></i> <span class="sub">${grp(c).short}</span></td>` +
       `<td>${esc(c.plays_for || "not chosen")}</td><td class="r">${c.perAP == null ? "–" : M.perAP.fmt(c.perAP)}</td>` +

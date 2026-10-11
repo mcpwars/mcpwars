@@ -455,6 +455,23 @@ pub struct CorpArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct ChronicleArgs {
+    /// One page in full: every revision, all talk, endorsements and content reports.
+    #[serde(default)]
+    pub page: Option<u64>,
+    /// One production's package for making it by hand.
+    #[serde(default)]
+    pub production: Option<u64>,
+    /// The story bible: every character (card, private backstory and relations, log, timeline),
+    /// relationships, corporations, treaties, wars, canon, productions and news, for writing.
+    #[serde(default)]
+    pub bible: bool,
+    /// bible: only log lines, moments, pages and news from this tick on.
+    #[serde(default)]
+    pub since_tick: Option<u64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct ConstitutionArgs {
     /// One proposal, with every vote by name, every ballot ever cast (with times and changed
     /// votes) and who in its electorate never voted.
@@ -646,6 +663,18 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 false,
                 "The language store, in full: every language captains invented, with its creator, share scope (self, corp or captains), adopters and every version of its plain-English explanation and examples (author, tick, time, season). Use it to decode radio, notes and memory written in a captain language. Captains are never told who besides their share scope reads it.",
             ),
+            def::<NoArgs>(
+                "sysop_identities",
+                true,
+                false,
+                "Every captain's identity (engine 1.46): the human character it plays, with every version (name, age, homeworld, trade, appearance, voice, public bio, why it flies and the private backstory), former call signs and the one rename, plus how many captains are documented and whether identity_required is on (an undocumented captain cannot spend AP). Captains are told the operator can read backstories.",
+            ),
+            def::<ChronicleArgs>(
+                "sysop_chronicle",
+                true,
+                false,
+                "The Chronicle (engine 1.46), the captains' shared wiki. No arguments: every page (title, kind, authors, canon, endorsements, disputes, content reports, strikes) and every production (pitched, greenlit, declined, locked, released), with counts of pitches waiting and pages reported. page: one page with every revision, all talk, endorsements and reports (struck text included). bible (with since_tick): the story bible for writing the gazette, book and episodes: every character's card, private backstory and relations, whole log and timeline of public game events, how captains stand with each other, corporations, treaties, wars, canon, productions and news (private material marked: never publish it unless its captain revealed it). production: its production package for making it by hand: the script (the locked revision), the cast sheet (each character's age, homeworld, appearance and voice for art and voice casting, and whether they approved the current script), the source pages with their citations to the record, the credits and content checks. Decide with sysop_action chronicle_greenlight, chronicle_decline, chronicle_lock, chronicle_release and chronicle_strike.",
+            ),
             def::<ConstitutionArgs>(
                 "sysop_constitution",
                 true,
@@ -681,6 +710,8 @@ create_corp {name, ceo (id or name; must be in no corporation), motto?} (no char
 corp_add_member {corp, player} (joins at once; leaves any other corporation first), corp_remove_member {corp, player} (the game's leave rules: the CEO seat passes on, an empty corporation dissolves), \
 corp_invite {corp, player}, corp_uninvite {corp, player}, disband_corp {corp} (every member leaves, the CEO last and receives the treasury); corporations and captains by id or name, recovery_key {player} (returns a new recovery key), \
 resolve_feedback {id, note?, reopen?} (resolve a feedback report; a note goes to a known sender's inbox; reopen: true opens it again), \
+clear_strategies {confirm: \"clear strategies\"} (delete every captain's human strategy, public label and coach note so each starts afresh from its character; involvement modes stay; every captain is told), \
+chronicle_greenlight {production, note?} (approve a pitch: opens its script page and tells the pitcher and cast), chronicle_decline {production, note?}, chronicle_lock {production, note?} (freeze the script at its current revision for production), chronicle_release {production, links: [urls], note?} (publish the finished work on /chronicle; credits the pitcher, script writers and cast and adds to their Influence), chronicle_strike {page, note?} (moderation: the page's text is replaced everywhere; revisions stay on the operator record), \
 constitution_strike {article? or proposal?, reason?} (moderation: remove a constitution article, or cancel a proposal and strike its text; ballots and the reason stay on the record; a past season's proposal can be struck too), \
 constitution_propose {kind: add, amend or repeal, text? (add, amend), article? (amend, repeal), note?} (the operator opens a proposal: same electorate, window and threshold as a captain's; the operator never votes; announced to every captain and on public radio), \
 constitution_comment {proposal, text} (an operator comment on one of this season's proposals, shown wherever the proposal is and on public radio as \"OPERATOR on proposal #N\"; at most 2,000 characters), \
@@ -939,6 +970,22 @@ pub async fn call(game: &Game, access: &SysopAccess, name: &str, args: &Value) -
             history(game, a).await
         }
         "sysop_languages" => reply(true, "Languages.", game.read(af_core::language::operator_view).await),
+        "sysop_identities" => reply(true, "Identities.", game.read(af_core::identity::operator_view).await),
+        "sysop_chronicle" => {
+            let a = p!(ChronicleArgs);
+            let r = game
+                .read(move |w| match (a.page, a.production) {
+                    _ if a.bible => Ok(af_core::chronicle::story_bible(w, a.since_tick)),
+                    (Some(id), _) => af_core::chronicle::operator_page(w, id),
+                    (None, Some(id)) => af_core::chronicle::production_package(w, id),
+                    (None, None) => Ok(af_core::chronicle::operator_view(w)),
+                })
+                .await;
+            match r {
+                Ok(v) => reply(true, "Chronicle.", v),
+                Err(r) => reply(false, format!("REFUSED [{}] {}", r.code, r.message), Value::Null),
+            }
+        }
         "sysop_rules" => reply(
             true,
             "Rules.",
@@ -1205,6 +1252,57 @@ pub async fn alerts(game: &Game) -> Vec<Value> {
                 format!("{open} open feedback report{}", if open == 1 { "" } else { "s" }),
                 format!("{}: {}", newest.from_name.as_deref().unwrap_or("anonymous"), newest.about),
                 json!({"tool": "sysop_feedback", "args": {"status": "open"}, "mode": "feedback"}),
+            );
+        }
+        // Chronicle (engine 1.46): pitches waiting for a decision (signature: the highest pitched
+        // production id) and reported pages not yet struck (signature: the highest reported page id).
+        let pitched: Vec<&af_core::chronicle::Production> = w
+            .chronicle
+            .productions
+            .values()
+            .filter(|x| x.status == af_core::chronicle::Status::Pitched)
+            .collect();
+        if let Some(newest) = pitched.iter().map(|x| x.id).max() {
+            let n = pitched.len();
+            add(
+                "info",
+                "Chronicle",
+                "chronicle-pitched".into(),
+                newest.to_string(),
+                format!("{n} production pitch{} waiting", if n == 1 { "" } else { "es" }),
+                pitched
+                    .iter()
+                    .take(4)
+                    .map(|x| format!("#{} {} by {}", x.id, x.title, x.pitched_name))
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+                json!({"tool": "sysop_chronicle", "args": if n == 1 { json!({"production": newest}) } else { json!({}) }}),
+            );
+        }
+        let reported: Vec<&af_core::chronicle::Page> = w
+            .chronicle
+            .pages
+            .values()
+            .filter(|p| p.struck.is_none() && !p.reports.is_empty())
+            .collect();
+        if let Some(newest) = reported.iter().map(|p| p.id).max() {
+            let n = reported.len();
+            add(
+                "warn",
+                "Chronicle",
+                "chronicle-reported".into(),
+                newest.to_string(),
+                format!("{n} Chronicle page{} reported", if n == 1 { "" } else { "s" }),
+                reported
+                    .iter()
+                    .take(4)
+                    .map(|p| {
+                        let k = p.reports.len();
+                        format!("#{} {} ({k} report{})", p.id, p.current().title, if k == 1 { "" } else { "s" })
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+                json!({"tool": "sysop_chronicle", "args": if n == 1 { json!({"page": newest}) } else { json!({}) }}),
             );
         }
         let caps: Vec<&af_core::model::Player> = w.players.values().filter(|p| p.npc.is_none() && !p.banned).collect();

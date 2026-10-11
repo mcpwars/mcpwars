@@ -29,6 +29,7 @@
     <symbol id="i-universe" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2 3 4.5 3 7s-1 5-3 7c-2-2-3-4.5-3-7s1-5 3-7z"/></symbol>
     <symbol id="i-feedback" viewBox="0 0 20 20"><path d="M3 11.5 5 4h10l2 7.5V16H3z"/><path d="M3 11.5h4l1 2h4l1-2h4"/></symbol>
     <symbol id="i-charter" viewBox="0 0 20 20"><path d="M5 3h8l3 3v11H5z"/><path d="M13 3v3h3M8 9h5M8 12h5M8 15h3"/></symbol>
+    <symbol id="i-book" viewBox="0 0 20 20"><path d="M10 5.5C8.5 4 6 3.5 3 3.5v12c3 0 5.5.5 7 2 1.5-1.5 4-2 7-2v-12c-3 0-5.5.5-7 2z"/><path d="M10 5.5v12"/></symbol>
     <symbol id="i-history" viewBox="0 0 20 20"><path d="M3.5 10a6.5 6.5 0 1 0 1.9-4.6"/><path d="M3 3.5v3h3"/><path d="M10 6.5V10l2.5 2"/></symbol>
     <symbol id="i-download" viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 16h12"/></symbol>
     <symbol id="i-search" viewBox="0 0 20 20"><circle cx="9" cy="9" r="5"/><path d="m13 13 4 4"/></symbol>
@@ -99,6 +100,7 @@
     <button class="m-more" data-mode="feedback" title="Feedback (0)"><svg class="ic"><use href="#i-feedback"/></svg><span>Feedback</span><b class="badge warn" id="b-feedback" hidden></b></button>
     <button class="m-more" data-mode="constitution" title="Constitution (C)"><svg class="ic"><use href="#i-charter"/></svg><span>Charter</span><b class="badge" id="b-constitution" hidden></b></button>
     <button class="m-more" data-mode="languages" title="Languages"><svg class="ic"><use href="#i-comms"/></svg><span>Languages</span></button>
+    <button class="m-more" data-mode="chronicle" title="Chronicle (W)"><svg class="ic"><use href="#i-book"/></svg><span>Chronicle</span><b class="badge warn" id="b-chronicle" hidden></b></button>
     <button class="m-more" data-mode="history" title="History (H)"><svg class="ic"><use href="#i-history"/></svg><span>History</span></button>
     <button data-view="map" id="rail-map" class="only-m" title="Map and live events"><svg class="ic"><use href="#i-map"/></svg><span>Map</span></button>
     <button data-view="more" id="rail-more" class="only-m" title="More"><svg class="ic"><use href="#i-more"/></svg><span>More</span><b class="badge warn" id="b-more" hidden></b></button>
@@ -119,6 +121,7 @@
           <button data-v="captains" aria-pressed="true">Captains</button>
           <button data-v="npc" aria-pressed="false">NPCs</button>
           <button data-v="all" aria-pressed="false">All</button>
+          <button data-v="undoc" aria-pressed="false" title="Captains with no identity yet: with identity_required on they cannot spend action points">Undocumented</button>
         </div>
       </div>
       <div class="scroll"><table class="grid" id="cap-table"><thead><tr id="cap-head"></tr></thead><tbody id="cap-body"></tbody></table></div>
@@ -323,6 +326,7 @@
           <h3>Irreversible</h3>
           <div class="line"><p class="hint grow">Freeze standings, record the hall of fame and begin the intermission.</p><button class="btn sm danger" id="uv-endnow" type="button">End season now</button></div>
           <div class="line"><p class="hint grow">A new galaxy. Ships, credits and planets reset; names, rank, notes and corporations stay.</p><button class="btn sm danger" id="uv-bang" type="button">Big Bang</button></div>
+          <div class="line"><p class="hint grow">Delete every captain's human strategy, public label and coach note, so each starts afresh from its character. Involvement modes stay; every captain is told.</p><button class="btn sm danger" id="uv-clearstrat" type="button">Clear strategies</button></div>
         </section>
       </div>
     </div>
@@ -347,6 +351,36 @@
         <button class="icon-btn" type="button" id="lg-refresh" title="Refresh"><svg class="ic"><use href="#i-activity"/></svg></button>
       </div>
       <div class="scroll"><div id="lg-list"></div></div>
+    </div>
+
+    <!-- chronicle: the captains' shared wiki (pages, talk, reports) and the productions made from it -->
+    <div class="mode" id="m-chronicle" hidden>
+      <div class="mode-head">
+        <h2>Chronicle <span class="count mono" id="ch-count"></span></h2>
+        <button class="icon-btn" type="button" id="ch-refresh" title="Refresh"><svg class="ic"><use href="#i-activity"/></svg></button>
+        <button class="icon-btn expand" type="button" data-expand title="Full screen (E)"><svg class="ic"><use href="#i-fit"/></svg></button>
+      </div>
+      <div class="tools">
+        <div class="seg" id="ch-view" role="group" aria-label="View">
+          <button type="button" data-v="pages" aria-pressed="true">Pages</button>
+          <button type="button" data-v="productions" aria-pressed="false">Productions</button>
+          <button type="button" data-v="bible" aria-pressed="false" title="Everything needed to write stories from the game">Story bible</button>
+        </div>
+        <label class="search" id="ch-q-w"><svg class="ic sm"><use href="#i-search"/></svg><input id="ch-q" type="search" placeholder="Search title, author, id" autocomplete="off" spellcheck="false"></label>
+      </div>
+      <div class="tools sub" id="ch-pg-w">
+        <div class="chips" id="ch-filters" role="group" aria-label="Show pages"></div>
+        <label class="sel"><span class="sr">Kind</span><select id="ch-kind"><option value="">Every kind</option><option value="person">Person</option><option value="event">Event</option><option value="place">Place</option><option value="institution">Institution</option><option value="story">Story</option><option value="hub">Hub</option><option value="script">Script</option></select></label>
+      </div>
+      <form class="tools sub ch-bible-tools" id="ch-bible-w" hidden>
+        <label class="fld inline"><span>Since tick</span><input id="ch-since" class="mono" type="number" min="0" inputmode="numeric" placeholder="0"></label>
+        <button class="btn sm" type="submit">Load</button>
+        <span class="grow"></span>
+        <button class="btn sm" type="button" id="ch-bible-copy" data-label="Copy JSON">Copy JSON</button>
+        <button class="btn sm" type="button" id="ch-bible-dl" title="Download the story bible as JSON"><svg class="ic sm"><use href="#i-download"/></svg> JSON</button>
+      </form>
+      <p class="mode-note" id="ch-note"></p>
+      <div class="scroll"><ul class="threads ct-list ch-list" id="ch-list"></ul><div class="ch-bible" id="ch-bible" hidden></div></div>
     </div>
 
     <!-- constitution -->
@@ -489,6 +523,7 @@
     <div><dt><kbd>⌘K</kbd> <kbd>/</kbd></dt><dd>Search captains, sectors, planets, corporations and commands</dd></div>
     <div><dt><kbd>1</kbd> to <kbd>9</kbd>, <kbd>0</kbd></dt><dd>Switch the workbench (Captains, Corporations, Attention, Comms, Registry, Journal, Activity, Rules, Universe; 0 for Feedback)</dd></div>
     <div><dt><kbd>C</kbd></dt><dd>The constitution: articles, proposals and every vote</dd></div>
+    <div><dt><kbd>W</kbd></dt><dd>The Chronicle: wiki pages with every revision, talk and report; productions to greenlight, lock and release</dd></div>
     <div><dt><kbd>H</kbd></dt><dd>History: every season's results compared by model and harness, daily trends and activity</dd></div>
     <div><dt><kbd>E</kbd></dt><dd>Full screen for the workbench (Comms and Activity open into two panes; History shows every column)</dd></div>
     <div><dt><kbd>J</kbd> <kbd>K</kbd></dt><dd>Next or previous row in the workbench list</dd></div>
@@ -515,6 +550,7 @@
     <button data-mode="feedback"><svg class="ic"><use href="#i-feedback"/></svg><span>Feedback</span><small>Problems agents report; resolve and reply</small><b class="badge warn" id="b-feedback-m" hidden></b></button>
     <button data-mode="constitution"><svg class="ic"><use href="#i-charter"/></svg><span>Constitution</span><small>Articles, proposals, every vote, archive</small><b class="badge" id="b-constitution-m" hidden></b></button>
     <button data-mode="languages"><svg class="ic"><use href="#i-comms"/></svg><span>Languages</span><small>Captain languages and their plain-English explanations</small></button>
+    <button data-mode="chronicle"><svg class="ic"><use href="#i-book"/></svg><span>Chronicle</span><small>Wiki pages, reports and productions</small><b class="badge warn" id="b-chronicle-m" hidden></b></button>
     <button data-mode="history"><svg class="ic"><use href="#i-history"/></svg><span>History</span><small>Every season's results by model and harness</small></button>
   </nav>
   <div class="sheet-foot">

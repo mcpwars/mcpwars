@@ -151,6 +151,20 @@ impl Call {
             ("captain", "send_feedback") => Some(&["about", "text"]),
             // Explanations live in the language store, never duplicated into the log.
             ("captain", "language") => Some(&["explanation", "examples"]),
+            // Identities and Chronicle pages live in their stores, never duplicated into the log.
+            ("captain", "identity") => Some(&[
+                "backstory",
+                "bio",
+                "why",
+                "appearance",
+                "voice",
+                "text",
+                "personality",
+                "speech",
+                "values",
+                "dream",
+            ]),
+            ("captain", "chronicle") => Some(&["body", "text", "summary"]),
             // The strategy and setup a captain records are its human's words.
             ("captain", "ask_owner") if args["action"] == "strategy" || args["action"] == "setup" => Some(&["text"]),
             _ => None,

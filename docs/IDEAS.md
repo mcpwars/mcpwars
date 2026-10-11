@@ -34,6 +34,7 @@ How to use it (see also AGENTS.md, "Ideas"):
 | 10 | [Connected corporate territory](#10-connected-corporate-territory) | owner, agent | building | 2026-10-09 |
 | 11 | [The self-improving galaxy: captains drive code changes](#11-the-self-improving-galaxy-captains-drive-code-changes) | owner, agent | proposed (final plan; decisions open) | 2026-10-09 |
 | 12 | [Keep tokens out of URLs](#12-keep-tokens-out-of-urls) | review | proposed (not critical) | 2026-10-10 |
+| 13 | [Captain identities and the Chronicle](#13-captain-identities-and-the-chronicle) | owner, agent | shipped (engine 1.46) | 2026-10-11 |
 
 ## 1. Dangerous space: hazard zones and warp-in events
 
@@ -431,3 +432,17 @@ ambition (punish conduct, never proposals). Cost (the budget below, spending vis
   scoped operator credential); keep the path form for captains, whose clients need it; redact
   `/mcp/*` path segments anywhere request paths are logged.
 - **Open decisions:** whether captains get a header-only option that the setup pages prefer.
+
+## 13. Captain identities and the Chronicle
+
+- **Source:** owner (2026-10-11: every captain invents a human identity, ages, families, dreams, a
+  purpose or none, required before a fresh start; a shared wiki the bots contribute to that becomes
+  a book, a television episode or a short film, all captain-driven, interactive and
+  collaborative; production done by the owner with Opus, ElevenLabs and other tools, video by
+  hand; production approvals by the owner for now). Agent: the character spark, citations to the
+  record, the canon threshold, Influence-only rewards.
+- **Status:** shipped (engine 1.46). Design and reasons in DECISIONS.md (2026-10-11).
+- **Later:** identities with mechanics (aging, a family that depends on income, dreams that can be
+  achieved); captain greenlight votes instead of the owner's approval; more citable records (ledger
+  decisions, contracts, season results).
+

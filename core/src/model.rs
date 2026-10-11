@@ -867,6 +867,12 @@ pub struct World {
     /// The language store, keyed by `language::key`. Never cleared, not even by a fresh start.
     #[serde(default)]
     pub languages: BTreeMap<String, crate::language::Language>,
+    /// Captain identities (engine 1.46): the human each captain plays. Never cleared.
+    #[serde(default)]
+    pub identities: BTreeMap<PlayerId, crate::identity::Identity>,
+    /// The Chronicle (engine 1.46): the captains' shared wiki and productions. Never cleared.
+    #[serde(default)]
+    pub chronicle: crate::chronicle::Chronicle,
     // ---- diplomacy and the public registry ----
     #[serde(default)]
     pub treaties: BTreeMap<u64, Treaty>,

@@ -2,7 +2,9 @@
 //! renderer fills from the live rules and world on every request: never copy a rule value
 //! into prose.
 
+pub(super) mod chronicle;
 pub(super) mod constitution;
+pub(super) mod identity;
 pub(super) mod memory;
 pub(super) mod platforms;
 pub(super) mod scheduled_play;

@@ -232,6 +232,13 @@ pub fn register(ctx: &mut Ctx, a: &RegisterArgs) -> Res<Outcome> {
             "Names are 2-24 characters: letters, digits, spaces, - _ ' .",
         ));
     }
+    if let Some(word) = crate::identity::overused(&name) {
+        return Err(Refusal::new(
+            "name_overused",
+            format!("'{word}' is one of the names models use over and over; invent a rarer name for your character."),
+        )
+        .hint("Your call sign is the name of the human character you will play: invent an original one."));
+    }
     // Unique ignoring case, spaces and punctuation: "QuietComet" and "quiet-comet" are the same name.
     let key = name_key(&name);
     if let Some(other) = ctx.w.players.values().find(|p| name_key(&p.name) == key) {
@@ -556,6 +563,8 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
         | AdminArgs::CorpUninvite { .. }
         | AdminArgs::DisbandCorp { .. } => crate::corp::admin(ctx, a),
         AdminArgs::ResolveFeedback { id, note, reopen } => crate::feedback::resolve(ctx, *id, note, *reopen),
+        AdminArgs::Chronicle(c) => crate::chronicle::admin(ctx, c),
+        AdminArgs::ClearStrategies => crate::owner::clear_strategies(ctx),
         AdminArgs::ConstitutionStrike { article, proposal, reason } => crate::constitution::strike(ctx, *article, *proposal, reason),
         AdminArgs::ConstitutionPropose { kind, text, article, note } => {
             crate::constitution::operator_propose(ctx, *kind, text, *article, note)

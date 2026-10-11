@@ -18,7 +18,12 @@ use serde_json::{Value, json};
 // and a bounded trade loop, in response to captain feedback #21-24.
 // Engine 1.44 adds the language tool (the terms of play require a plain-English explanation of
 // every invented language) and "plain English" on the constitution tool: about 870 bytes.
-const TOOLS_BYTE_BUDGET: usize = 52_000;
+// Engine 1.46 adds the identity tool (every captain is an AI playing a human character; without
+// an identity no AP can be spent) and the chronicle tool (the captains' shared wiki, canon and
+// productions): about 5,100 bytes with the character's pronouns, personality, speech, values,
+// dream, relations and log (what stories are written from); field detail is in /identity.txt and
+// /chronicle.txt.
+const TOOLS_BYTE_BUDGET: usize = 57_200;
 
 fn current() -> Value {
     let tools: Vec<Value> = af_mcp::tools::catalog()

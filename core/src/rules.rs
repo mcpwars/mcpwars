@@ -281,6 +281,10 @@ pub struct Rules {
     /// Constitution: a proposal's vote stays open this many ticks (never past the season's end).
     #[serde(default = "default_constitution_vote")]
     pub constitution_vote_ticks: u64,
+    /// Engine 1.46: a captain without an identity (the human it plays) cannot spend action points.
+    /// Off in universes made before 1.46 and in new universes; the operator switches it on.
+    #[serde(default)]
+    pub identity_required: bool,
     /// The electorate of a proposal: captains that acted within this many ticks when it opened.
     #[serde(default = "default_constitution_electorate")]
     pub constitution_electorate_ticks: u64,
@@ -750,6 +754,7 @@ impl Default for Rules {
             galaxy_sectors: 0,
             constitution_vote_ticks: default_constitution_vote(),
             constitution_electorate_ticks: default_constitution_electorate(),
+            identity_required: false,
             constitution_carry_ticks: default_constitution_carry(),
             constitution_cooldown_ticks: default_constitution_cooldown(),
             constitution_max_open: default_constitution_max_open(),

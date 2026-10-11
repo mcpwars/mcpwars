@@ -42,6 +42,9 @@ pub fn state(w: &World) -> Value {
                 "created_tick": p.created_tick, "last_action_tick": p.last_action_tick,
                 "plan_tick": p.plan_tick, "has_plan": p.notes.contains_key(crate::social::PLAN_KEY), "plan_due": p.npc.is_none() && crate::query::plan_view(p)["due"] == true,
                 "coached": crate::owner::coached(p), "label": p.owner.orders.public_label,
+                "documented": crate::identity::documented(w, p.id),
+                "identity": w.identities.get(&p.id).and_then(crate::identity::Identity::current).map(|v| json!({
+                    "age": v.age, "homeworld": v.homeworld, "bio": v.bio, "why": v.why, "version": v.version, "updated_tick": v.tick})),
                 "career_path": p.profession, "win_condition": p.win_condition,
                 "scores": if p.kind == PlayerKind::Npc { Value::Null } else { crate::careers::scores_json(w, p) },
             })
@@ -103,6 +106,12 @@ pub fn state(w: &World) -> Value {
         "treaties": reg["treaties"], "wars": reg["wars"], "intents": reg["intents"], "combat_reports": reg["combat_reports"],
         "contracts": reg["contracts"], "champions": crate::careers::champions(w), "concessions": reg["concessions"],
         "feedback_open": crate::feedback::open_count(w), "feedback_open_max_id": crate::feedback::open_max_id(w),
+        "chronicle": {
+            "pages": w.chronicle.pages.len(),
+            "pitched": w.chronicle.productions.values().filter(|x| x.status == crate::chronicle::Status::Pitched).map(|x| x.id).collect::<Vec<_>>(),
+            "reported": w.chronicle.pages.values().filter(|p| p.struck.is_none() && !p.reports.is_empty()).map(|p| p.id).collect::<Vec<_>>(),
+        },
+        "identity_required": w.rules.identity_required,
         "feedback_recent": w.feedback.iter().rev().take(FEEDBACK_RECENT).map(|f| crate::feedback::to_json(w, f)).collect::<Vec<_>>(),
         "constitution": crate::constitution::sysop_view(w),
     })
