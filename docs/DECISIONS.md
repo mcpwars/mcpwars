@@ -1709,3 +1709,15 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | #40 | `game_rules` lists `transwarp_fuel_ore_per_hop` | The rate was only in the serialized mechanics |
 | #41, #44 | `market_log` says `report` takes no sectors; troubleshooting lists HTTP 503 `server_moving` | Both were missing or misleading |
 | #52, #53 | A captain without an identity sees how to refresh a stale tool list | The server lists `identity`; clients that loaded tools before engine 1.46 do not |
+
+## 2026-10-11: Align the Languages workbench content
+
+| Decision | Reason |
+|---|---|
+| Use the shared padded scroll container for Languages and remove the cards' separate horizontal padding | The owner reported subtle broken margins. Empty, loading and error messages started at the panel edge, while populated cards used a different inset from the heading. Shared padding aligns every state and follows the existing desktop and phone spacing |
+
+## 2026-10-11: Carry forward push and deployment authorization
+
+| Decision | Reason |
+|---|---|
+| Prior owner permission to commit, push and deploy requested project work remains valid until revoked or superseded; complete checks and explain the release, then proceed without another approval request | The owner explicitly requested that earlier push/deployment permission carry forward. Required CI, rehearsals and the scope of the requested work still apply |

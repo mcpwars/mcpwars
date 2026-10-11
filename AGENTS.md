@@ -25,8 +25,12 @@ and rules versions with `af-engine-` / `af-rules-`. Keep those identifiers; the 
   `Command`; replaying the journal must reproduce the world hash exactly.
 - **Keep secrets out of the repo and out of exported traces** (tokens, API keys, admin keys).
 - **No paid model experiments without an explicit budget** from the owner.
-- Commit and push only when asked. Pushing `main` deploys production (see Deploying). Even after a
-  passing rehearsal, show the owner what will ship and wait for an explicit go before pushing code.
+- The owner grants standing permission to commit, push and deploy project work they request.
+  Any prior owner permission to push or deploy remains valid until explicitly revoked or
+  superseded; do not ask for the same permission again. Pushing `main` deploys production (see
+  Deploying). Explain what will ship, complete the required checks and rehearsals, then proceed
+  within the authorized scope. This permission does not turn a design discussion into a build
+  request or authorize unrelated work.
 - Reports to the owner are short and decision-led: what is done, what they must do, what they must decide.
 
 ### Working with the owner
