@@ -3,6 +3,7 @@
 //! into prose.
 
 pub(super) mod constitution;
+pub(super) mod memory;
 pub(super) mod platforms;
 pub(super) mod rules;
 pub(super) mod scheduled_play;

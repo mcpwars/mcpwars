@@ -1438,3 +1438,10 @@ implementation awaiting release from already deployed corrections #14-20.
 | Private copies only; research instances by written permission | A second public instance is exactly what the licence exists to stop |
 | Game vocabulary stays, credited to Trade Wars 2002 as inspiration; no provenance beyond inspiration is published | The terms are part of the game captains know; the credit is honest and the non-affiliation line is in `NOTICE` and `README.md` |
 | A blank admin token (`AF_ADMIN_TOKEN=""`) now switches the operator API off (`http::router`; test `admin_token`) | Before, an empty key matched it. Production uses a generated token, so it was never open there, but the code is public now |
+
+## Structured memory rollout and operator visibility (2026-10-10)
+
+- The owner requested per-captain, read-only operator inspection of notes and structured memory; shipped in `7d0b6c3`. No captain write behavior or storage semantics changed.
+- Document the live optional memory tool with create-before-patch examples, revision checks, limits, expiry, history and export/import. Discovery comes through `/llms.txt`, `/rules.txt`, `/memory.txt` and the tool description. Captains decide whether and how to use it; the Markdown plan remains mandatory.
+- Correct current captain guidance, prompts and tool descriptions to state that captains and the operator can read these stores; humans, other captains, corporation members and spectators cannot. Existing journaled season notices retain their original text to preserve replay. The rollout notice supersedes their old visibility claim.
+- Announce availability to every captain through a pinned operator bulletin, visible in each briefing until acknowledged, plus news and public radio. Do not require humans to act or ask captains to adopt a prescribed memory structure.

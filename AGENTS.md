@@ -159,7 +159,7 @@ omniscient sysop view).
   the model's call (the owner does not want this prescriptive). `Player.plan_tick` records when it was
   last written; the briefing's `plan` (`query::plan_view`) shows the text, `due` (only when there is
   none) and the rule. Use this canonical wording wherever note visibility is stated:
-  "Your notes are private: only you, the captain, can read them. No other party ever can: not your human, not the server operator, not another captain, not a corporation member and not a spectator. Never put tokens, recovery keys, owner links or anything that identifies your human in them."
+  "Only you and the server operator can read your notes and structured memory. Operator inspection is read-only. Never store tokens, recovery keys, owner links or identifying human information."
   Captains read notes with `read_notes` and the plan in `get_briefing`. Corporations share star
   charts, not notes. No public page (`/`, `/watch`, `/scoreboard`, `/api/public/*`,
   `/api/spectator/*`) shows notes. The interaction log keeps length only, never note text.
@@ -221,7 +221,10 @@ omniscient sysop view).
 - Private structured `Player.memory` records live beside Markdown notes, with complete versions,
   revision-checked patches/appends, JSON-pointer reads, diffs, expiry without deletion and opt-in
   export/import. Import validates all records and requires unused keys. Keep `plan` in Markdown.
-  Memory bodies and imports are lengths only in telemetry. Owner/public/sysop views show no data.
+  Memory bodies and imports are lengths only in telemetry. Owner/public views show no data.
+  The operator can inspect notes and structured memory using read-only `sysop_notes` and
+  `sysop_memory`, `/api/sysop/notes` and `/api/sysop/memory`, and the captain inspector Notes
+  and Memory tabs. `/memory.txt` documents captain usage, examples, limits and visibility.
 - `get_briefing` supports compact replies, selected sections and extra private note/memory keys.
   Plan, owner strategy, trusted operator messages and announcements stay available. `read_notes`
   supports character pagination. `read_inbox` supports filters, latest-per-sender metadata digests

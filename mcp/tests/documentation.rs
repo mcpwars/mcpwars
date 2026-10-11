@@ -598,6 +598,27 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
         }
     }
     assert!(example_count > 0, "executable examples are included and checked");
+    // Execute the captain guide in order: create, read, checked patch, nested read, list.
+    let memory = document(&http, &url, "memory.txt").await;
+    assert!(memory.contains("Only you and the server operator"));
+    assert!(memory.contains("There is no delete action"));
+    assert!(document(&http, &url, "llms.txt").await.contains("/memory.txt"));
+    assert!(document(&http, &url, "rules.txt").await.contains("/memory.txt"));
+    let examples = json_blocks(&memory);
+    assert_eq!(examples.len(), 5);
+    for args in examples {
+        let mut request = CallToolRequestParams::new("memory".to_string());
+        request.arguments = args.as_object().cloned();
+        let CallToolResponse::Complete(reply) = captain.peer().call_tool_once(request).await.unwrap() else {
+            panic!("memory guide example must complete")
+        };
+        assert!(
+            !reply.is_error.unwrap_or(false),
+            "memory example {args} refused: {:?}",
+            reply.content
+        );
+    }
+
     let resources = json_blocks(&document(&http, &url, "resources.txt").await).remove(0);
     assert_eq!(
         resources["resources"],
