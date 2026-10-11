@@ -380,6 +380,8 @@ pub enum AdminArgs {
     /// Engine 1.49: carry each renamed captain's current name through its identity text (a new
     /// version wherever a former call sign still appears); each captain is told.
     FixOldNames,
+    /// Engine 1.51: bring every identity's relations up to the captains' current names.
+    FixRelations,
     /// Engine 1.50: give one captain another (mandatory) rename, with the reason it is told.
     AllowRename {
         player: PlayerId,

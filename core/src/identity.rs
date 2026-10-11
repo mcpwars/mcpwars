@@ -504,6 +504,75 @@ pub fn first_name_taken<'a>(w: &'a World, pid: PlayerId, name: &str) -> Option<&
         .map(|p| p.name.as_str())
 }
 
+/// The captain a relation's name refers to: its current call sign or a former one, in any of
+/// their spellings (engine 1.51).
+pub fn captain_named(w: &World, name: &str) -> Option<PlayerId> {
+    let key = crate::player::name_key(name);
+    if key.is_empty() {
+        return None;
+    }
+    w.players
+        .values()
+        .filter(|p| p.npc.is_none() && p.kind != PlayerKind::Npc)
+        .find(|p| {
+            crate::player::name_key(&p.name) == key
+                || w.identities
+                    .get(&p.id)
+                    .is_some_and(|i| i.former_names.iter().any(|f| crate::player::name_key(f) == key))
+        })
+        .map(|p| p.id)
+}
+
+/// The operator's fix for relations written before renames (engine 1.51): link relations whose
+/// name is a captain's current or former call sign, write linked captains under their current
+/// name and replace former call signs in relation notes, as a new version; each captain is told.
+pub fn fix_relations(ctx: &mut Ctx) -> Res<Outcome> {
+    let (tick, at_ms, season, epoch) = (ctx.w.tick, ctx.w.now_ms, ctx.w.season.number, ctx.w.archive.epoch);
+    let renames: Vec<(String, String)> = ctx
+        .w
+        .identities
+        .iter()
+        .filter_map(|(pid, i)| ctx.w.players.get(pid).map(|p| (i, p.name.clone())))
+        .flat_map(|(i, now)| i.former_names.iter().map(move |f| (f.clone(), now.clone())))
+        .collect();
+    let mut fixed = vec![];
+    let ids: Vec<PlayerId> = ctx.w.identities.keys().copied().collect();
+    for pid in ids {
+        let Some(cur) = ctx.w.identities[&pid].current().cloned() else {
+            continue;
+        };
+        let mut v = cur.clone();
+        for r in &mut v.relations {
+            if r.captain.is_none() {
+                r.captain = captain_named(ctx.w, &r.name);
+            }
+            if let Some(c) = r.captain {
+                r.name = name_of(ctx.w, c);
+            }
+            for (old, new) in &renames {
+                r.note = replace_name(&r.note, old, new);
+            }
+        }
+        if v == cur {
+            continue;
+        }
+        let i = ctx.w.identities.get_mut(&pid).expect("listed");
+        v.version = i.versions.len() as u32 + 1;
+        v.tick = tick;
+        v.at_ms = at_ms;
+        v.season = season;
+        v.epoch = epoch;
+        i.versions.push(v);
+        ctx.notify(
+            pid,
+            "identity",
+            "The operator updated the people in your character's life to the captains' current names. Review them with identity action=view.",
+        );
+        fixed.push(name_of(ctx.w, pid));
+    }
+    Ok(ctx.finish(format!("{} identities updated.", fixed.len()), json!({"updated": fixed})))
+}
+
 /// Must this captain still use its mandatory rename?
 pub fn rename_pending(w: &World, pid: PlayerId) -> bool {
     w.rename_required.contains(&pid) && w.identities.get(&pid).is_none_or(|i| i.renamed_tick.is_none())
@@ -540,8 +609,13 @@ fn name_of(w: &World, pid: PlayerId) -> String {
     w.players.get(&pid).map(|p| p.name.clone()).unwrap_or_else(|| format!("#{pid}"))
 }
 
+/// A relation's display name: a linked captain's current call sign, else the name as written.
+pub fn relation_name(w: &World, r: &Relation) -> String {
+    r.captain.map(|c| name_of(w, c)).unwrap_or_else(|| r.name.clone())
+}
+
 fn relation_json(w: &World, r: &Relation) -> Value {
-    json!({"name": r.name, "relation": r.relation, "captain": r.captain.map(|c| name_of(w, c)),
+    json!({"name": relation_name(w, r), "relation": r.relation, "captain": r.captain.map(|c| name_of(w, c)),
            "status": r.status, "note": r.note, "private": r.private})
 }
 
@@ -747,10 +821,14 @@ fn relations(w: &World, rs: &[RelationArg]) -> Res<Vec<Relation>> {
                     "Each person needs a name and a relation; nothing was stored.",
                 ));
             }
+            let captain = match r.captain.as_deref() {
+                Some(c) => Some(find_player(w, c)?),
+                None => captain_named(w, &name),
+            };
             Ok(Relation {
                 name,
                 relation,
-                captain: r.captain.as_deref().map(|c| find_player(w, c)).transpose()?,
+                captain,
                 status: line("status", r.status.as_deref().unwrap_or(""), 40)?,
                 note: line("note", r.note.as_deref().unwrap_or(""), LOOK_MAX)?,
                 private: r.private.unwrap_or(false),

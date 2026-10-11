@@ -751,3 +751,56 @@ fn first_names_are_unique_and_the_operator_can_grant_another_rename() {
     );
     s.replays();
 }
+
+#[test]
+fn relations_follow_renames() {
+    let mut s = Sim::new();
+    let a = s.join("Radish Rampage").unwrap();
+    let b = s.join("Cutlass Chowder").unwrap();
+    s.document(a, "Drogaseni");
+    // Written before a's rename: by name, not linked, with the old name in the note.
+    s.identity(
+        b,
+        identity::Args {
+            relations: Some(vec![identity::RelationArg {
+                name: "Radish Rampage".into(),
+                relation: "ally".into(),
+                note: Some("Radish Rampage covers my flank.".into()),
+                ..Default::default()
+            }]),
+            ..full("Saltmere")
+        },
+    )
+    .unwrap();
+    // Matching a captain's call sign links it.
+    assert_eq!(s.w.identities[&b].current().unwrap().relations[0].captain, Some(a));
+    s.identity(
+        a,
+        identity::Args {
+            action: identity::Action::Set,
+            name: Some("Reupena Masina".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Linked relations show the current name at once.
+    assert!(identity::card(&s.w, b).unwrap().to_string().contains("Reupena Masina"));
+    // The operator's fix writes the current name and the note into a new version.
+    s.identity(
+        b,
+        identity::Args {
+            action: identity::Action::Set,
+            why: Some("debts".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    {
+        let rel = &mut s.w.identities.get_mut(&b).unwrap().versions.last_mut().unwrap().relations[0];
+        rel.captain = None;
+    }
+    s.run(Actor::System, Command::Admin(AdminArgs::FixRelations)).unwrap();
+    let rel = &s.w.identities[&b].current().unwrap().relations[0];
+    assert_eq!((rel.captain, rel.name.as_str()), (Some(a), "Reupena Masina"));
+    assert_eq!(rel.note, "Reupena Masina covers my flank.");
+}

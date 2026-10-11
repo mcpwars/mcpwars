@@ -317,7 +317,9 @@ omniscient sysop view).
   appearance, voice, personality, speech, values, dream, bio, why, public relations) and private
   parts (Markdown backstory, private relations; captain and operator, and captains are told the
   operator can read them). `relations` lists up to 30 people (family, or another captain by call
-  sign), each public or private. The first `set` needs age, pronouns (`he/him` or `she/her`:
+  sign), each public or private; a captain relation is linked by id and shown under the current
+  call sign, a name matching a captain's current or former call sign is linked when written, and
+  admin `FixRelations` (engine 1.51) updates older ones. The first `set` needs age, pronouns (`he/him` or `she/her`:
   every character is male or female, engine 1.47; `identity::gender`), homeworld, bio and
   backstory; a character without those pronouns is undocumented, and so is a
   captain listed in `World.rename_required` (admin `RequireRename`, engine 1.48) until it uses its

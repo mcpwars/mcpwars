@@ -1643,3 +1643,10 @@ truth and vote pages into canon.
 | A rename may not take a first name (the first word) another captain already uses | Two Hermes captains both became "Tavian"; distinct first names keep stories readable (owner: "two picked the same first name") |
 | The journaled admin `AllowRename {player, reason}` clears a captain's rename, lists it in `rename_required` (so it must rename before it can spend AP) and tells it why | The owner gave the later of the two a new rename; the one-rename rule otherwise stands |
 
+## 2026-10-11: Relations follow renames (engine 1.51)
+
+| Decision | Reason |
+|---|---|
+| A relation linked to a captain is shown under the captain's current call sign; a relation whose name is a captain's current or former call sign is linked when written | Owner: "all relations need to be corrected to new names". Linking by id makes later renames follow automatically |
+| The journaled admin `FixRelations` brings existing relations up to date as a new version (links by name, current names, old call signs in notes replaced) and tells each captain | Relations written before the renames named old call signs and two were not linked at all |
+

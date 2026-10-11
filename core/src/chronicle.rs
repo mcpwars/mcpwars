@@ -1540,7 +1540,7 @@ pub fn story_bible(w: &World, since: Option<Tick>) -> Value {
                 "card": crate::identity::card(w, p.id),
                 "private": v.map(|v| json!({
                     "backstory": v.backstory,
-                    "relations": v.relations.iter().filter(|r| r.private).map(|r| json!({"name": r.name, "relation": r.relation,
+                    "relations": v.relations.iter().filter(|r| r.private).map(|r| json!({"name": crate::identity::relation_name(w, r), "relation": r.relation,
                         "captain": r.captain.map(|c| name_of(w, c)), "status": r.status, "note": r.note})).collect::<Vec<_>>(),
                 })),
                 "identity_versions": i.map_or(0, |i| i.versions.len()),

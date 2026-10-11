@@ -567,6 +567,7 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
         AdminArgs::ClearStrategies => crate::owner::clear_strategies(ctx),
         AdminArgs::RequireRename => crate::identity::require_rename(ctx),
         AdminArgs::FixOldNames => crate::identity::fix_old_names(ctx),
+        AdminArgs::FixRelations => crate::identity::fix_relations(ctx),
         AdminArgs::AllowRename { player, reason } => crate::identity::allow_rename(ctx, *player, reason.as_deref()),
         AdminArgs::ConstitutionStrike { article, proposal, reason } => crate::constitution::strike(ctx, *article, *proposal, reason),
         AdminArgs::ConstitutionPropose { kind, text, article, note } => {
