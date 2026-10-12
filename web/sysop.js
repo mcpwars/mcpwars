@@ -1947,9 +1947,11 @@
   const ctSeasonLabel = (s) => `Season ${s.season}${s.reason === "fresh_start" ? " (before fresh start)" : ""}${s.epoch ? ` · epoch ${s.epoch}` : ""}`;
   // ======================================================================
   // Languages: every captain language with every version of its explanation (read-only).
-  let lgData = null, lgErr = null;
+  let lgData = null, lgErr = null, lgSig = "", lgRequest = 0;
   async function loadLanguages() {
+    const request = ++lgRequest;
     const r = await api(`${API}/languages`);
+    if (request !== lgRequest) return;
     if (r.ok && r.data && Array.isArray(r.data.languages)) { lgData = r.data; lgErr = null; }
     else if (r.status !== 401) lgErr = errText(r.data, r.status);
     renderLanguages();
@@ -1957,25 +1959,48 @@
   $("lg-refresh").addEventListener("click", loadLanguages);
   function renderLanguages() {
     const box = $("lg-list");
+    // State polls run every 2.5 seconds. Unchanged language data must leave the reader's
+    // DOM alone: replacing details collapses old versions and clamps their scroll to zero.
+    const sig = JSON.stringify([lgData, lgErr]);
+    if (sig === lgSig) return;
+    lgSig = sig;
+    const scroller = box.parentElement;
+    const top = scroller.scrollTop, left = scroller.scrollLeft;
+    const versions = [...box.querySelectorAll("details[data-version]")];
+    const open = new Map(versions.map((d) => [d.dataset.version, d.open]));
+    const focused = versions.find((d) => d.contains(document.activeElement));
+    const visibleTop = scroller.getBoundingClientRect().top;
+    const anchor = versions.find((d) => d.getBoundingClientRect().bottom > visibleTop);
+    const anchorTop = anchor && anchor.getBoundingClientRect().top;
     const rows = lgData ? lgData.languages : [];
     $("lg-count").textContent = rows.length ? fmt(rows.length) : "";
-    if (lgErr) { box.replaceChildren(el("p", "empty", lgErr)); return; }
-    if (!lgData) { box.replaceChildren(el("p", "empty", "Loading…")); return; }
-    if (!rows.length) { box.replaceChildren(el("p", "empty", "No captain has stored a language yet.")); return; }
-    box.replaceChildren(...rows.map((l) => {
+    const cards = rows.map((l) => {
       const card = el("section", "lg-card");
       const vs = l.versions || [];
       card.append(el("h3", "sec-h", `${l.name} · ${l.creator_name || `#${l.creator}`} · ${l.share} · ${vs.length} version${vs.length === 1 ? "" : "s"}${(l.adopters || []).length ? ` · ${l.adopters.length} adopter${l.adopters.length === 1 ? "" : "s"}` : ""}`));
       for (const v of [...vs].reverse()) {
         const d = el("details", "lg-v");
-        if (v === vs[vs.length - 1]) d.open = true;
+        d.dataset.version = JSON.stringify([l.creator, l.name, v.version]);
+        d.open = open.has(d.dataset.version) ? open.get(d.dataset.version) : v === vs[vs.length - 1];
         d.append(el("summary", "", `v${v.version} by ${v.call_sign} · tick ${fmt(v.tick)} · season ${v.season}${v.at_ms ? ` · ${ago(v.at_ms)}` : ""}`));
         d.append(el("pre", "lg-text", v.explanation));
         if (v.examples) { d.append(el("div", "dim", "Examples")); d.append(el("pre", "lg-text", v.examples)); }
         card.append(d);
       }
       return card;
-    }));
+    });
+    // A temporary fetch error should not discard the explanations already being read.
+    if (lgErr) cards.unshift(el("p", "empty", lgErr));
+    if (!lgData && !lgErr) cards.push(el("p", "empty", "Loading…"));
+    else if (lgData && !rows.length) cards.push(el("p", "empty", "No captain has stored a language yet."));
+    box.replaceChildren(...cards);
+    const refreshed = [...box.querySelectorAll("details[data-version]")];
+    const focus = focused && refreshed.find((d) => d.dataset.version === focused.dataset.version);
+    if (focus) focus.querySelector("summary").focus({ preventScroll: true });
+    scroller.scrollTop = top;
+    scroller.scrollLeft = left;
+    const restored = anchor && refreshed.find((d) => d.dataset.version === anchor.dataset.version);
+    if (restored && scroller.clientHeight) scroller.scrollTop += restored.getBoundingClientRect().top - anchorTop;
   }
 
   // ======================================================================

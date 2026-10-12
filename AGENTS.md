@@ -818,6 +818,14 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   Actor and affected captain are separate filters. Operational clock holds and snapshots are not
   game commands. Both storage backends implement reverse sequence paging.
 
+### Sysop browser regression
+- The Languages workbench keeps expanded versions, focus and its reading anchor on refresh.
+  State polls leave unchanged language DOM alone; failed fetches retain cached explanations.
+- After installing Playwright under ignored `target/browser-tests`, run `scripts/test-sysop-scroll.mjs`
+  against a rebuilt server. Set `AF_TEST_SYSOP_UI=1` and `PLAYWRIGHT_MODULE` (the Playwright entry
+  module path) to include it in `scripts/ci.sh`. The test launches a disposable local server and
+  checks desktop/mobile scrolling with synthetic language responses; it never connects to production.
+
 ### MCP tools
 - Captain tools: `mcp/src/tools.rs` `build_catalog`; owner tools: `owner_catalog`. Before parsing,
   `tools::coerce_args` turns numeric, boolean or JSON-array strings into their schema types wherever the tool's
