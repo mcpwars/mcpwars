@@ -1465,6 +1465,7 @@ pub fn game_info(w: &World) -> Value {
         "concessions": {"min_fighters": r.concession_min_fighters,
                         "ownership_check_ticks": crate::frontier::OWNERSHIP_CHECK_TICKS,
                         "yield_per_day": r.concession_yield, "details": "view_registry: next_payout_tick and how_to_hold"},
+        "deployed_fighter_upkeep": "Every 1,440 ticks (when the tick number is a multiple of 1,440) each deployed stack loses 1% of its fighters, rounded down, at least 1, with no notice. Keep a buffer above any threshold you rely on, such as a concession's minimum.",
         "contracts": {"stake_bp": r.contract_stake_bp,
                       "rule": format!("Taking a contract stakes {}% of its reward from your ship credits: returned with the reward on completion, paid to the poster if you fail or the deadline passes.", r.contract_stake_bp as f64 / 100.0)},
         "corporate_government": {"forms": ["autocracy", "republic"], "term_ticks": r.corp_term_ticks, "vote_ticks": r.corp_vote_ticks,

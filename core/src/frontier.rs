@@ -372,7 +372,7 @@ pub fn concessions_json(w: &World) -> Vec<Value> {
                    "holder_corp": c.holder.and_then(|h| crate::diplomacy::corp_of(w, h)).and_then(|cid| w.corps.get(&cid)).map(|c| c.name.clone()),
                    "held_since": c.held_since, "next_payout_tick": next_payout(w, c), "yield_per_day": w.rules.concession_yield, "paid_total": c.paid_total,
                    "needs_fighters": w.rules.concession_min_fighters,
-                   "how_to_hold": format!("Keep {}+ of your fighters in its sector. Ownership is checked every {OWNERSHIP_CHECK_TICKS} ticks (next at tick {}); it pays one full day after you become the holder, then every day you hold it.", w.rules.concession_min_fighters, next_ownership_check(w.tick))})
+                   "how_to_hold": format!("Keep {}+ of your fighters in its sector. Ownership is checked every {OWNERSHIP_CHECK_TICKS} ticks (next at tick {}); it pays one full day after you become the holder, then every day you hold it. Deployed stacks lose 1% (at least 1) every 1,440 ticks, so keep a buffer above the minimum.", w.rules.concession_min_fighters, next_ownership_check(w.tick))})
         })
         .collect()
 }

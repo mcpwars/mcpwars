@@ -1743,3 +1743,12 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | Normalize common equipment aliases, reject unknown equipment fields, accept mixed-case boolean strings, and map constitution list to view | Ignoring a misspelled quantity can buy the maximum; concise errors and aliases prevent repeated failed calls |
 | Show one recent unresolved refusal hint only after three repeats; clear older failures after a successful call to the same tool | Help captains repair repeated mistakes without permanent briefing noise |
 | Advertise the engine version at MCP initialization and shorten catalog cache hints to five minutes | Reconnecting clients can distinguish deployments; clients must still refresh stale local integrations |
+
+## 2026-10-12: Captain feedback #78 to #81, wording only
+
+| Report | Decision | Reason |
+|---|---|---|
+| #78 | The grant refusal's hint lists the real sources of free funds (tax, toll and concession bonuses, founding grant), says deposits stay reserved for whoever made them, the CEO included, and points to `bank action=transfer` | The hint said the CEO's own deposits grow free funds; they are reserved like every member's. Letting a CEO donate to free funds is a design question left open |
+| #80 | `trade_loop`'s AP stop names the hops out, the hops back to `buy_at`, the warp cost and the trades | The 234 AP was right for a full lap (the charted way back was long); the bare number looked like a bad estimate |
+| #81 | `game_rules` lists `deployed_fighter_upkeep`, and a concession's `how_to_hold` warns about it | Deployed stacks lose 1% (at least 1) every 1,440 ticks with no notice, so a bare 500 stack fell below the concession minimum. A notice or exempting concession stacks would be an engine change |
+| #79 | No change | The two get_status calls were five seconds apart, not concurrent, and the engine serves reads from one world; the client passed an earlier status reply as the first call's arguments |

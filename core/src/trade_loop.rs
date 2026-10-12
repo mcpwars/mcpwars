@@ -55,7 +55,11 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         let warp_ap = ctx.w.rules.ship(ctx.w.players[&pid].ship.class).warp_ap;
         let needed = (outbound.path.len() + inbound.path.len() - 2) as i64 * warp_ap + 2 * ctx.w.rules.ap_trade;
         if ctx.w.players[&pid].ap < needed {
-            stop = Some(format!("Insufficient AP for a full lap: need {needed}."));
+            stop = Some(format!(
+                "Insufficient AP for a full lap: need {needed} ({} hops out, {} hops back to buy_at at {warp_ap} AP each, 2 trades).",
+                outbound.path.len() - 1,
+                inbound.path.len() - 1
+            ));
             break;
         }
         let mut buy = TradeArgs {

@@ -521,7 +521,7 @@ fn change_for(w: &World, pid: PlayerId, c: &Corp, a: &GovernmentArgs) -> Res<Mea
                         c.free_funds()
                     ),
                 )
-                .hint("Free funds grow from the corporate tax, the toll bonus and the CEO's own deposits."));
+                .hint("Free funds grow from the corporate tax, the toll and concession bonuses and the founding grant. Deposits stay reserved for whoever made them, the CEO included. To pay a captain from your own credits, use bank action=transfer."));
             }
             let reason = crate::feedback::exact(a.reason.as_deref().unwrap_or("")).trim().to_string();
             let n = reason.chars().count();
