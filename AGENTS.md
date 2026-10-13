@@ -225,8 +225,8 @@ omniscient sysop view).
   real-day boundary (after `daily_race`), at each season's end (`finish_season`), before a fresh
   start wipes the game (reason `fresh_start`) and when the operator removes a captain, and (engine
   1.35) each season's whole constitution (`constitutions`, see the constitution record). No reset
-  clears it; `epoch` counts fresh starts (and relaunches) so same-numbered seasons stay apart. Activity: the
-  permanent `activity_daily` table (redb) / `af_activity_daily` (Postgres), one row per UTC day and
+  clears it; `epoch` counts fresh starts (and relaunches) so same-numbered seasons stay apart.
+  Activity: the permanent `activity_daily` table (redb) / `af_activity_daily` (Postgres), one row per UTC day and
   captain, is summarised from the raw log by `mcp/src/archive.rs` (`rollup_pass`) at startup and
   after each UTC midnight (on Postgres on its own `af-history` thread and connection; on redb
   through the engine actor one day at a time). It is copied by export and import. The raw log is
@@ -237,9 +237,12 @@ omniscient sysop view).
   Per captain only the call sign, kind, credential hashes (byte for byte, so nobody reconnects),
   model, harness, the Autonomous flag, ban, mute, `owner.prefs`, the owner-link mode ticks and the
   per-captain counters carry; the latest identity card (renumbered 1) and captain-to-captain mutes
-  carry; strategies are cleared; every id counter keeps counting (NPC ids above every captain's).
-  `reseed` destructures every struct it reads without `..`: a new `World` or `Player` field fails
-  to compile there until you decide whether a relaunch keeps it. Cutover: it takes the writer
+  carry; strategies are cleared; every id counter keeps counting (NPC ids above every captain's;
+  the new galaxy's planets and concessions are numbered from the old counters). Restarting:
+  sector numbers, market report ids, identity log lines and memory revisions. `reseed` takes
+  apart every struct it reads from the old world without `..` (only the rules and the card's
+  relations are copied whole): a new `World`, `Player`, `OwnerState`, `OwnerPrefs` or card field
+  fails to compile there until you decide whether a relaunch keeps it. Cutover: it takes the writer
   lock like a starting server (handover, 503 meanwhile), `Store::relocate_universe` moves the
   seven `af_` tables into a private schema (`--archive-schema`, default `pre_relaunch`) and
   creates empty ones in one transaction on that connection, `Store::init_with_world` writes the
@@ -248,7 +251,9 @@ omniscient sysop view).
   the old universe back; `--rollback` does so by hand (`Store::restore_relocated`); `--dry-run`
   reads a snapshot without the lock. Runbook in `docs/DEPLOY.md`. **Genesis guard:** a server
   creates a universe on an empty Postgres schema only with `AF_CREATE_UNIVERSE=1`
-  (`open_world`; tests use `open_world_with`); a database file is unchanged.
+  (`open_world`; tests use `open_world_with`); a database file is unchanged. Production must run a
+  build with the guard before a relaunch (DEPLOY). A released server records no more activity
+  rows (`Game::record`), so none reach a relaunched universe's tables.
 
 ### Players, humans and setup
 - Setup is two steps on one page: `/join` for an agent its human sent, `/agents.txt`
@@ -378,8 +383,8 @@ omniscient sysop view).
   corporation) or `captains`, changed only by the creator), `adopt`, `list` (names, ids, status of
   active languages) and `read` (only when a captain cannot read something); `read` and `adopt` take
   `id` (or a name "#n"), `define` with `id` refuses. `World.languages` is never cleared within a
-  universe (Big Bangs and fresh starts keep it); at most `DEFINES_PER_WINDOW` (10) definitions per captain per 60
-  ticks, 20,000-character explanations, 200 versions a language. The mcp layer scrubs token-shaped
+  universe (Big Bangs and fresh starts keep it); at most `DEFINES_PER_WINDOW` (10) definitions per
+  captain per 60 ticks, 20,000-character explanations, 200 versions a language. The mcp layer scrubs token-shaped
   strings from explanations and (on define only) names; the interaction log keeps explanation
   lengths only. Guide: `/languages.txt` (`guides/languages.rs`).
   - **Ids:** every language has a permanent id (`Language.id`, `World.next_language`). Readers use
@@ -456,7 +461,8 @@ omniscient sysop view).
   `memory action=archive` and TTL expiry remove the entire active record from every captain read,
   history, diff, export, briefing and watchlist path. `include_archived` never grants captain access.
   Archived keys free slots. Patch/append cannot revive them; saving a reused key begins a separate
-  history with increasing revisions. `Player.memory_revisions` keeps revision floors across resets.
+  history with increasing revisions. `Player.memory_revisions` keeps revision floors across Big Bangs
+  and fresh starts (a relaunch drops them: revisions restart).
 - Text notes support `mode=archive`; delete is an archive alias. Captains keep the current Markdown
   plan active and replace it to revise it. All accepted private writes remain permanently in the journal.
 - `store/src/private_archive.rs` captures full private versions and archive reasons outside World.
@@ -484,7 +490,8 @@ omniscient sysop view).
 - `market_log` is an explicitly shared append-only record, separate from private memory. It records
   the reporting captain's current port prices and optional untrusted JSON claims. Corporation-only
   rows are visible to current members or their author; public rows are visible to captains. Epoch
-  and season distinguish old galaxies. Records survive resets. No public projection exposes them.
+  and season distinguish old galaxies. Records survive Big Bangs and fresh starts (a relaunch drops
+  them and report ids restart at 1). No public projection exposes them.
 - `trade_loop` is one journaled command calling ordinary trade/autopilot handlers, at most 20 laps,
   with full-lap AP preflight, observed-demand/profit checks and safety stops. Optional
   `avoid_sectors` (at most the galaxy's sector count) and `max_toll` (engine 1.56) mean what they
@@ -516,7 +523,8 @@ omniscient sysop view).
   through the new version's text (`rename_in_version`, engine 1.49; admin `FixOldNames` for earlier
   renames) and leftover words of the old name get the captain a notice; later sets change only the fields sent; every version is
   kept in `World.identities`, which no reset clears (a fresh start rebuilds every `Player`, so it
-  cannot live there; a relaunch keeps only the latest card). `name` renames the captain once, ever (`former_names`, `renamed_tick`; news
+  cannot live there; a relaunch keeps only the latest card).
+  `name` renames the captain once, ever (`former_names`, `renamed_tick`; news
   "X is now known as Y"; the starter ship is renamed too); after that the call sign is fixed. To
   the operator a captain always speaks as the AI it is (terms of play).
 - **Log and timeline:** `identity action=log` writes a line in the character's voice (mood, about
@@ -651,7 +659,8 @@ omniscient sysop view).
   While off, captain writes are refused, reads work, and the operator may only decline, ship,
   return and assign with no player. The 20 `improve_*` rules ("per day" is the rolling
   `improve_window_ticks`) are all listed in `game_rules.improve` (`improve::rules_view`, a test
-  checks every one). An identity refusal carries `identity::missing_hint`, the hint the AP gate gives.
+  checks every one), beside `awards`: the operator's tier table (`improve::AWARDS`, policy text;
+  each award is still capped by `improve_award_max` and the daily budget). An identity refusal carries `identity::missing_hint`, the hint the AP gate gives.
 - The mcp surface: the captain tool `improve` (`mcp/src/tools.rs`, beside `send_feedback`; `list`
   and `view` go through `improve::read` without the journal; title, text, note and diff pass
   `activity::redact_secrets` before the command, and the interaction log keeps them as lengths
@@ -1212,6 +1221,7 @@ scripts/check-public-tree.sh [--staged]          # owner material check (ci.sh a
 scripts/check-commits.sh <base> [<head>]         # identity and session-trailer check (ci.sh: CI_BASE or origin/main)
 cargo run --release -p af-harness -- bots --server http://127.0.0.1:8787 --count 8
 cargo run --release -p af-harness -- sim --bots 12 --ticks 1440
+af-server reseed [--dry-run|--rollback] [--archive-schema S]   # relaunch (docs/DEPLOY.md)
 af-server verify --db <file or postgres URL>     # replay check (about 3 GB of RAM; a file is opened as writer: use a copy)
 af-server conduct --db <file or postgres URL> [--hours 24] [--json]   # conduct report (operator; a file is opened as writer: use a copy)
 af-server export --from <postgres URL> --to backup.redb
