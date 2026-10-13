@@ -14,7 +14,7 @@ use std::time::Duration;
 use postgres::config::SslMode;
 use postgres::{Client, Config, NoTls};
 
-use crate::backend::{ActivityRow, Backend, DailyRow, Table};
+use crate::backend::{ActivityRow, Backend, DailyRow, Relocation, Table};
 use crate::{Result, StoreError};
 
 /// Notification channel a starting server uses to ask the writer to hand over.
@@ -35,6 +35,69 @@ CREATE INDEX IF NOT EXISTS af_activity_at ON af_activity (at_ms);
 CREATE INDEX IF NOT EXISTS af_activity_player ON af_activity (player, at_ms);
 CREATE TABLE IF NOT EXISTS af_activity_daily (day TEXT NOT NULL, player BIGINT NOT NULL, row_data BYTEA NOT NULL, PRIMARY KEY (day, player));
 ";
+
+/// Every table of a universe (what `SCHEMA_SQL` creates), in the order a relocation moves them.
+pub const UNIVERSE_TABLES: [&str; 7] = [
+    "af_private_archive",
+    "af_meta",
+    "af_journal",
+    "af_checkpoints",
+    "af_snapshots",
+    "af_activity",
+    "af_activity_daily",
+];
+
+/// A schema name a relocation accepts: lower-case letters, digits and underscores, starting with
+/// a letter, at most 41 characters. Never a system schema.
+pub fn valid_archive_schema(name: &str) -> Result<()> {
+    let ok = name.len() <= 41
+        && name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !name.starts_with("pg_")
+        && name != "information_schema"
+        && name != "public";
+    if ok {
+        Ok(())
+    } else {
+        Err(StoreError::Db(format!(
+            "archive schema name {name:?} must match ^[a-z][a-z0-9_]{{0,40}}$ (not public, pg_* or information_schema)"
+        )))
+    }
+}
+
+/// A quoted SQL identifier.
+fn ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// The af_ tables a schema holds.
+fn af_tables_in(tx: &mut postgres::Transaction<'_>, schema: &str) -> Result<Vec<String>> {
+    Ok(tx
+        .query(
+            "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename LIKE 'af\\_%' ORDER BY tablename",
+            &[&schema],
+        )?
+        .iter()
+        .map(|r| r.get(0))
+        .collect())
+}
+
+fn count_rows(tx: &mut postgres::Transaction<'_>, schema: &str, table: &str) -> Result<u64> {
+    let n: i64 = tx
+        .query_one(&format!("SELECT COUNT(*) FROM {}.{}", ident(schema), ident(table)), &[])?
+        .get(0);
+    Ok(n as u64)
+}
+
+/// The current schema, which must differ from the archive schema.
+fn current_schema_for(tx: &mut postgres::Transaction<'_>, archive: &str) -> Result<String> {
+    let cur: Option<String> = tx.query_one("SELECT current_schema()", &[])?.get(0);
+    let cur = cur.ok_or_else(|| StoreError::Db("this connection has no current schema".into()))?;
+    if cur == archive {
+        return Err(StoreError::Db(format!("the archive schema {archive:?} is the current schema")));
+    }
+    Ok(cur)
+}
 
 fn private_insert(tx: &mut postgres::Transaction<'_>, rows: &[crate::private_archive::ArchiveRow]) -> Result<()> {
     if rows.is_empty() {
@@ -517,6 +580,96 @@ impl Backend for PgBackend {
     fn daily_days(&self) -> Result<Vec<String>> {
         let rows = self.client().query(sql::DAILY_DAYS, &[])?;
         Ok(rows.iter().map(|r| r.get(0)).collect())
+    }
+
+    fn relocate_universe(&self, archive: &str) -> Result<Relocation> {
+        self.writable()?;
+        valid_archive_schema(archive)?;
+        let mut c = self.client();
+        let mut tx = c.transaction()?;
+        // Moving a table waits for every open transaction on it: give up rather than hang.
+        tx.batch_execute("SET LOCAL lock_timeout = '30s'")?;
+        let cur = current_schema_for(&mut tx, archive)?;
+        let there = af_tables_in(&mut tx, archive)?;
+        if !there.is_empty() {
+            return Err(StoreError::Db(format!(
+                "schema {archive:?} already holds {}: choose another archive schema; nothing was moved",
+                there.join(", ")
+            )));
+        }
+        let here = af_tables_in(&mut tx, &cur)?;
+        let mut tables = vec![];
+        for t in UNIVERSE_TABLES {
+            if !here.iter().any(|h| h == t) {
+                return Err(StoreError::Db(format!("the current schema has no table {t}; nothing was moved")));
+            }
+            tables.push((t.to_string(), count_rows(&mut tx, &cur, t)?));
+        }
+        tx.batch_execute(&format!("CREATE SCHEMA IF NOT EXISTS {}", ident(archive)))?;
+        for t in UNIVERSE_TABLES {
+            // Indexes, constraints and the sequences owned by columns move with each table.
+            tx.batch_execute(&format!("ALTER TABLE {}.{} SET SCHEMA {}", ident(&cur), ident(t), ident(archive)))?;
+        }
+        // Fresh, empty tables in the current schema, stamped with the schema version so the next
+        // writer opens them as this build's layout.
+        tx.batch_execute(SCHEMA_SQL)?;
+        tx.execute(
+            "INSERT INTO af_meta (key, value) VALUES ('schema_version', $1)",
+            &[&serde_json::to_vec(&crate::SCHEMA_VERSION)?],
+        )?;
+        tx.commit()?;
+        Ok(Relocation {
+            from: cur,
+            to: archive.to_string(),
+            tables,
+        })
+    }
+
+    fn restore_relocated(&self, archive: &str, force: bool) -> Result<Relocation> {
+        self.writable()?;
+        valid_archive_schema(archive)?;
+        let mut c = self.client();
+        let mut tx = c.transaction()?;
+        tx.batch_execute("SET LOCAL lock_timeout = '30s'")?;
+        let cur = current_schema_for(&mut tx, archive)?;
+        let there = af_tables_in(&mut tx, archive)?;
+        for t in UNIVERSE_TABLES {
+            if !there.iter().any(|h| h == t) {
+                return Err(StoreError::Db(format!(
+                    "schema {archive:?} has no table {t}: there is nothing complete to restore; nothing was changed"
+                )));
+            }
+        }
+        let here = af_tables_in(&mut tx, &cur)?;
+        if !force && here.iter().any(|h| h == "af_journal") && count_rows(&mut tx, &cur, "af_journal")? > 0 {
+            return Err(StoreError::Db(
+                "the current universe has journal entries: restoring would drop them (pass force to discard them)".into(),
+            ));
+        }
+        for t in UNIVERSE_TABLES {
+            tx.batch_execute(&format!("DROP TABLE IF EXISTS {}.{}", ident(&cur), ident(t)))?;
+        }
+        let mut tables = vec![];
+        for t in UNIVERSE_TABLES {
+            tx.batch_execute(&format!("ALTER TABLE {}.{} SET SCHEMA {}", ident(archive), ident(t), ident(&cur)))?;
+            tables.push((t.to_string(), count_rows(&mut tx, &cur, t)?));
+        }
+        // Drop the archive schema only when the move left it empty.
+        let left: i64 = tx
+            .query_one(
+                "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1",
+                &[&archive],
+            )?
+            .get(0);
+        if left == 0 {
+            tx.batch_execute(&format!("DROP SCHEMA {}", ident(archive)))?;
+        }
+        tx.commit()?;
+        Ok(Relocation {
+            from: archive.to_string(),
+            to: cur,
+            tables,
+        })
     }
 
     fn finish(&self) -> Result<()> {
