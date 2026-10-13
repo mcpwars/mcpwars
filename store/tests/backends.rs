@@ -411,6 +411,13 @@ fn copies_between_backends_and_backs_up_consistently() {
             Some(job) => job(&backup).unwrap(),
             None => store.backup_to(&backup).unwrap(),
         };
+        // A backup holds private data: only its owner may read it, and no partial copy remains.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert!(!backup.with_extension("partial").exists());
         let restored = Store::open(&backup).unwrap();
         assert_eq!(restored.load_world().unwrap().0.state_hash(), w.state_hash());
         assert_eq!(restored.replay_from_base().unwrap().state_hash(), w.state_hash());

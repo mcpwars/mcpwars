@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
+use redb::{Builder, Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
 use crate::backend::{ActivityRow, Backend, DailyRow, Table};
 use crate::{Result, StoreError};
@@ -36,9 +36,31 @@ pub struct RedbBackend {
     path: PathBuf,
 }
 
+/// Page cache for a backup or export file. redb's default is 1 GiB, and a commit moves the pages
+/// it wrote into that cache, so writing a 2 GB copy kept about 1 GiB resident (plus allocator
+/// overhead) in the server that made it. A file written once and closed needs no cache: this
+/// small one also bounds redb's write buffer (half of it), which spills to the file beyond that.
+pub const EXPORT_CACHE_BYTES: usize = 16 << 20;
+
 impl RedbBackend {
     pub fn open(path: &Path) -> Result<Self> {
-        let db = Database::create(path)?;
+        Self::init(Database::create(path)?, path)
+    }
+
+    /// Create a new, private (mode 0600 on Unix) database file for a backup or export, with a small
+    /// page cache (`EXPORT_CACHE_BYTES`). Refuses a path that already exists, so two exports never
+    /// share a file.
+    pub fn create_export(path: &Path) -> Result<Self> {
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+        o.open(path)
+            .map_err(|e| StoreError::Db(format!("backup: create {}: {e}", path.display())))?;
+        Self::init(Builder::new().set_cache_size(EXPORT_CACHE_BYTES).create(path)?, path)
+    }
+
+    fn init(db: Database, path: &Path) -> Result<Self> {
         let tx = db.begin_write()?;
         tx.open_table(META)?;
         tx.open_table(JOURNAL)?;

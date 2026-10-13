@@ -33,8 +33,9 @@ enum Req {
     ),
     JournalPage(Option<u64>, usize, oneshot::Sender<Result<Vec<serde_json::Value>, String>>),
     Snapshot(oneshot::Sender<()>),
-    /// Copy the database between transactions (a consistent online backup).
-    Backup(std::path::PathBuf, oneshot::Sender<Result<u64, String>>),
+    /// Copy the database between transactions (a consistent online backup). The permit is held
+    /// until the copy has finished, even when the requester has gone.
+    Backup(std::path::PathBuf, BackupPermit, oneshot::Sender<Result<u64, String>>),
     /// Hand the universe to a successor: snapshot at the head, close the store
     /// (which releases the writer lock), and refuse commands from then on.
     Release(oneshot::Sender<()>),
@@ -205,6 +206,37 @@ pub struct Game {
     pub fleet: crate::fleet::FleetRing,
     /// The scoreboard's hourly trend and the finished seasons (see `history`).
     pub history: crate::history::HistoryState,
+    /// Set while a backup runs (see `backup_permit`).
+    backup_busy: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The refusal when a backup is asked for while another one runs.
+pub const BACKUP_BUSY: &str = "A backup is already running on this server; try again when it has finished.";
+
+/// The right to run the one backup this server allows at a time. Cloned between the requester
+/// (which may keep it while it streams the file) and the job (which keeps it until the copy has
+/// finished); the slot frees when the last clone is dropped.
+#[derive(Clone)]
+pub struct BackupPermit {
+    _slot: Arc<BackupSlot>,
+}
+
+struct BackupSlot(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for BackupSlot {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Reply to a finished backup. Nobody waiting (an HTTP client that went away) means nobody will
+/// use the file, so it is removed rather than left on disk.
+fn finish_backup(dest: &std::path::Path, done: Option<oneshot::Sender<Result<u64, String>>>, r: Result<u64, String>) {
+    let ok = r.is_ok();
+    let delivered = done.is_some_and(|d| d.send(r).is_ok());
+    if ok && !delivered {
+        let _ = std::fs::remove_file(dest);
+    }
 }
 
 /// Anonymous REST feedback reports allowed per client IP per rolling hour.
@@ -344,6 +376,7 @@ impl Game {
             anon_rows: Arc::new(Mutex::new((0, 0, 0))),
             fleet: crate::fleet::ring(),
             history: crate::history::state(),
+            backup_busy: Arc::new(false.into()),
         };
         let recording = game.recording.clone();
         // The store clients are synchronous: run the actor on a dedicated thread.
@@ -462,16 +495,29 @@ impl Game {
                             let _ = reply.send(result);
                         }
                         Req::Read(f) => f(&w),
-                        Req::Backup(dest, done) => match store.as_ref().map(|st| st.detached_backup()) {
+                        Req::Backup(dest, permit, done) => match store.as_ref().map(|st| st.detached_backup()) {
                             // Postgres: a consistent export on its own connection, off this thread.
                             Some(Some(job)) => {
-                                std::thread::spawn(move || {
-                                    let _ = done.send(job(&dest).map_err(|e| e.to_string()));
+                                let (path, failed) = (dest.clone(), Arc::new(Mutex::new(Some(done))));
+                                let reply = failed.clone();
+                                let spawned = std::thread::Builder::new().name("af-backup".into()).spawn(move || {
+                                    // A panic in the copy is an error reply, never a dead process.
+                                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&path)))
+                                        .unwrap_or_else(|_| Err(af_store::StoreError::Db("backup: the copy panicked".into())))
+                                        .map_err(|e| e.to_string());
+                                    finish_backup(&path, reply.lock().unwrap().take(), r);
+                                    drop(permit);
                                 });
+                                if let Err(e) = spawned
+                                    && let Some(done) = failed.lock().unwrap().take()
+                                {
+                                    let _ = done.send(Err(format!("backup: could not start the copy: {e}")));
+                                }
                             }
                             Some(None) => {
                                 let r = store.as_ref().unwrap().backup_to(&dest).map_err(|e| e.to_string());
-                                let _ = done.send(r);
+                                finish_backup(&dest, Some(done), r);
+                                drop(permit);
                             }
                             None => {
                                 let _ = done.send(Err("this universe has no database (in-memory or handed over)".to_string()));
@@ -613,11 +659,32 @@ impl Game {
         rx.await.map_err(|_| "Engine stopped".to_string())?
     }
 
-    /// Write a consistent copy of the database to `dest` (bytes written).
+    /// The permit to run a backup, or None while another backup runs (one at a time: each
+    /// holds a copy of the universe in flight, and production has little memory to spare).
+    pub fn backup_permit(&self) -> Option<BackupPermit> {
+        use std::sync::atomic::Ordering;
+        self.backup_busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| BackupPermit {
+                _slot: Arc::new(BackupSlot(self.backup_busy.clone())),
+            })
+    }
+
+    /// Write a consistent copy of the database to `dest` (bytes written), or refuse with
+    /// `BACKUP_BUSY` while another backup runs.
     pub async fn backup(&self, dest: std::path::PathBuf) -> Result<u64, String> {
+        let permit = self.backup_permit().ok_or_else(|| BACKUP_BUSY.to_string())?;
+        self.backup_with(dest, permit).await
+    }
+
+    /// `backup` under a permit the caller already holds. `dest` must be a path no other backup
+    /// uses. If the caller stops waiting, the copy still finishes (under the permit) and its
+    /// file is removed.
+    pub async fn backup_with(&self, dest: std::path::PathBuf, permit: BackupPermit) -> Result<u64, String> {
         let (tx, rx) = oneshot::channel();
         self.tx
-            .send(Req::Backup(dest, tx))
+            .send(Req::Backup(dest, permit, tx))
             .await
             .map_err(|_| "engine not running".to_string())?;
         rx.await.map_err(|_| "engine stopped".to_string())?

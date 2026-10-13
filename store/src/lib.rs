@@ -46,11 +46,16 @@ use serde::{Deserialize, Serialize};
 pub use backend::{ActivityRow, Backend, DailyRow, Table};
 pub use pg::Access;
 use pg::PgBackend;
+pub use redb_backend::EXPORT_CACHE_BYTES;
 use redb_backend::RedbBackend;
 
 const KEEP_SNAPSHOTS: usize = 3;
 /// Journal rows fetched per query when replaying or copying.
 const PAGE: usize = 5_000;
+/// Private archive rows fetched per query when copying. A row carries a whole note or memory
+/// version, and a 5,000-row page of production's archive was about 38 MB before it was
+/// re-encoded, so copies read it in smaller pages.
+const PRIVATE_PAGE: usize = 500;
 /// Meta keys that make up a universe (besides `schema_version`).
 const UNIVERSE_KEYS: [&str; 3] = ["genesis", "base", "base_world"];
 
@@ -318,13 +323,33 @@ impl Store {
         match &self.loc {
             Location::File(path) => {
                 let tmp = dest.with_extension("partial");
-                let io = |e: std::io::Error| StoreError::Db(format!("backup: {e}"));
-                let n = std::fs::copy(path, &tmp).map_err(io)?;
-                std::fs::rename(&tmp, dest).map_err(io)?;
-                Ok(n)
+                let _ = std::fs::remove_file(&tmp);
+                let copy = || -> std::io::Result<u64> {
+                    let mut from = std::fs::File::open(path)?;
+                    let mut o = std::fs::OpenOptions::new();
+                    o.write(true).create_new(true);
+                    #[cfg(unix)]
+                    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+                    let mut to = o.open(&tmp)?;
+                    let n = std::io::copy(&mut from, &mut to)?;
+                    to.sync_all()?;
+                    std::fs::rename(&tmp, dest)?;
+                    Ok(n)
+                };
+                copy().map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp);
+                    StoreError::Db(format!("backup: {e}"))
+                })
             }
             Location::Postgres(url) => export_pg(url, dest),
         }
+    }
+
+    /// Create a new, empty backup or export file at `path` (redb, mode 0600 on Unix, a small page
+    /// cache so writing it does not keep the copy in memory). Refuses an existing path.
+    pub fn create_export(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        Self::check_schema(Box::new(RedbBackend::create_export(&path)?), Location::File(path), true)
     }
 
     /// A backup that can run off the writer's thread, if this store supports it.
@@ -372,7 +397,7 @@ impl Store {
             dest.b.daily_replace(&day, &rows)?;
         }
         let mut cursor = private_archive::ArchiveQuery {
-            limit: PAGE,
+            limit: PRIVATE_PAGE,
             ..Default::default()
         };
         loop {
@@ -792,18 +817,36 @@ pub fn check_takeover(loc: &str) -> Result<()> {
     Ok(())
 }
 
-/// Export a Postgres universe to a portable redb file, atomically.
-fn export_pg(url: &str, dest: &Path) -> Result<u64> {
+/// Export a universe to a new portable redb file at `dest`, atomically: it is written to
+/// `dest` with the extension `partial` (a private file with a small page cache, see
+/// `Store::create_export`) and renamed only when complete. A failed export removes its partial
+/// file. Memory stays bounded: rows are copied a page at a time and only the latest snapshot
+/// row is held, never deserialized. Callers give each export its own `dest`.
+fn export(src: &Store, dest: &Path) -> Result<u64> {
     let tmp = dest.with_extension("partial");
     let _ = std::fs::remove_file(&tmp);
     let io = |e: std::io::Error| StoreError::Db(format!("backup: {e}"));
-    {
-        let src = Store::open_location(url, Access::Snapshot)?;
-        let dst = Store::open(&tmp)?;
+    let copied = (|| -> Result<()> {
+        let dst = Store::create_export(&tmp)?;
         src.copy_into(&dst)?;
+        Ok(())
+    })();
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
     }
-    std::fs::rename(&tmp, dest).map_err(io)?;
+    std::fs::rename(&tmp, dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io(e)
+    })?;
     Ok(std::fs::metadata(dest).map_err(io)?.len())
+}
+
+/// Export a Postgres universe (one repeatable-read transaction, so consistent while the writer
+/// keeps going) to a portable redb file, atomically.
+fn export_pg(url: &str, dest: &Path) -> Result<u64> {
+    let src = Store::open_location(url, Access::Snapshot)?;
+    export(&src, dest)
 }
 
 /// Every journaled entry was accepted when it was recorded, so a refusal on

@@ -243,7 +243,10 @@ async fn main() -> anyhow::Result<()> {
                     db.parent().map(|p| p.join("backups")).unwrap_or_else(|| PathBuf::from("backups"))
                 }
             });
-            std::fs::create_dir_all(&backup_dir)?;
+            match af_mcp::backup::prepare_dir(&backup_dir)? {
+                0 => {}
+                n => tracing::info!("removed {n} leftover backup files from {}", backup_dir.display()),
+            }
             if backup_every_mins > 0 {
                 let (g, dir) = (game.clone(), backup_dir.clone());
                 tokio::spawn(async move {
@@ -254,6 +257,9 @@ async fn main() -> anyhow::Result<()> {
                         let dest = dir.join(format!("auto-{}.redb", af_mcp::game::now_ms()));
                         match g.backup(dest.clone()).await {
                             Ok(n) => tracing::info!("backup written: {} ({n} bytes)", dest.display()),
+                            Err(e) if e == af_mcp::game::BACKUP_BUSY => {
+                                tracing::info!("automatic backup skipped: another backup is running")
+                            }
                             Err(e) => tracing::error!("backup failed: {e}"),
                         }
                         // Rotate: keep the newest `backup_keep` automatic backups.
@@ -513,7 +519,7 @@ async fn main() -> anyhow::Result<()> {
                 let src = af_store::Store::open_location(&from, af_store::Access::Snapshot)?;
                 let tmp = to.with_extension("partial");
                 let _ = std::fs::remove_file(&tmp);
-                let n = src.copy_into(&af_store::Store::open(&tmp)?)?;
+                let n = src.copy_into(&af_store::Store::create_export(&tmp)?)?;
                 std::fs::rename(&tmp, &to)?;
                 println!("exported {n} journal entries from {} to {}", src.describe(), to.display());
                 verify(&to.display().to_string())

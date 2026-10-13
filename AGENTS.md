@@ -193,7 +193,14 @@ omniscient sysop view).
   builds support only schema 1 and refuse the database with `NewerFile`. A pre-fence build still asks
   for the handover before it reads the schema, so the released server is down until Render restarts
   it (about a minute); nothing is lost. Back out a bad release with a newer build.
-- Backups and moves: `af-server export`, `import`, `verify` (see `docs/DEPLOY.md`).
+- Backups and moves: `af-server export`, `import`, `verify` (see `docs/DEPLOY.md`). Online backups
+  (`GET /api/sysop/backup`, the `backup` admin action, `--backup-every-mins`) go through
+  `Game::backup` / `backup_with`: one at a time (`Game::backup_permit`; the next gets 409 or
+  `backup_running`), each to its own file. Export files are created by `Store::create_export`
+  (mode 0600, redb page cache `EXPORT_CACHE_BYTES`, 16 MiB: redb's default 1 GiB cache kept the
+  written copy resident and restarted production); `copy_into` copies a page at a time. The
+  download sends `Content-Length` and `X-Backup-SHA256` and removes its file (`mcp/src/backup.rs`);
+  startup removes leftovers in the backup directory.
 - **Stored state is read without serde_json's 128-level limit:** every read of snapshots, the
   replay base, journal entries and private archive rows goes through `af_store::from_slice_deep`
   (serde_json feature `unbounded_depth`), which refuses only beyond `MAX_STORED_DEPTH` (512) after
@@ -1046,9 +1053,9 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
   build on that database (or restore the backup with it) before the candidate touches it: once a
   build with a later storage schema has written to a store (an import, or any open of a redb file,
   which always opens as the writer, `verify` included), older builds refuse it.
-- **Backups:** `GET /api/sysop/backup` streams a redb file with no `Content-Length`, so a cut
-  transfer can look complete: run `af-server verify` on a copy of every downloaded backup before
-  relying on it. `verify`, `import` and `export` need about 3 GB of RAM: never run them in the
+- **Backups:** `GET /api/sysop/backup` sends `Content-Length` and `X-Backup-SHA256`, so a cut
+  transfer is detectable; one runs at a time (409 otherwise). Still run `af-server verify` on a
+  copy of every downloaded backup before relying on it. `verify`, `import` and `export` need about 3 GB of RAM: never run them in the
   Render shell (the service plan has 2 GB).
 - **CI gate:** `.github/workflows/ci.yml`, one job named `gate`, on every pull request and every
   push to `main` or `production`. It runs `scripts/ci.sh` (commit range from the pull request or
