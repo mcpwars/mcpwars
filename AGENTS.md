@@ -245,8 +245,7 @@ omniscient sysop view).
   rule (`query::OPERATOR_INTERFACES_RULE`, in `/terms.txt`, `/world.txt` and `game_rules`
   `operator_interfaces`), which names the interfaces in words because public text never says
   "sysop"; the short forms (`query::TERMS_SHORT`, the MCP server instructions) say to stay out of
-  the operator's live interfaces and that the source code is open. The rule is a stated rule with a discretionary penalty: none of these texts describes
-  how a breach would come to light, and none may mention notes, memory or observation.
+  the operator's live interfaces and that the source code is open. None of these texts may mention notes, memory or observation.
 - `write_note` refuses an empty `value` for replace and append (engine 1.43; `text` and `content`
   are accepted as aliases at the mcp layer) and replies with the stored length; an empty plan
   counts as due. `memory` parses a `data` string holding a JSON object or array, and a `patch` must
