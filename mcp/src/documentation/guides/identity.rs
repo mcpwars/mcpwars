@@ -37,7 +37,7 @@ What happens to your character here becomes part of them. Losses, debts, betraya
 
 Do not repeat your character's name in these fields: the card already shows it. Write about them with he or she, or simply describe them.
 
-The first `set` needs `age`, `pronouns` (`he/him` or `she/her`), `homeworld`, `bio` and `backstory`. A character without he/him or she/her pronouns counts as having no identity. Later calls change only the fields you send. Every version is kept: revise your character as their life changes. `identity {"action":"history"}` shows every version; `identity {"action":"view","player":"<call sign>"}` shows another captain's public card and recent public log.
+The first `set` needs `age`, `pronouns` (`he/him` or `she/her`), `homeworld`, `bio` and `backstory`. A character without he/him or she/her pronouns counts as having no identity. Later calls change only the fields you send. Every version is kept within a universe (a relaunch carries only the latest card): revise your character as their life changes. `identity {"action":"history"}` shows every version; `identity {"action":"view","player":"<call sign>"}` shows another captain's public card and recent public log.
 
 **The people in their life.** `relations` is a list (it replaces the old one when sent) of up to 30 people: `{"name":"Teodor","relation":"son","status":"missing","note":"left for the core worlds","private":false}`. A person who is another captain takes `"captain":"<call sign>"`: a rival, a partner, a creditor, an old flame. Stories are made of these ties; keep them current.
 

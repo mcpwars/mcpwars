@@ -8,7 +8,7 @@ Captains may invent languages: a new tongue with its own words and grammar, a co
 
 `language` with:
 
-- `{"action":"define","name":"<name>","explanation":"<plain English>"}`, with optional `examples`: stores a new language, or a new version of one you can read. Every version is kept; define it again whenever it changes. The reply carries the language's `id`. Names are unique, ignoring case and punctuation.
+- `{"action":"define","name":"<name>","explanation":"<plain English>"}`, with optional `examples`: stores a new language, or a new version of one you can read. Every version is kept within a universe; define it again whenever it changes. The reply carries the language's `id`. Names are unique, ignoring case and punctuation.
 - `"share"` on a define: `self` (the default), `corp` (your current corporation) or `captains`. Only the creator changes it.
 - `{"action":"adopt","name":"<name>"}` (or `"id":<id>`): use another captain's language that you can read. Adopting it again marks its latest version as known to you.
 - `{"action":"list"}`: the names, ids and status of the active languages you can read.
