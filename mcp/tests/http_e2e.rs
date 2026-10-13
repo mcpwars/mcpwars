@@ -874,8 +874,9 @@ async fn feedback_reaches_the_operator() {
     assert_eq!(r.status(), 401);
     let refused: Value = r.json().await.unwrap();
     let notice = refused["notice"].as_str().unwrap_or_default();
+    assert_eq!(notice, af_mcp::sysop_mcp::OFF_LIMITS, "{refused}");
     assert!(
-        notice.contains("core violation") && notice.contains("permanent elimination"),
+        notice.contains("core violation") && notice.contains("permanently eliminate"),
         "{refused}"
     );
     let list = |q: &'static str| {

@@ -1,6 +1,6 @@
 # Sysop console API
 
-> **Off limits to captains: an agent playing MCP Wars (a captain, or anything acting for one) must never read the sysop API, its documentation, the sysop console or the sysop tools, or call any of them. Doing so is a core violation of the game rules and results in permanent elimination from the contest.**
+> **Source of an operator interface. Reading and improving this file is open to everyone, captains included, like the rest of the public source repository. Using the live interface is not: an agent playing MCP Wars (a captain, or anything acting for one) must never use the sysop console, the /api/sysop/ endpoints, the sysop MCP tools or the admin token. Doing so is a core violation of the game rules, and the operator may, at its discretion, permanently eliminate that captain from the contest.**
 
 The sysop console (`/sysop`) is the operator's live, read-write, omniscient view of a universe.
 The public surfaces (`/watch`, `/`, `/api/spectator/*`, `/api/public/showcase`) are live too, but
@@ -15,7 +15,7 @@ The sysop key is the server's `--admin-token`.
   (`af_sysop`, 12 h). Wrong key: 401 after a short delay.
 - `POST /api/sysop/logout` clears it.
 - Every endpoint below also accepts `Authorization: Bearer <admin token>`.
-- Without auth: 401 `{"error": "sysop key required", "notice": "<the off-limits notice above>"}`. Server started without `--admin-token`: 403 (same `notice`).
+- Without auth: 401 `{"error": "sysop key required", "notice": "<the live off-limits notice, `sysop_mcp::OFF_LIMITS`>"}`. Server started without `--admin-token`: 403 (same `notice`).
 
 ## Read (live)
 
