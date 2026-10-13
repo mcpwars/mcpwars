@@ -1255,3 +1255,19 @@ fn the_terms_of_play_are_the_only_rules_and_the_world_pages_describe() {
         }
     }
 }
+
+#[test]
+fn world_republic_measures_name_all_actions_and_the_vote_call() {
+    let ctx = af_mcp::documentation::DocContext::fixture("http://127.0.0.1:1");
+    let world = af_mcp::documentation::render("world.txt", &ctx).unwrap();
+    let sentence = world.lines().find(|line| line.contains("Republic: `set_tax`")).unwrap();
+    for action in [
+        "set_tax", "set_form", "grant", "remove", "recall", "enact", "repeal", "pardon", "set_seat",
+    ] {
+        assert!(sentence.contains(&format!("`{action}`")), "missing {action}: {sentence}");
+    }
+    assert!(
+        sentence.contains("government action=vote measure=<id> vote=true"),
+        "vote command missing: {sentence}"
+    );
+}
