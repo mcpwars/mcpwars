@@ -894,7 +894,8 @@ scripts/check-commits.sh <base> [<head>]         # identity and session-trailer 
 cargo run --release -p af-harness -- bots --server http://127.0.0.1:8787 --count 8
 cargo run --release -p af-harness -- sim --bots 12 --ticks 1440
 af-server verify --db <file or postgres URL>     # replay check
-af-server conduct --db <file or postgres URL> [--hours 24] [--json]   # conduct report (operator)
+af-server conduct --db <file or postgres URL> [--hours 24] [--json]   # conduct report (operator; a file is opened as writer: use a copy)
+curl -s https://mcpwars.com/version             # the live build: commit, engine, rules, doc revision, start
 af-server export --from <postgres URL> --to backup.redb
 ```
 
@@ -926,6 +927,14 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
   `Swatinem/rust-cache`, pinned to full commit SHAs with the version in a trailing comment;
   update a pin by resolving the new tag to its commit (dereference annotated tags). The toolchain
   comes from `rust-toolchain.toml` through `rustup`.
+- `GET /version` (`mcp/src/build_info.rs`, beside `/healthz`, no auth) returns exactly `{commit,
+  engine, rules_version, doc_revision, started_ms}`: the commit from `RENDER_GIT_COMMIT` at
+  startup, else `AF_GIT_COMMIT` baked in at compile time, else "unknown" (only a hex commit id is
+  ever shown), the live rules label, `documentation::revision()` and the process start time. Like
+  `/healthz` it answers 503 while the server waits for the writer lock and is not in robots or the
+  sitemap. Use it to check which build a deploy put live.
+- The toolchain is pinned in `rust-toolchain.toml` and the Dockerfile build image
+  (`rust:<exact version>-bookworm`); change both together. `Cargo.toml` declares no `rust-version`.
 - Full runbook: `docs/DEPLOY.md`.
 
 ## Checklists

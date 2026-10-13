@@ -1817,3 +1817,13 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | The depth is counted with an explicit stack (`tools::json_depth`), never by recursion | A deep value must not cost stack depth in the check that exists to bound it |
 | 40 leaves room for a memory export of records holding data 32 deep to re-import (six wrapping levels: arguments, bundle, records, record, versions, version) | Export then import must round-trip whatever the engine bound will accept |
 | This is a mcp-layer guard only. The real limit is the engine bound (32 levels, with byte caps on notes, memory values and claims), which comes with the next engine bump; until then a JSON string in memory `data`, which the engine parses, passes this cap by design | Bounding stored values is a change to what the engine accepts, so it waits for a journaled engine version; the intake cap needs no bump and ships now |
+
+## 2026-10-12: `/version`, a pinned build image and accurate report commands
+
+| Decision | Reason |
+|---|---|
+| `GET /version` beside `/healthz` returns exactly `{commit, engine, rules_version, doc_revision, started_ms}` (`mcp/src/build_info.rs`) | After a push nothing public said which commit was live: the engine only shows in MCP `serverInfo` and the guides, and the same engine spans many commits. A fixed, unauthenticated shape lets the operator and scripts confirm a release switched over |
+| The commit comes from `RENDER_GIT_COMMIT` at startup, then `AF_GIT_COMMIT` compiled in, then "unknown"; only a hex id of 7 to 64 characters is reported | Render sets the runtime variable on every deploy; a local or other build can bake one in; a stray value in either variable never reaches a public reply |
+| `/version` is served with `no-store`, answers 503 during a handover like `/healthz`, and is left out of robots and the sitemap like `/healthz` | It describes the process answering, so caches must not hold it, and it is an operational probe, not a page |
+| The Dockerfile build stage pins `rust:1.96.0-bookworm`; the unused `rust-version = "1.90"` is removed from `Cargo.toml` | The floating `1.96` tag could move to a later patch release than `rust-toolchain.toml`; no crate inherited the workspace `rust-version`, so it declared a minimum nothing checked or used |
+| The `conduct` and `verify` help text says a database file is opened as its writer (use a copy); only a Postgres URL is a read-only snapshot | The old text said "read only", but `Store::open_location` opens every file store as writer, taking its lock and possibly upgrading its schema |
