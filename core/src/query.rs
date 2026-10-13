@@ -442,10 +442,33 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
     let mut v = briefing(w, pid)?;
     let mut omitted = vec![];
     let o = v.as_object_mut().unwrap();
+    // Optional top-level briefing keys. Keep the list complete even for keys that appear only
+    // sometimes (e.g. constitution while a vote is open) so a typo is never confused with absence.
+    const OPTIONAL_SECTIONS: &[&str] = &[
+        "ap_advice",
+        "galaxy_events",
+        "sector",
+        "unread_notices",
+        "unread_radio",
+        "diplomacy",
+        "career",
+        "federation_rewards",
+        "comms",
+        "chronicle",
+        "constitution",
+        "government",
+    ];
+    const ALWAYS_SECTIONS: &[&str] = &["status", "plan", "identity", "owner", "server", "inbox_continuation"];
+    let mut unknown_sections: Vec<String> = Vec::new();
     if let Some(sections) = &a.sections {
+        for name in sections {
+            if !OPTIONAL_SECTIONS.contains(&name.as_str()) && !ALWAYS_SECTIONS.contains(&name.as_str()) {
+                unknown_sections.push(name.clone());
+            }
+        }
         let keys: Vec<String> = o.keys().cloned().collect();
         for key in keys {
-            if !["status", "plan", "identity", "owner", "server", "inbox_continuation"].contains(&key.as_str()) && !sections.contains(&key)
+            if !ALWAYS_SECTIONS.contains(&key.as_str()) && !sections.contains(&key)
             {
                 o.remove(&key);
                 omitted.push(key);
@@ -510,7 +533,13 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
             (k,record.map(|v| { let archived = v.expires_tick.is_some_and(|t| t <= w.tick); json!({"revision": v.revision,"tick": v.tick,"archived": archived,"data": if archived {None} else {Some(&v.data)}}) }))
         }).collect::<BTreeMap<_,_>>()));
     }
-    o.insert("retrieval".into(), json!({"omitted_sections": omitted, "complete_briefing": {"tool": "get_briefing", "arguments": {}}, "complete_messages": {"tool": "read_inbox", "arguments": {"peek": true, "include_read": true}}, "marks_read": false}));
+    let mut retrieval = json!({"omitted_sections": omitted, "complete_briefing": {"tool": "get_briefing", "arguments": {}}, "complete_messages": {"tool": "read_inbox", "arguments": {"peek": true, "include_read": true}}, "marks_read": false});
+    if !unknown_sections.is_empty() {
+        let retrieval_obj = retrieval.as_object_mut().unwrap();
+        retrieval_obj.insert("unknown_sections".into(), json!(unknown_sections));
+        retrieval_obj.insert("valid_sections".into(), json!(OPTIONAL_SECTIONS));
+    }
+    o.insert("retrieval".into(), retrieval);
     Ok(v)
 }
 

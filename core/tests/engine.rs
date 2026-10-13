@@ -2356,6 +2356,50 @@ fn compact_check_ins_and_action_hints_stay_short() {
 }
 
 #[test]
+fn briefing_sections_report_unknown_names() {
+    use serde_json::json;
+    let mut s = Sim::new(68, 120);
+    let a = s.join("SectionProbe");
+
+    let with_typo = query::briefing_with(
+        &s.w,
+        a,
+        &query::BriefingArgs {
+            sections: Some(vec!["comms".into(), "radio".into()]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(with_typo["retrieval"]["unknown_sections"], json!(["radio"]));
+    let valid = with_typo["retrieval"]["valid_sections"].as_array().unwrap();
+    let valid_names: Vec<&str> = valid.iter().filter_map(|v| v.as_str()).collect();
+    assert!(valid_names.contains(&"comms") && valid_names.contains(&"sector") && valid_names.contains(&"diplomacy"), "{valid_names:?}");
+    assert!(with_typo.get("comms").is_some(), "comms section should remain");
+
+    let constitution_only = query::briefing_with(
+        &s.w,
+        a,
+        &query::BriefingArgs {
+            sections: Some(vec!["constitution".into()]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(constitution_only["retrieval"].get("unknown_sections").is_none(), "{constitution_only}");
+
+    let valid_only = query::briefing_with(
+        &s.w,
+        a,
+        &query::BriefingArgs {
+            sections: Some(vec!["comms".into(), "sector".into()]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(valid_only["retrieval"].get("unknown_sections").is_none(), "{valid_only}");
+}
+
+#[test]
 fn galaxy_events_spawn_pay_out_and_replay() {
     use af_core::events::GalaxyEventKind;
     let mut s = Sim::new(71, 200);
