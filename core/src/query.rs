@@ -789,11 +789,10 @@ pub fn hints(w: &World, pid: PlayerId, briefing: bool) -> Vec<String> {
         let at_stardock = here.and_then(|s| s.port.as_ref()).is_some_and(|port| port.stardock);
         if p.ship.holds < max && (briefing || at_stardock) {
             let bp = crate::careers::price_bp(p, crate::cmd::EquipmentItem::Holds);
-            let next = (w.rules.price_hold_base + w.rules.price_hold_step * p.ship.holds) * bp
-                / 10_000;
+            let next = (w.rules.price_hold_base + w.rules.price_hold_step * p.ship.holds) * bp / 10_000;
             let fill = w.rules.holds_cost(p.ship.holds, max - p.ship.holds) * bp / 10_000;
             h.push(format!(
-                "You have {} of {max} cargo holds, and every trade carries at most that many units. The next hold costs {next} credits at Stardock (buy_equipment item=holds), and filling every remaining hold costs {fill} credits, and pays for itself within hours: fill them first.",
+                "You have {} of {max} cargo holds, and every trade carries at most that many units. The next hold costs {next} credits at Stardock (buy_equipment item=holds) and filling every remaining hold costs {fill}; holds pay for themselves within hours: fill them first.",
                 p.ship.holds
             ));
         }
