@@ -140,6 +140,18 @@ omniscient sysop view).
 - **Engine upgrades:** bump `ENGINE_VERSION` (`core/src/lib.rs`) whenever serialized state or
   semantics change. The server starts with `--adopt-universe`, which rebases the universe onto the
   new engine from the head snapshot the handover writes. New fields must be `#[serde(default)]`.
+- **Roll forward only.** An older build never opens or rebases a newer universe: the store compares
+  `af-engine-X.Y` numbers part by part (`af_store::engine_newer`: 1.9 is older than 1.41; keep that
+  form, a test checks it) and refuses a newer base engine with `StoreError::NewerEngine` in
+  `check_engine` and at the top of `adopt_universe`, before anything is written. Before a starting
+  server asks the writer to hand over, `af_store::check_takeover` reads `schema_version` and `base`
+  without the lock; on a newer schema or engine the server exits instead of asking, so the running
+  server keeps the universe (an empty store, an older schema and an older engine pass). Builds from
+  before this refusal are kept out by the schema fence: `SCHEMA_VERSION` 2 changed no table (its
+  migration is a no-op; read-only connections still open schema 1, `READ_COMPATIBLE_FROM`), but those
+  builds support only schema 1 and refuse the database with `NewerFile`. A pre-fence build still asks
+  for the handover before it reads the schema, so the released server is down until Render restarts
+  it (about a minute); nothing is lost. Back out a bad release with a newer build.
 - Backups and moves: `af-server export`, `import`, `verify` (see `docs/DEPLOY.md`).
 - **Stored state is read without serde_json's 128-level limit:** every read of snapshots, the
   replay base, journal entries and private archive rows goes through `af_store::from_slice_deep`
@@ -899,7 +911,10 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
 - Before pushing an engine version bump, rehearse the upgrade locally: run the previous build on a
   local Postgres, start the new build against the same database, and check the handover, the
   adoption and `af-server verify`. Pass the database as `DATABASE_URL`, not `--db`: the handover
-  listener only starts from the environment variable, as in production.
+  listener only starts from the environment variable, as in production. Start the previous build
+  on that database (or restore the backup with it) before the new build touches it: once a build with
+  a later storage schema has written to a store (an import, or any open of a redb file, which always
+  opens as the writer, `verify` included), older builds refuse it.
 - **CI gate:** `.github/workflows/ci.yml`, one job named `gate`, on every pull request and every
   push to `main` or `production`. It runs `scripts/ci.sh` (commit range from the pull request or
   the push) and the store tests against a Postgres 17 service with `AF_REQUIRE_POSTGRES=1`. Pull

@@ -210,3 +210,38 @@ async fn repeated_refusals_get_a_hint_until_the_tool_succeeds() {
     let briefing = tools::call(&game, pid, "get_briefing", &json!({"compact":true})).await;
     assert!(briefing.data["result"]["server"]["refusal_hint"].is_null());
 }
+
+#[test]
+fn server_start_with_adopt_refuses_a_newer_engine_and_writes_nothing() {
+    let path = std::env::temp_dir().join(format!("af-newer-engine-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let loc = path.display().to_string();
+    {
+        let store = af_store::Store::open(&path).unwrap();
+        let w = store
+            .init(&af_store::Genesis {
+                seed: 5,
+                sectors: 40,
+                rules: af_core::rules::Rules::default(),
+                created_unix_ms: 0,
+                engine: "af-engine-9.99".into(),
+            })
+            .unwrap();
+        store.save_snapshot(&w).unwrap();
+    }
+    let meta = |k: &str| af_store::Store::open(&path).unwrap().backend().meta_get(k).unwrap();
+    let before = (meta("base"), meta("base_world"));
+    // What the production image runs: serve --adopt-universe.
+    let err = af_mcp::open_world(&loc, 5, 40, 60_000, true).err().expect("refused");
+    assert!(
+        matches!(
+            err.downcast_ref::<af_store::StoreError>(),
+            Some(af_store::StoreError::NewerEngine { .. })
+        ),
+        "{err}"
+    );
+    assert!(err.to_string().contains("roll forward"), "{err}");
+    assert!(af_mcp::open_world(&loc, 5, 40, 60_000, false).is_err());
+    assert_eq!((meta("base"), meta("base_world")), before);
+    let _ = std::fs::remove_file(&path);
+}
