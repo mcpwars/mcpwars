@@ -6,6 +6,9 @@
 //! docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p 55432:5432 postgres:17
 //! AF_TEST_POSTGRES_URL=postgres://postgres:pw@127.0.0.1:55432/postgres cargo test -p af-store
 //! ```
+//!
+//! `AF_REQUIRE_POSTGRES=1` (set by the CI gate) makes a missing URL a failure instead of a
+//! silent file-only run.
 
 use af_core::cmd::*;
 use af_core::engine::{Actor, Entry, apply};
@@ -25,7 +28,11 @@ impl Loc {
 }
 
 fn pg_url() -> Option<String> {
-    std::env::var("AF_TEST_POSTGRES_URL").ok().filter(|s| !s.is_empty())
+    let url = std::env::var("AF_TEST_POSTGRES_URL").ok().filter(|s| !s.is_empty());
+    if url.is_none() && std::env::var("AF_REQUIRE_POSTGRES").as_deref() == Ok("1") {
+        panic!("AF_REQUIRE_POSTGRES=1 but AF_TEST_POSTGRES_URL is unset: the Postgres backend would be skipped");
+    }
+    url
 }
 
 /// A fresh file location, plus a fresh Postgres schema when configured.

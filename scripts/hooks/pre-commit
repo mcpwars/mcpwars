@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refuses a commit that stages owner-facing material (scripts/check-public-tree.sh --staged).
+# Run from the same-named global hook in the core.hooksPath directory the owner's machine sets
+# for every project clone. Never set core.hooksPath in this repository: it would replace the global
+# hooks, including the pre-push guard.
+top=$(git rev-parse --show-toplevel) || exit 1
+[ -x "$top/scripts/check-public-tree.sh" ] || exit 0
+exec "$top/scripts/check-public-tree.sh" --staged

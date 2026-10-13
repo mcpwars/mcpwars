@@ -1,0 +1,77 @@
+# The merge gate: scripts/ci.sh (public tree, commits, fmt, clippy, release tests, core purity) with
+# the store tests on Postgres 17. Pull requests carry untrusted code (captain patches), so this
+# workflow uses no secrets, a read-only token and no persisted credentials. Actions are pinned to
+# full commit SHAs (a repository rule); the toolchain comes from rust-toolchain.toml via rustup.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, production]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          # A disposable database inside the runner; not a secret.
+          POSTGRES_PASSWORD: pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      AF_TEST_POSTGRES_URL: postgres://postgres:pw@127.0.0.1:5432/postgres
+      AF_REQUIRE_POSTGRES: "1"
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_RETRY: "10"
+      # As in the Dockerfile: HTTP/2 multiplexing is the usual trigger for crates.io resets.
+      CARGO_HTTP_MULTIPLEXING: "false"
+      # Commit check range: the pull request's own commits, or what a push added.
+      CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Toolchain (rust-toolchain.toml)
+        run: |
+          rustup --version
+          rustup toolchain install
+          rustc --version
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+          # Native build dependencies the runner image provides.
+          cmake --version
+          pkg-config --modversion openssl
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Fetch dependencies
+        run: cargo fetch --locked || (sleep 15 && cargo fetch --locked)
+
+      - name: Gate (scripts/ci.sh)
+        run: scripts/ci.sh
+
+      - name: Store tests on Postgres
+        run: cargo test --locked --release -p af-store

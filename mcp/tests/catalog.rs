@@ -1,6 +1,7 @@
 //! Locks the agent-facing MCP surface: tool names, descriptions and schemas,
 //! resources and prompts. Any change shows up as a reviewed diff of
-//! `tests/snapshots/catalog.json`; re-accept with `AF_ACCEPT=1 cargo test -p af-mcp --test catalog`.
+//! `tests/snapshots/catalog.json`; re-accept with `AF_ACCEPT=1 cargo test -p af-mcp --test catalog`
+//! (a missing snapshot fails; only `AF_ACCEPT=1` writes one).
 //! Also enforces a byte budget so tool-definition tokens cannot creep up.
 
 use serde_json::{Value, json};
@@ -60,10 +61,17 @@ fn tool_definitions_fit_the_token_budget() {
 fn catalog_matches_snapshot() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/catalog.json");
     let now = serde_json::to_string_pretty(&current()).unwrap() + "\n";
-    if std::env::var("AF_ACCEPT").is_ok() || !path.exists() {
+    if std::env::var("AF_ACCEPT").as_deref() == Ok("1") {
         std::fs::write(&path, &now).unwrap();
         return;
     }
+    // A missing snapshot is a failure, never a silent re-lock: otherwise deleting the file would
+    // pass any catalog change through the gate.
+    assert!(
+        path.exists(),
+        "the catalog snapshot {} is missing. Create it with AF_ACCEPT=1 cargo test -p af-mcp --test catalog",
+        path.display()
+    );
     let locked = std::fs::read_to_string(&path).unwrap();
     if locked != now {
         let new_path = path.with_extension("json.new");

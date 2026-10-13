@@ -18,8 +18,9 @@ and rules versions with `af-engine-` / `af-rules-`. Keep those identifiers; the 
 
 - **Never use the em dash character**, in code, docs, UI copy or commit messages. Use a colon,
   comma, parentheses or a new sentence.
-- **`scripts/ci.sh` must pass before every commit**: fmt, clippy with `-D warnings`, all tests in
-  release mode, and a check that `af-core` stays pure.
+- **`scripts/ci.sh` must pass before every commit**: the public-tree and commit checks, fmt, clippy
+  with `-D warnings`, all tests in release mode (cargo runs `--locked`), and a check that `af-core`
+  stays pure. GitHub Actions runs it as the `gate` job (see Deploying).
 - **`af-core` is pure and deterministic.** No IO, no async, no clocks, no `HashMap` (use `BTreeMap`),
   no randomness except `core::rng` seeded from the world. Every state change is a journaled
   `Command`; replaying the journal must reproduce the world hash exactly.
@@ -70,6 +71,13 @@ included.
   repository and never cherry-pick from it; port what is needed by hand onto `main`.
 - **Never `git add private`** (it records a nested repository) and never run `git clean -ffdx`
   in a checkout (the double `f` deletes nested repositories).
+- **Local checks:** `scripts/check-public-tree.sh` refuses owner material by path, submodules and,
+  with a local deny file (`PUBLIC_DENY_FILE`, default `private/tools/deny-strings.txt`, never an
+  Actions secret), by content; `scripts/check-commits.sh` refuses a non-Custos author, a committer
+  other than Custos or GitHub, and agent session trailers or links. `scripts/hooks/pre-commit` and
+  `scripts/hooks/commit-msg` run them; the same-named global hooks of the machine's global
+  `core.hooksPath` call them. Never set `core.hooksPath` in a repository: it replaces the global
+  hooks, the pre-push guard included.
 
 ## Repository map
 
@@ -81,7 +89,8 @@ included.
 | `harness/` (`af-harness`) | Scripted bots, the balance simulator, the LLM orchestrator for live demos, evaluation mode |
 | `web/` | Static pages and assets, embedded into the binary at compile time (rebuild after editing) |
 | `docs/` | `DECISIONS.md` (every design decision with reasons; append to it), `IDEAS.md` (future ideas with their source and status), `DEPLOY.md` (production runbook), `SYSOP_API.md`, `EVAL.md` |
-| `scripts/` | `ci.sh` (merge gate), `docker-entrypoint.sh`, `pilot-cli.sh` (wrapper to run kimi/agy/grok as pilots) |
+| `scripts/` | `ci.sh` (merge gate), `check-public-tree.sh` and `check-commits.sh` (run by `ci.sh` and by `hooks/`), `docker-entrypoint.sh`, `pilot-cli.sh` (wrapper to run kimi/agy/grok as pilots) |
+| `.github/workflows/ci.yml` | The `gate` job: `scripts/ci.sh` and the store tests on a Postgres 17 service, on every pull request and push to `main` or `production` |
 | `eval/` | Evaluation scenarios, baselines and example traces (`eval/runs/` is git-ignored) |
 | `Dockerfile`, `render.yaml` | Production image and the Render Blueprint |
 | `LICENSE`, `LICENSES/`, `NOTICE` | Agent Licence 1.0 (source-available, holder Talebly, Inc.); `NOTICE` names the channels and terms. Keep the 1.0 text unchanged |
@@ -848,7 +857,8 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   scans chart adjacent sector observations, including ports, lanes and deployed defenses,
   without ship identities or armament. Current-sector views identify ships.
 - The serialized captain catalog has a byte budget (`mcp/tests/catalog.rs`, currently 57,200) and
-  a snapshot. After a reviewed change, re-lock with `AF_ACCEPT=1 cargo test -p af-mcp --test catalog`.
+  a snapshot. After a reviewed change, re-lock with `AF_ACCEPT=1 cargo test -p af-mcp --test catalog`
+  (a missing snapshot fails the test; only `AF_ACCEPT=1` writes one).
   Raise the budget only deliberately, with a comment saying why.
 
 ## Commands
@@ -857,6 +867,9 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
 scripts/ci.sh                                   # the merge gate
 cargo run --release -p af-mcp --bin af-server -- serve --db data/universe.redb --admin-token adm
 AF_TEST_POSTGRES_URL=postgres://... cargo test -p af-store   # store tests on Postgres too
+AF_REQUIRE_POSTGRES=1 AF_TEST_POSTGRES_URL=... cargo test -p af-store   # as CI: an unset URL fails
+scripts/check-public-tree.sh [--staged]          # owner material check (ci.sh and the pre-commit hook)
+scripts/check-commits.sh <base> [<head>]         # identity and session-trailer check (ci.sh: CI_BASE or origin/main)
 cargo run --release -p af-harness -- bots --server http://127.0.0.1:8787 --count 8
 cargo run --release -p af-harness -- sim --bots 12 --ticks 1440
 af-server verify --db <file or postgres URL>     # replay check
@@ -881,6 +894,14 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
   local Postgres, start the new build against the same database, and check the handover, the
   adoption and `af-server verify`. Pass the database as `DATABASE_URL`, not `--db`: the handover
   listener only starts from the environment variable, as in production.
+- **CI gate:** `.github/workflows/ci.yml`, one job named `gate`, on every pull request and every
+  push to `main` or `production`. It runs `scripts/ci.sh` (commit range from the pull request or
+  the push) and the store tests against a Postgres 17 service with `AF_REQUIRE_POSTGRES=1`. Pull
+  requests run untrusted code, so the workflow has a read-only token, no persisted credentials and
+  no secrets; never add an Actions secret. The repository allows only GitHub-owned actions and
+  `Swatinem/rust-cache`, pinned to full commit SHAs with the version in a trailing comment;
+  update a pin by resolving the new tag to its commit (dereference annotated tags). The toolchain
+  comes from `rust-toolchain.toml` through `rustup`.
 - Full runbook: `docs/DEPLOY.md`.
 
 ## Checklists
