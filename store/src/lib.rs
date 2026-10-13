@@ -43,7 +43,7 @@ use af_core::rules::Rules;
 use af_core::{ENGINE_VERSION, World};
 use serde::{Deserialize, Serialize};
 
-pub use backend::{ActivityRow, Backend, DailyRow, Table};
+pub use backend::{ActivityRow, Backend, DailyRow, Relocation, Table};
 pub use pg::Access;
 use pg::PgBackend;
 pub use redb_backend::EXPORT_CACHE_BYTES;
@@ -58,6 +58,9 @@ const PAGE: usize = 5_000;
 const PRIVATE_PAGE: usize = 500;
 /// Meta keys that make up a universe (besides `schema_version`).
 const UNIVERSE_KEYS: [&str; 3] = ["genesis", "base", "base_world"];
+
+/// Meta key recording where a reseeded universe came from (`Store::init_with_world`).
+pub const RESEED_KEY: &str = "reseed";
 
 /// Write a world-hash checkpoint after every N-th journal entry.
 pub const CHECKPOINT_EVERY: u64 = 100;
@@ -432,8 +435,10 @@ impl Store {
             cursor.after_ordinal = last.ordinal;
             dest.b.private_insert(&rows)?;
         }
-        if let Some(marker) = self.b.meta_get("private_archive_backfilled")? {
-            dest.b.meta_put(&[("private_archive_backfilled", &marker)])?;
+        for key in ["private_archive_backfilled", RESEED_KEY] {
+            if let Some(v) = self.b.meta_get(key)? {
+                dest.b.meta_put(&[(key, &v)])?;
+            }
         }
         // The universe keys go last: a copy cut short has no genesis and is not a universe.
         let mut meta = vec![];
@@ -489,6 +494,66 @@ impl Store {
             ("base_world", &serde_json::to_vec(&world)?),
         ])?;
         Ok(world)
+    }
+
+    /// Start a universe from a world built outside the journal (a relaunch: `af_core::reseed`):
+    /// genesis, a base at seq 0 on this engine, the world as the base world and the `reseed`
+    /// provenance (counts and hashes only, never content). The private archive starts empty and
+    /// is marked backfilled, so boot has nothing to index. Refuses a store that already holds a
+    /// universe, a journal or a snapshot, and a world that is not at seq 0. The universe keys go
+    /// last: a write cut short leaves no genesis, so nothing opens a half-made universe.
+    pub fn init_with_world(&self, g: &Genesis, w: &World, provenance: &serde_json::Value) -> Result<()> {
+        if self.b.meta_get("genesis")?.is_some() || self.b.last_seq()? > 0 || self.b.snapshot_last_seq()?.is_some() {
+            return Err(StoreError::NotEmpty);
+        }
+        if w.seq != 0 {
+            return Err(StoreError::Db(format!(
+                "a seeded universe starts a new journal: its world must be at seq 0, not {}",
+                w.seq
+            )));
+        }
+        if g.engine != ENGINE_VERSION {
+            return Err(StoreError::EngineMismatch {
+                file: g.engine.clone(),
+                binary: ENGINE_VERSION.into(),
+            });
+        }
+        let base = Base {
+            seq: 0,
+            engine: ENGINE_VERSION.into(),
+            history: vec![],
+        };
+        self.b.meta_put(&[
+            (RESEED_KEY, &serde_json::to_vec(provenance)?),
+            ("private_archive_backfilled", b"true"),
+        ])?;
+        self.b.meta_put(&[
+            ("genesis", &serde_json::to_vec(g)?),
+            ("base", &serde_json::to_vec(&base)?),
+            ("base_world", &serde_json::to_vec(w)?),
+        ])?;
+        Ok(())
+    }
+
+    /// The provenance a reseed recorded (None for a universe made by genesis).
+    pub fn reseed_provenance(&self) -> Result<Option<serde_json::Value>> {
+        match self.b.meta_get(RESEED_KEY)? {
+            Some(v) => Ok(Some(serde_json::from_slice(&v)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Postgres only: move this universe's tables to the private schema `archive_schema` and
+    /// leave the current schema with empty tables, in one transaction on the writer's
+    /// connection (the writer lock stays held). See `pg` for the checks.
+    pub fn relocate_universe(&self, archive_schema: &str) -> Result<Relocation> {
+        self.b.relocate_universe(archive_schema)
+    }
+
+    /// Postgres only: undo `relocate_universe` (the current tables are dropped). Refused while
+    /// the current journal holds entries, unless `force`.
+    pub fn restore_relocated(&self, archive_schema: &str, force: bool) -> Result<Relocation> {
+        self.b.restore_relocated(archive_schema, force)
     }
 
     fn base_world(&self) -> Result<World> {

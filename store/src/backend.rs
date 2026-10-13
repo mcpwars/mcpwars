@@ -33,6 +33,17 @@ pub struct DailyRow {
     pub data: Vec<u8>,
 }
 
+/// What a relocation (or its reversal) moved: the tables and their row counts.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Relocation {
+    /// The schema the tables left.
+    pub from: String,
+    /// The schema they went to.
+    pub to: String,
+    /// Each table moved, with its rows.
+    pub tables: Vec<(String, u64)>,
+}
+
 pub trait Backend: Send {
     /// Human-readable location (a path, or a URL without its password).
     fn describe(&self) -> String;
@@ -76,6 +87,18 @@ pub trait Backend: Send {
     fn daily_query(&self, from: &str, to: &str, player: Option<u64>, limit: usize) -> Result<Vec<DailyRow>>;
     /// Every day that has daily summary rows, oldest first.
     fn daily_days(&self) -> Result<Vec<String>>;
+    /// Move every table of the universe in the current schema to `archive_schema` and create
+    /// empty ones in its place, in one transaction on the writer's connection (Postgres only).
+    fn relocate_universe(&self, _archive_schema: &str) -> Result<Relocation> {
+        Err(crate::StoreError::Db(
+            "relocating a universe to an archive schema needs Postgres".into(),
+        ))
+    }
+    /// Undo `relocate_universe`: drop the current schema's tables and move the archived ones back,
+    /// in one transaction. Refused while the current journal holds entries, unless `force`.
+    fn restore_relocated(&self, _archive_schema: &str, _force: bool) -> Result<Relocation> {
+        Err(crate::StoreError::Db("restoring a relocated universe needs Postgres".into()))
+    }
     /// End a read session (a consistent export reads inside one transaction).
     fn finish(&self) -> Result<()> {
         Ok(())
