@@ -468,8 +468,7 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
         }
         let keys: Vec<String> = o.keys().cloned().collect();
         for key in keys {
-            if !ALWAYS_SECTIONS.contains(&key.as_str()) && !sections.contains(&key)
-            {
+            if !ALWAYS_SECTIONS.contains(&key.as_str()) && !sections.contains(&key) {
                 o.remove(&key);
                 omitted.push(key);
             }
