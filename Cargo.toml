@@ -24,7 +24,7 @@ af-core = { path = "core" }
 af-store = { path = "store" }
 af-mcp = { path = "mcp" }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "unbounded_depth"] }
 schemars = "1.2"
 thiserror = "2"
 anyhow = "1"

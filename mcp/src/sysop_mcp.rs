@@ -135,7 +135,7 @@ pub async fn private_archive(game: &Game, a: ArchiveArgs) -> ToolReply {
             let more = rows.len() > limit;
             rows.truncate(limit);
             let last = rows.last().map(|r| (r.seq, r.ordinal)).unwrap_or((a.after_seq, a.after_ordinal));
-            let events: Result<Vec<Value>, _> = rows.iter().map(|r| serde_json::from_slice(&r.data)).collect();
+            let events: Result<Vec<Value>, _> = rows.iter().map(|r| af_store::from_slice_deep(&r.data)).collect();
             match events {
                 Ok(events) => reply(
                     true,

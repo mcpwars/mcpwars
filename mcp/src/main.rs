@@ -475,7 +475,7 @@ async fn main() -> anyhow::Result<()> {
                 let last = entries
                     .iter()
                     .rev()
-                    .find_map(|(_, raw)| serde_json::from_slice::<serde_json::Value>(raw).ok()?["at_ms"].as_u64())
+                    .find_map(|(_, raw)| af_store::from_slice_deep::<serde_json::Value>(raw).ok()?["at_ms"].as_u64())
                     .unwrap_or(0);
                 let since = last.saturating_sub(hours * 3_600_000);
                 let r = af_mcp::conduct::report(&entries, &world, exact, since);

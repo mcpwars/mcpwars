@@ -61,5 +61,10 @@ pub fn open_world(loc: &str, seed: u64, sectors: u32, tick_ms: u64, adopt: bool)
         world.tick,
         world.seq
     );
+    tracing::info!(
+        "stored JSON depth: deepest read {} levels (stored-state reader limit {}; requests keep serde_json's 128)",
+        af_store::deepest_read(),
+        af_store::MAX_STORED_DEPTH
+    );
     Ok((world, store, created))
 }

@@ -100,6 +100,71 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// The deepest JSON nesting [`from_slice_deep`] parses. Stored state is bounded by construction:
+/// a request body passes serde_json's default limit of 128 levels at intake, and the engine adds
+/// about 9 levels of world and journal structure around a captain's value. This leaves a wide
+/// margin above that and still parses on a default 2 MiB thread stack in a debug build.
+pub const MAX_STORED_DEPTH: usize = 512;
+
+static DEEPEST_READ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The deepest JSON nesting [`from_slice_deep`] has read in this process (for the boot log).
+pub fn deepest_read() -> usize {
+    DEEPEST_READ.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The maximum nesting of arrays and objects in a JSON text, counted without recursion and
+/// outside strings. Invalid JSON gets a best-effort count; the parser reports the real error.
+pub fn json_depth(bytes: &[u8]) -> usize {
+    let (mut depth, mut max, mut in_str, mut escaped) = (0usize, 0usize, false, false);
+    for &b in bytes {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'[' | b'{' => {
+                depth += 1;
+                max = max.max(depth);
+            }
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    max
+}
+
+/// Parse stored state (snapshots, the replay base, journal entries, private archive rows)
+/// without serde_json's default recursion limit of 128 levels. A captain may store a value
+/// that is accepted at intake but sits deeper than 128 once it is wrapped in the world or a
+/// journal entry; the default limit would then fail boot, adoption and `verify`.
+///
+/// Stored depth is bounded by construction (intake plus about 9 levels), so this parses on the
+/// caller's stack; anything deeper than [`MAX_STORED_DEPTH`] is refused with an error, never a
+/// stack overflow. **Never use it for request bodies or any other outside input:** those keep
+/// serde_json's default limit.
+pub fn from_slice_deep<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
+    let depth = json_depth(bytes);
+    DEEPEST_READ.fetch_max(depth, std::sync::atomic::Ordering::Relaxed);
+    if depth > MAX_STORED_DEPTH {
+        return Err(<serde_json::Error as serde::de::Error>::custom(format!(
+            "stored JSON nests {depth} levels, deeper than the reader's limit of {MAX_STORED_DEPTH}"
+        )));
+    }
+    let mut de = serde_json::Deserializer::from_slice(bytes);
+    de.disable_recursion_limit();
+    let value = T::deserialize(&mut de)?;
+    de.end()?;
+    Ok(value)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Genesis {
     pub seed: u64,
@@ -353,7 +418,7 @@ impl Store {
 
     fn base_world(&self) -> Result<World> {
         let v = self.b.meta_get("base_world")?.ok_or(StoreError::NoGenesis)?;
-        Ok(serde_json::from_slice(&v)?)
+        Ok(from_slice_deep(&v)?)
     }
 
     /// Durably append one journal entry, plus its world-hash checkpoint when given.
@@ -388,7 +453,7 @@ impl Store {
                 after = seq;
                 // Unrelated historical commands can have obsolete schemas. Parse only private
                 // commands, resets and ticks, preserving all original journal bytes.
-                let v: serde_json::Value = serde_json::from_slice(&data)?;
+                let v: serde_json::Value = from_slice_deep(&data)?;
                 let typ = v["cmd"]["type"].as_str().unwrap_or("");
                 let action = v["cmd"]["args"]["action"].as_str().unwrap_or("");
                 if matches!(typ, "note" | "memory" | "tick")
@@ -501,7 +566,7 @@ impl Store {
             let Some((last, _)) = page.last() else { break };
             after = *last;
             for (_, v) in &page {
-                out.push(serde_json::from_slice(v)?);
+                out.push(from_slice_deep(v)?);
             }
             if page.len() < PAGE {
                 break;
@@ -515,7 +580,7 @@ impl Store {
         self.b
             .entries_before(before, limit.min(1_001))?
             .into_iter()
-            .map(|(_, bytes)| serde_json::from_slice(&bytes).map_err(StoreError::from))
+            .map(|(_, bytes)| from_slice_deep(&bytes).map_err(StoreError::from))
             .collect()
     }
 
@@ -545,7 +610,7 @@ impl Store {
             return Ok((self.load_world()?.0, true));
         }
         if let Some((_, v)) = self.b.snapshot_last()? {
-            let row: SnapshotRow = serde_json::from_slice(&v)?;
+            let row: SnapshotRow = from_slice_deep(&v)?;
             return Ok((row.world, false));
         }
         Ok((self.base_world()?, false))
@@ -568,7 +633,7 @@ impl Store {
         if seq <= base.seq {
             return Ok(None);
         }
-        let row: SnapshotRow = serde_json::from_slice(&v)?;
+        let row: SnapshotRow = from_slice_deep(&v)?;
         let actual = row.world.state_hash();
         if actual != row.hash {
             return Err(StoreError::Corrupt {
@@ -618,7 +683,7 @@ impl Store {
             return Err(StoreError::NotAtHead { snapshot: snap_seq, head });
         }
         let (_, v) = self.b.snapshot_last()?.ok_or(StoreError::NotAtHead { snapshot: 0, head })?;
-        let row: SnapshotRow = serde_json::from_slice(&v)?;
+        let row: SnapshotRow = from_slice_deep(&v)?;
         let mut history = old.history.clone();
         history.push((old.seq, old.engine.clone()));
         let base = Base {
