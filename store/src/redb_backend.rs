@@ -3,7 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
-use redb::{Builder, Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
+use redb::{Builder, Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, StorageBackend, TableDefinition};
+
+use redb::backends::FileBackend;
 
 use crate::backend::{ActivityRow, Backend, DailyRow, Table};
 use crate::{Result, StoreError};
@@ -42,6 +44,74 @@ pub struct RedbBackend {
 /// small one also bounds redb's write buffer (half of it), which spills to the file beyond that.
 pub const EXPORT_CACHE_BYTES: usize = 16 << 20;
 
+/// Enforce the export budget before allocation or writes, including redb file growth.
+#[derive(Debug)]
+struct LimitedFile {
+    inner: FileBackend,
+    max_bytes: u64,
+}
+
+impl LimitedFile {
+    fn check(&self, end: u64) -> std::io::Result<()> {
+        if end > self.max_bytes {
+            return Err(std::io::Error::other(format!(
+                "online backup exceeds its {} byte disk budget; export on a separate machine with sufficient disk",
+                self.max_bytes
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl StorageBackend for LimitedFile {
+    fn len(&self) -> std::io::Result<u64> {
+        self.inner.len()
+    }
+    fn read(&self, offset: u64, out: &mut [u8]) -> std::io::Result<()> {
+        self.inner.read(offset, out)
+    }
+    fn set_len(&self, len: u64) -> std::io::Result<()> {
+        self.check(len)?;
+        self.inner.set_len(len)
+    }
+    fn sync_data(&self) -> std::io::Result<()> {
+        self.inner.sync_data()
+    }
+    fn write(&self, offset: u64, data: &[u8]) -> std::io::Result<()> {
+        self.check(
+            offset
+                .checked_add(data.len() as u64)
+                .ok_or_else(|| std::io::Error::other("backup offset overflow"))?,
+        )?;
+        self.inner.write(offset, data)
+    }
+    fn close(&self) -> std::io::Result<()> {
+        self.inner.close()
+    }
+    fn try_lock_range(&self, start: std::ops::Bound<u64>, end: std::ops::Bound<u64>) -> std::result::Result<bool, redb::BackendError> {
+        self.inner.try_lock_range(start, end)
+    }
+    fn try_lock_shared_range(
+        &self,
+        start: std::ops::Bound<u64>,
+        end: std::ops::Bound<u64>,
+    ) -> std::result::Result<bool, redb::BackendError> {
+        self.inner.try_lock_shared_range(start, end)
+    }
+    fn lock_range(&self, start: std::ops::Bound<u64>, end: std::ops::Bound<u64>) -> std::result::Result<(), redb::BackendError> {
+        self.inner.lock_range(start, end)
+    }
+    fn lock_shared_range(&self, start: std::ops::Bound<u64>, end: std::ops::Bound<u64>) -> std::result::Result<(), redb::BackendError> {
+        self.inner.lock_shared_range(start, end)
+    }
+    fn unlock_range(&self, start: std::ops::Bound<u64>, end: std::ops::Bound<u64>) -> std::result::Result<(), redb::BackendError> {
+        self.inner.unlock_range(start, end)
+    }
+    fn query_lock_range(&self, start: std::ops::Bound<u64>, end: std::ops::Bound<u64>) -> std::result::Result<bool, redb::BackendError> {
+        self.inner.query_lock_range(start, end)
+    }
+}
+
 impl RedbBackend {
     pub fn open(path: &Path) -> Result<Self> {
         Self::init(Database::create(path)?, path)
@@ -51,13 +121,25 @@ impl RedbBackend {
     /// page cache (`EXPORT_CACHE_BYTES`). Refuses a path that already exists, so two exports never
     /// share a file.
     pub fn create_export(path: &Path) -> Result<Self> {
+        Self::create_export_limited(path, u64::MAX)
+    }
+
+    pub fn create_export_limited(path: &Path, max_bytes: u64) -> Result<Self> {
         let mut o = std::fs::OpenOptions::new();
-        o.write(true).create_new(true);
+        o.read(true).write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-        o.open(path)
+        let file = o
+            .open(path)
             .map_err(|e| StoreError::Db(format!("backup: create {}: {e}", path.display())))?;
-        Self::init(Builder::new().set_cache_size(EXPORT_CACHE_BYTES).create(path)?, path)
+        let backend = LimitedFile {
+            inner: FileBackend::new(file)?,
+            max_bytes,
+        };
+        Self::init(
+            Builder::new().set_cache_size(EXPORT_CACHE_BYTES).create_with_backend(backend)?,
+            path,
+        )
     }
 
     fn init(db: Database, path: &Path) -> Result<Self> {
@@ -440,5 +522,37 @@ impl Backend for RedbBackend {
         let tx = self.db.begin_read()?;
         let t = tx.open_table(Self::def(table))?;
         Ok(t.get(key)?.map(|v| v.value().to_vec()))
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_growth_and_write_before_touching_disk() {
+        let path = std::env::temp_dir().join(format!("af-limited-file-{}", std::process::id()));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        let backend = LimitedFile {
+            inner: FileBackend::new(file).unwrap(),
+            max_bytes: 1024,
+        };
+        backend.set_len(1024).unwrap();
+        assert!(backend.set_len(1025).is_err());
+        assert!(backend.write(1024, b"x").is_err());
+        assert!(backend.write(u64::MAX, b"x").is_err());
+        assert_eq!(backend.len().unwrap(), 1024);
+        backend.write(1023, b"x").unwrap();
+        let mut out = [0u8; 1];
+        backend.read(1023, &mut out).unwrap();
+        assert_eq!(&out, b"x");
+        drop(backend);
+        std::fs::remove_file(path).unwrap();
     }
 }

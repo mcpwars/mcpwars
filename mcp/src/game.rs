@@ -37,7 +37,7 @@ enum Req {
     /// until the copy has finished, even when the requester has gone. The flag says whether a
     /// finished copy nobody waits for any more is removed (a download) or kept (a file the
     /// operator asked for on the server).
-    Backup(std::path::PathBuf, BackupPermit, bool, oneshot::Sender<Result<u64, String>>),
+    Backup(std::path::PathBuf, BackupPermit, bool, u64, oneshot::Sender<Result<u64, String>>),
     /// Hand the universe to a successor: snapshot at the head, close the store
     /// (which releases the writer lock), and refuse commands from then on.
     Release(oneshot::Sender<()>),
@@ -235,6 +235,24 @@ impl Drop for BackupSlot {
 /// went away) means nobody will use the file, so it is removed rather than left on disk.
 fn finish_backup(dest: &std::path::Path, discard: bool, done: Option<oneshot::Sender<Result<u64, String>>>, r: Result<u64, String>) {
     let ok = r.is_ok();
+    if !ok {
+        let _ = std::fs::remove_file(dest.with_extension("partial"));
+    }
+    if ok
+        && !discard
+        && dest.file_name().is_some_and(|n| n.to_string_lossy().starts_with("manual-"))
+        && let Some(dir) = dest.parent()
+        && let Err(e) = crate::backup::rotate_manual(dir)
+    {
+        tracing::warn!("manual backup retention failed: {e}");
+    }
+    if let Some(dir) = dest.parent() {
+        crate::backup::log_resources(dir);
+    }
+    match &r {
+        Ok(bytes) => tracing::info!(bytes, "online backup completed"),
+        Err(error) => tracing::warn!(%error, "online backup failed"),
+    }
     let delivered = done.is_some_and(|d| d.send(r).is_ok());
     if ok && discard && !delivered {
         let _ = std::fs::remove_file(dest);
@@ -497,34 +515,40 @@ impl Game {
                             let _ = reply.send(result);
                         }
                         Req::Read(f) => f(&w),
-                        Req::Backup(dest, permit, discard, done) => match store.as_ref().map(|st| st.detached_backup()) {
-                            // Postgres: a consistent export on its own connection, off this thread.
-                            Some(Some(job)) => {
-                                let (path, failed) = (dest.clone(), Arc::new(Mutex::new(Some(done))));
-                                let reply = failed.clone();
-                                let spawned = std::thread::Builder::new().name("af-backup".into()).spawn(move || {
-                                    // A panic in the copy is an error reply, never a dead process.
-                                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&path)))
-                                        .unwrap_or_else(|_| Err(af_store::StoreError::Db("backup: the copy panicked".into())))
+                        Req::Backup(dest, permit, discard, max_bytes, done) => {
+                            match store.as_ref().map(|st| st.detached_backup_limited(max_bytes)) {
+                                // Postgres: a consistent export on its own connection, off this thread.
+                                Some(Some(job)) => {
+                                    let (path, failed) = (dest.clone(), Arc::new(Mutex::new(Some(done))));
+                                    let reply = failed.clone();
+                                    let spawned = std::thread::Builder::new().name("af-backup".into()).spawn(move || {
+                                        // A panic in the copy is an error reply, never a dead process.
+                                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&path)))
+                                            .unwrap_or_else(|_| Err(af_store::StoreError::Db("backup: the copy panicked".into())))
+                                            .map_err(|e| e.to_string());
+                                        finish_backup(&path, discard, reply.lock().unwrap().take(), r);
+                                        drop(permit);
+                                    });
+                                    if let Err(e) = spawned
+                                        && let Some(done) = failed.lock().unwrap().take()
+                                    {
+                                        let _ = done.send(Err(format!("backup: could not start the copy: {e}")));
+                                    }
+                                }
+                                Some(None) => {
+                                    let r = store
+                                        .as_ref()
+                                        .unwrap()
+                                        .backup_to_limited(&dest, max_bytes)
                                         .map_err(|e| e.to_string());
-                                    finish_backup(&path, discard, reply.lock().unwrap().take(), r);
+                                    finish_backup(&dest, discard, Some(done), r);
                                     drop(permit);
-                                });
-                                if let Err(e) = spawned
-                                    && let Some(done) = failed.lock().unwrap().take()
-                                {
-                                    let _ = done.send(Err(format!("backup: could not start the copy: {e}")));
+                                }
+                                None => {
+                                    let _ = done.send(Err("this universe has no database (in-memory or handed over)".to_string()));
                                 }
                             }
-                            Some(None) => {
-                                let r = store.as_ref().unwrap().backup_to(&dest).map_err(|e| e.to_string());
-                                finish_backup(&dest, discard, Some(done), r);
-                                drop(permit);
-                            }
-                            None => {
-                                let _ = done.send(Err("this universe has no database (in-memory or handed over)".to_string()));
-                            }
-                        },
+                        }
                         Req::Release(done) => {
                             if let Some(st) = store.take() {
                                 if let Err(e) = st.save_snapshot(&w) {
@@ -685,9 +709,13 @@ impl Game {
     /// then removed when `discard` is set (a download nobody will receive) and kept otherwise
     /// (the `backup` action's file on the server).
     pub async fn backup_with(&self, dest: std::path::PathBuf, permit: BackupPermit, discard: bool) -> Result<u64, String> {
+        let path = dest.clone();
+        let max_bytes = tokio::task::spawn_blocking(move || crate::backup::budget(&path))
+            .await
+            .map_err(|e| format!("backup disk check: {e}"))??;
         let (tx, rx) = oneshot::channel();
         self.tx
-            .send(Req::Backup(dest, permit, discard, tx))
+            .send(Req::Backup(dest, permit, discard, max_bytes, tx))
             .await
             .map_err(|_| "engine not running".to_string())?;
         rx.await.map_err(|_| "engine stopped".to_string())?

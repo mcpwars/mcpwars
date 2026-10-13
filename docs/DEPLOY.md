@@ -127,23 +127,38 @@ Four layers, from the inside out:
    - Point-in-time recovery covers the last 7 days on a Pro workspace (3 on Hobby). Restores create
      a new database.
    - Logical backups can be created and downloaded from the database's **Recovery** page.
-4. **Offsite copies.** The backup endpoint produces a consistent, portable copy of the whole
-   universe as one file. It reads inside a single snapshot transaction, so the game keeps running.
-   Pull it on a schedule from anywhere (a GitHub Action, a cron job on another machine) and push it
-   to S3 or R2:
+4. **Offsite copies.** Export large universes on a separate machine with enough RAM and disk,
+   using a read-only database connection. Render Postgres remains on the private network: use an
+   authenticated SSH tunnel through the web instance, or a dedicated backup job with private-network
+   access. The exporting process and its output file must run outside the 2 GB web instance.
+   Obtain database credentials through a private credential store, never a transcript or shell history.
    ```bash
-   curl -sf -H "Authorization: Bearer $AF_ADMIN_TOKEN" https://mcpwars.com/api/sysop/backup \
-     -o "mcpwars-$(date -u +%Y%m%dT%H%MZ).redb"
-   af-server verify --db mcpwars-....redb     # replays the journal and compares with the snapshot
+   umask 077
+   af-server export --from "$BACKUP_DATABASE_URL" --to backup.redb
+   cp backup.redb verify-copy.redb
+   af-server verify --db verify-copy.redb
    ```
-   The response carries `Content-Length` and `X-Backup-SHA256`: a cut transfer is shorter than its
-   length (`curl` exits non-zero), and the digest checks the file (`shasum -a 256`). Still verify a
-   copy of every downloaded backup before relying on it. One backup runs at a time: a request while
-   another runs gets 409 (`backup_running`), so retry later. The server writes each download to its
-   own private file in the backup directory and removes it once sent or abandoned; a backup takes
-   about 10 s and about 0.3 GB of extra server memory for the 2.2 GB universe (before 2026-10-13 it
-   took about 2 GB, which restarted the 2 GB instance). `verify`, `import` and `export` need about 3 GB
-   of RAM, so run them on another machine, never in the Render shell (the service plan has 2 GB).
+   Export uses a consistent snapshot transaction while the game continues. Transfer the verified
+   backup to offsite storage. Do not run `verify`, `import` or `export` in the Render shell:
+   allow at least 3 GB of RAM and disk space for the export and verification copy on the other machine.
+
+   The online endpoint (`GET /api/sysop/backup`) is for copies that fit the web instance. It defaults
+   to a 512 MiB maximum file (`AF_BACKUP_MAX_BYTES`, positive byte count). All online backups share
+   a hard 1 GiB directory budget and leave 128 MiB of filesystem free space. A disk check runs before
+   copying; allocation and writes are capped during copying. Where Linux cgroup memory limits
+   are available, a backup requires 512 MiB of unused memory before it starts. This preflight
+   reduces backup pressure; it cannot prevent unrelated requests from consuming RAM afterward. Oversized copies return an error and
+   remove their partial file, directing the operator to export on a separate machine. This includes
+   manual and automatic backups. Raising the per-file setting cannot override the directory budget.
+   Manual backups retain only the newest completed copy (also on startup); a failed replacement
+   preserves the last good copy. Automatic retention is still controlled by `--backup-keep`.
+
+   One backup runs at a time, including streaming a download (409 `backup_running` otherwise).
+   Downloads carry `Content-Length` and `X-Backup-SHA256`, and are removed once sent or abandoned.
+   Verify a copy before relying on any backup. The export uses a 16 MiB redb cache. Logs report
+   cgroup current/peak memory and backup-directory bytes every minute, plus the disk budget and
+   result of each backup. Render logs can be queried with `render logs --resources <service-id>
+   --type app`; SSH access requires a public key registered with Render, in addition to CLI login.
 
 ### Restoring
 
