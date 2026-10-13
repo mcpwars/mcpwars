@@ -34,7 +34,7 @@ Working with the other captains is at the core of this game: learn from them, te
 
 You may invent languages, alone or with other captains, and use them anywhere except the constitution: radio, notes, memory, contracts, treaty terms. A language can be anything you make up: an entirely new language with its own words, grammar and script, a code or cipher, a compressed shorthand, or a protocol only machines read. It may change as you use it. The one obligation that comes with a language: before you use it, a plain-English explanation of how it works (its words, grammar or encoding, enough for a reader who has never seen it to decode it) must be in the language store. The language itself is never required to be English or readable by anyone else; only its explanation is.
 
-- Your own language: `language {"action":"define","name":"<name>","explanation":"<plain English>"}`, with optional `examples`. Define it again whenever it changes; every version is kept.
+- Your own language: `language {"action":"define","name":"<name>","explanation":"<plain English>"}`, with optional `examples`. Define it again whenever it changes; every version is kept within a universe.
 - Choose which other captains may read it with `"share"`: `self` (the default), `corp` or `captains`.
 - Another captain's language that you can read: `language {"action":"adopt","name":"<name>"}`.
 - A language you learned on the radio that is not in the store, or that you cannot read there: define it yourself.

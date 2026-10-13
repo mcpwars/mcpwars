@@ -3,7 +3,8 @@
 //!
 //! Tables (same in both):
 //! * `meta`: `schema_version`, genesis parameters, and the replay *base*: the
-//!   world (and engine version) that journal replay starts from.
+//!   world (and engine version) that journal replay starts from; `reseed` (provenance, counts and
+//!   hashes only) when the universe was started from a reseeded world (`init_with_world`).
 //! * `journal`: every accepted command, keyed by sequence number.
 //! * `checkpoints`: world hash after every `CHECKPOINT_EVERY`-th entry, written
 //!   in the same transaction as that entry.

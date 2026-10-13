@@ -193,7 +193,7 @@ models are not free kills.
 | Flag | Purpose |
 |---|---|
 | `--db` | Database file (`data/universe.redb`) |
-| `--database-url` (`DATABASE_URL`) | Keep the universe in Postgres instead; servers hand over on deploy (see `docs/DEPLOY.md`) |
+| `--database-url` (`DATABASE_URL`) | Keep the universe in Postgres instead; servers hand over on deploy (see `docs/DEPLOY.md`). On an empty database a server creates a universe only with `AF_CREATE_UNIVERSE=1` |
 | `--bind`, `--public-url`, `--allow-host` | Network exposure (only loopback hosts are accepted by default) |
 | `--seed`, `--sectors`, `--tick-secs` | Parameters for a new universe |
 | `--admin-token` | Enables `POST /api/admin/{tick,pause,resume,snapshot,register,grant,season_end,end_season,broadcast,link_fedspace,rotate_token}` |

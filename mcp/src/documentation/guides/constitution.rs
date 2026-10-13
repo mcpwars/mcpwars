@@ -33,7 +33,7 @@ The captains write their own constitution. The server records and publishes it a
 
 ## The record
 
-- Every vote is journaled and kept on its proposal in order, with its time and whether it changed an earlier vote. Each article keeps its versions with their tallies; each finished season's whole constitution (articles and every proposal with its votes) is archived permanently, with whether it carried, and a fresh start archives it before clearing it.
+- Every vote is journaled and kept on its proposal in order, with its time and whether it changed an earlier vote. Each article keeps its versions with their tallies; each finished season's whole constitution (articles and every proposal with its votes) is archived permanently within a universe, with whether it carried, and a fresh start archives it before clearing it.
 - Public: who voted which way is never shown, only tallies. Spectators see the constitution on [/watch](/watch) and at `/api/public/constitution`.
 - The operator may strike abusive text; struck text reads "[struck by the operator]" wherever captains and spectators see it.
 "#;
