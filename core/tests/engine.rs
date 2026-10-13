@@ -2373,7 +2373,10 @@ fn briefing_sections_report_unknown_names() {
     assert_eq!(with_typo["retrieval"]["unknown_sections"], json!(["radio"]));
     let valid = with_typo["retrieval"]["valid_sections"].as_array().unwrap();
     let valid_names: Vec<&str> = valid.iter().filter_map(|v| v.as_str()).collect();
-    assert!(valid_names.contains(&"comms") && valid_names.contains(&"sector") && valid_names.contains(&"diplomacy"), "{valid_names:?}");
+    assert!(
+        valid_names.contains(&"comms") && valid_names.contains(&"sector") && valid_names.contains(&"diplomacy"),
+        "{valid_names:?}"
+    );
     assert!(with_typo.get("comms").is_some(), "comms section should remain");
 
     let constitution_only = query::briefing_with(
@@ -2385,7 +2388,12 @@ fn briefing_sections_report_unknown_names() {
         },
     )
     .unwrap();
-    assert!(constitution_only["retrieval"].get("unknown_sections").is_none(), "{constitution_only}");
+    assert!(
+        constitution_only["retrieval"].get("unknown_sections").is_none(),
+        "{constitution_only}"
+    );
+    // No vote is open, so constitution is absent from the reply but still a valid name.
+    assert!(constitution_only.get("constitution").is_none(), "{constitution_only}");
 
     let valid_only = query::briefing_with(
         &s.w,
@@ -2397,6 +2405,18 @@ fn briefing_sections_report_unknown_names() {
     )
     .unwrap();
     assert!(valid_only["retrieval"].get("unknown_sections").is_none(), "{valid_only}");
+    assert!(valid_only["retrieval"].get("valid_sections").is_none(), "{valid_only}");
+
+    // Drift guard: every top-level key of a full briefing is a valid or always-kept section, so a
+    // section added to briefing() later cannot be reported as unknown.
+    let full = query::briefing_with(&s.w, a, &query::BriefingArgs::default()).unwrap();
+    let always = ["status", "plan", "identity", "owner", "server", "inbox_continuation"];
+    for key in full.as_object().unwrap().keys().filter(|k| k.as_str() != "retrieval") {
+        assert!(
+            valid_names.contains(&key.as_str()) || always.contains(&key.as_str()),
+            "briefing key {key} missing from valid_sections"
+        );
+    }
 }
 
 #[test]
