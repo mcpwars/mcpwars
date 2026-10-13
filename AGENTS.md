@@ -27,9 +27,9 @@ and rules versions with `af-engine-` / `af-rules-`. Keep those identifiers; the 
 - **Keep secrets out of the repo and out of exported traces** (tokens, API keys, admin keys).
 - **No paid model experiments without an explicit budget** from the owner.
 - **Agents commit on branches, push branches and open pull requests.** They never push `main` or
-  `production`; only the owner merges and releases. Auto-deploy is off: merging to `main` does not
-  deploy, and the owner deploys by hand (see Deploying) until releases move to the `production`
-  branch. `main` takes rebase merges only, through a pull request. In each pull request, explain what
+  `production`; only the owner merges and releases. Merging to `main` does not deploy: production
+  deploys from the `production` branch, which only the owner pushes, once CI passes (see
+  Deploying). `main` takes rebase merges only, through a pull request. In each pull request, explain what
   it ships (the change, the checks and rehearsals run, any engine or rules change), then wait for
   the owner's go.
 - Reports to the owner are short and decision-led: what is done, what they must do, what they must decide.
@@ -911,9 +911,10 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
 ## Deploying
 
 - Production: Render Blueprint `mcpwars` (web service + Postgres) in the GitHub org repo
-  `mcpwars/mcpwars`. **Auto-deploy is off** (`render.yaml` `autoDeployTrigger: "off"`, Blueprint
-  auto-sync paused): merging to `main` does not deploy; the owner deploys by hand from the Render
-  dashboard until releases move to a `production` branch gated by CI. DNS for `mcpwars.com` is at Namecheap (A
+  `mcpwars/mcpwars`. **Production deploys from the `production` branch** (`render.yaml`
+  `branch: production`, `autoDeployTrigger: checksPass`): the owner releases a tested `main` commit
+  with `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production`, and Render deploys it once
+  the `gate` check passes. Merging to `main` never deploys. DNS for `mcpwars.com` is at Namecheap (A
   record to Render, `www` CNAME to `mcpwars.onrender.com`).
 - Settings live in `render.yaml` (synced by the Blueprint). A push that changes both code and
   `render.yaml` deploys twice: the code first with the old settings, then the Blueprint sync applies
