@@ -181,12 +181,27 @@ pub fn known(w: &World, pid: PlayerId, sid: SectorId) -> Option<KnownSector> {
 
 /// Hostile hazard flag from a known observation, from `pid`'s perspective.
 pub fn known_hazard(w: &World, pid: PlayerId, k: &KnownSector) -> bool {
+    known_hazard_within(w, pid, k, 0)
+}
+
+/// `known_hazard`, except that a toll stack whose charted toll is at most `toll_cap` is passable
+/// (the pilot will pay it). With `toll_cap` 0 this is exactly `known_hazard`.
+pub fn known_hazard_within(w: &World, pid: PlayerId, k: &KnownSector, toll_cap: i64) -> bool {
     use crate::diplomacy::at_peace;
     if let Some((owner, _, mode)) = k.fighters
         && !at_peace(w, owner, pid)
-        && !(mode == FighterMode::Toll && (k.toll == Some(0) || crate::diplomacy::toll_exempt(w, owner, pid)))
+        && !(mode == FighterMode::Toll
+            && (matches!(k.toll, Some(t) if t == 0 || (t > 0 && t <= toll_cap)) || crate::diplomacy::toll_exempt(w, owner, pid)))
     {
         return true;
     }
     matches!(k.mines, Some(o) if !at_peace(w, o, pid)) || matches!(k.planet_guard, Some(o) if !at_peace(w, o, pid))
+}
+
+/// A charted toll above 0 and at most `toll_cap` that `pid` would pay on entry (no peace, no
+/// exemption). Routes prefer to avoid these when an equally short one exists.
+pub fn known_payable_toll(w: &World, pid: PlayerId, k: &KnownSector, toll_cap: i64) -> bool {
+    matches!(k.fighters, Some((owner, _, FighterMode::Toll))
+        if !crate::diplomacy::at_peace(w, owner, pid) && !crate::diplomacy::toll_exempt(w, owner, pid))
+        && matches!(k.toll, Some(t) if t > 0 && t <= toll_cap)
 }

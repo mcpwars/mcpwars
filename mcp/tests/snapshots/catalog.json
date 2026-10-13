@@ -1612,6 +1612,25 @@
             "description": "Include complete per-operation replies (default false: totals and stop reason).",
             "type": "boolean",
             "default": false
+          },
+          "avoid_sectors": {
+            "description": "Sectors neither leg may enter, checked before buying (default none; at most one per galaxy sector).",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "default": []
+          },
+          "max_toll": {
+            "description": "Pay tolls up to this each without turning back (default 0); charted tolls within it are planned through.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null
           }
         },
         "type": "object"

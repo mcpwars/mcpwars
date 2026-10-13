@@ -50,7 +50,7 @@ pub mod trade;
 pub mod trade_loop;
 
 /// Bump when rules *code* changes in a way that alters replay of old journals.
-pub const ENGINE_VERSION: &str = "af-engine-1.55";
+pub const ENGINE_VERSION: &str = "af-engine-1.56";
 
 pub use cmd::Command;
 pub use engine::{Actor, Entry, Event, Outcome, Refusal, apply};

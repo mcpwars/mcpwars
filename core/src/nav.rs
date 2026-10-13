@@ -124,8 +124,24 @@ pub fn warp(ctx: &mut Ctx, pid: PlayerId, a: &WarpArgs) -> Res<Outcome> {
 }
 
 pub fn autopilot(ctx: &mut Ctx, pid: PlayerId, a: &AutopilotArgs) -> Res<Outcome> {
+    let avoid: BTreeSet<SectorId> = a.avoid_sectors.iter().copied().collect();
+    autopilot_within(ctx, pid, a.destination_sector, &avoid, a.avoid_hazards, a.max_toll, 0)
+}
+
+/// `autopilot` with the exclusions already collected and a toll allowance for planning: charted
+/// tolls up to `toll_cap` are not hazards (see `path::plot_within`). `autopilot_travel` passes 0,
+/// which plans exactly as before; `trade_loop` passes the toll it will pay, so its legs fly the
+/// route its full-lap preflight planned.
+pub(crate) fn autopilot_within(
+    ctx: &mut Ctx,
+    pid: PlayerId,
+    dest: SectorId,
+    avoid: &BTreeSet<SectorId>,
+    avoid_hazards: bool,
+    max_toll: Option<i64>,
+    toll_cap: i64,
+) -> Res<Outcome> {
     let p = ctx.player(pid)?.clone();
-    let dest = a.destination_sector;
     if dest == 0 || dest > ctx.w.sector_count() {
         return Err(Refusal::new(
             "unknown_sector",
@@ -135,13 +151,13 @@ pub fn autopilot(ctx: &mut Ctx, pid: PlayerId, a: &AutopilotArgs) -> Res<Outcome
     if dest == p.sector {
         return Err(Refusal::new("already_here", format!("You are already in sector {dest}.")));
     }
-    let avoid: BTreeSet<SectorId> = a.avoid_sectors.iter().copied().collect();
-    let plotted = path::plot(ctx.w, pid, p.sector, dest, &avoid, a.avoid_hazards)
+    let chart = knowledge::merged(ctx.w, pid);
+    let plotted = path::plot_within(ctx.w, pid, &chart, p.sector, dest, avoid, avoid_hazards, toll_cap)
         .or_else(|| {
-            if a.avoid_hazards {
+            if avoid_hazards {
                 None
             } else {
-                path::plot(ctx.w, pid, p.sector, dest, &avoid, false)
+                path::plot_within(ctx.w, pid, &chart, p.sector, dest, avoid, false, toll_cap)
             }
         })
         .ok_or_else(|| {
@@ -151,7 +167,7 @@ pub fn autopilot(ctx: &mut Ctx, pid: PlayerId, a: &AutopilotArgs) -> Res<Outcome
                 if charted {
                     format!(
                         "No route to sector {dest} through your charted space{}.",
-                        if a.avoid_hazards { " that avoids known hazards" } else { "" }
+                        if avoid_hazards { " that avoids known hazards" } else { "" }
                     )
                 } else {
                     format!("Sector {dest} is not on your chart.")
@@ -166,7 +182,7 @@ pub fn autopilot(ctx: &mut Ctx, pid: PlayerId, a: &AutopilotArgs) -> Res<Outcome
         return Err(r);
     }
     let saved_toll = p.doctrine.max_auto_toll;
-    if let Some(t) = a.max_toll {
+    if let Some(t) = max_toll {
         ctx.player_mut(pid).doctrine.max_auto_toll = t.max(0);
     }
     let mut log: Vec<String> = vec![];
@@ -208,7 +224,7 @@ pub fn autopilot(ctx: &mut Ctx, pid: PlayerId, a: &AutopilotArgs) -> Res<Outcome
             break;
         }
     }
-    if a.max_toll.is_some()
+    if max_toll.is_some()
         && let Some(pm) = ctx.w.players.get_mut(&pid)
     {
         pm.doctrine.max_auto_toll = saved_toll;
