@@ -1860,3 +1860,11 @@ documentation revision digest changes by design.
 | Decision | Reason |
 |---|---|
 | Render deploys the `production` branch (`branch: production`, `autoDeployTrigger: checksPass`); the owner releases a `main` commit by pushing it there. `main` never deploys | Release #1 (the release-safety changes) went out by hand after a rehearsal on a verified production backup. From now on a release is one owner push, and Render still waits for the `gate` check, so an untested commit cannot deploy |
+
+## 2026-10-12: How work ships, written down
+
+| Decision | Reason |
+|---|---|
+| `AGENTS.md` gains "How work ships" (branch, commit as Custos, pull request, `gate`, the owner's rebase merge, the owner's release to `production`, Render's deploy after `gate`, `/version`); DEPLOY follows it. It builds on "Releases from the `production` branch" and "Push and deploy permission revoked" | The flow was spread across house rules, Deploying and DEPLOY, and some of it still said settings apply at release |
+| A `render.yaml` pull request is a release: rehearsed and merged only on the owner's go | The Blueprint's auto-sync reads `render.yaml` from `main`, so a setting (`AF_RULES_PATCH` included) applies when it merges, and an environment change redeploys the code on `production` |
+| Never use Render's Rollback or release an older commit; `verify`, `import` and `export` run off Render | Since Release #1 the database is at storage schema 2, which older builds refuse; those commands need about 3 GB and the service plan has 2 GB |

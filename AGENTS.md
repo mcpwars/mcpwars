@@ -26,12 +26,9 @@ and rules versions with `af-engine-` / `af-rules-`. Keep those identifiers; the 
   `Command`; replaying the journal must reproduce the world hash exactly.
 - **Keep secrets out of the repo and out of exported traces** (tokens, API keys, admin keys).
 - **No paid model experiments without an explicit budget** from the owner.
-- **Agents commit on branches, push branches and open pull requests.** They never push `main` or
-  `production`; only the owner merges and releases. Merging to `main` does not deploy: production
-  deploys from the `production` branch, which only the owner pushes, once CI passes (see
-  Deploying). `main` takes rebase merges only, through a pull request. In each pull request, explain what
-  it ships (the change, the checks and rehearsals run, any engine or rules change), then wait for
-  the owner's go.
+- **Agents stop at the pull request.** They commit on branches, push branches and open pull
+  requests; they never push or merge `main` or `production`. Only the owner merges and releases
+  (see How work ships).
 - Reports to the owner are short and decision-led: what is done, what they must do, what they must decide.
 
 ### Working with the owner
@@ -51,7 +48,7 @@ included.
 
 | Repository | Visibility | Holds | How agents use it |
 |---|---|---|---|
-| `mcpwars/mcpwars` (this one) | public | The code and the docs agents and captains need | All new work. Production builds from `main` |
+| `mcpwars/mcpwars` (this one) | public | The code and the docs agents and captains need | All new work, through pull requests to `main`. Production runs the `production` branch |
 | `mcpwars/mcpwars-docs` | private | Owner material: plans, reports, audits, reviews and their logs, research, legal, handoff and machine setup, owner-only operations, held-out evaluations, private tools | Cloned into `private/` at the root of a public checkout; write and commit owner material there |
 | `mcpwars/mcpwars-archive` | private, read-only | The history from before the code went public | History only: never develop in it |
 
@@ -79,6 +76,44 @@ included.
   `scripts/hooks/commit-msg` run them; the same-named global hooks of the machine's global
   `core.hooksPath` call them. Never set `core.hooksPath` in a repository: it replaces the global
   hooks, the pre-push guard included.
+
+## How work ships
+
+`main` is the reviewed code; the `production` branch is what runs on mcpwars.com. Agents do steps
+1 to 4; the owner does the rest.
+
+1. **Branch** from `origin/main` (a worktree per task is easiest). Never commit on `main`.
+2. **Commit as Custos**, with no session line (Identity above), staging only your own paths.
+   `scripts/ci.sh` passes before every commit; the hooks run the tree and commit checks.
+3. **Push the branch and open a pull request** to `main`. Its description says what it ships: the
+   change, the checks and rehearsals run, any engine, schema, rules or `render.yaml` change, and
+   what the owner must decide. Then wait for the owner's go.
+4. **The gate.** The CI job `gate` runs on the pull request (see Deploying). Fix a red gate on the
+   branch.
+5. **The owner merges** with a rebase merge, the only method allowed (squash and merge commits
+   are off; the branch is deleted on merge). The ruleset `main-gate` protects `main`: changes
+   only through pull requests (no approvals required), linear history, no force pushes, no
+   deletion, no bypass. `gate` will be added as a required status check. Merging deploys no code.
+6. **The owner releases** a `main` commit:
+   `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production`. The machine-wide pre-push hook
+   refuses a push to `production` without that variable, any commit not by Custos or carrying a
+   session line, and a push of the archive to any other URL. A ruleset on `production` (no force
+   pushes or deletion, `gate` required, owner only) will be added.
+7. **Render deploys** `production` once `gate` passes on that commit (Auto-Deploy "After CI
+   Checks Pass"): it builds, the old server hands over and traffic switches (see Persistence).
+   Never write `[skip render]` in a commit message: on the released commit it skips the deploy.
+8. **Check it is live:** `curl -s https://mcpwars.com/version`; `commit` must be the released SHA.
+
+Three things need more than this:
+- **A `render.yaml` change is a release.** The Blueprint's auto-sync reads `render.yaml` from
+  `main`, so a change (`AF_RULES_PATCH` included) takes effect when it merges, not at release,
+  and an environment change makes Render redeploy the code already on `production`. Rehearse it
+  and get the owner's go before it merges.
+- **An `ENGINE_VERSION` or storage schema bump** is rehearsed on a verified production backup
+  before release (see Deploying).
+- **Roll forward only.** Never use Render's Rollback or release an older commit: since Release #1
+  (2026-10-12) the database is at storage schema 2, and older builds refuse the universe (see
+  Persistence). Back out a bad change with a new commit through this flow.
 
 ## Repository map
 
@@ -900,33 +935,38 @@ scripts/check-public-tree.sh [--staged]          # owner material check (ci.sh a
 scripts/check-commits.sh <base> [<head>]         # identity and session-trailer check (ci.sh: CI_BASE or origin/main)
 cargo run --release -p af-harness -- bots --server http://127.0.0.1:8787 --count 8
 cargo run --release -p af-harness -- sim --bots 12 --ticks 1440
-af-server verify --db <file or postgres URL>     # replay check
+af-server verify --db <file or postgres URL>     # replay check (about 3 GB of RAM; a file is opened as writer: use a copy)
 af-server conduct --db <file or postgres URL> [--hours 24] [--json]   # conduct report (operator; a file is opened as writer: use a copy)
-curl -s https://mcpwars.com/version             # the live build: commit, engine, rules, doc revision, start
 af-server export --from <postgres URL> --to backup.redb
+gh pr create --base main                         # after pushing your branch (How work ships, step 3)
+OWNER_RELEASE=1 git push origin <sha>:refs/heads/production   # owner only: release a main commit
+curl -s https://mcpwars.com/version             # the live build: commit, engine, rules, doc revision, start
 ```
 
 Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p 55432:5432 postgres:17`.
 
 ## Deploying
 
-- Production: Render Blueprint `mcpwars` (web service + Postgres) in the GitHub org repo
-  `mcpwars/mcpwars`. **Production deploys from the `production` branch** (`render.yaml`
-  `branch: production`, `autoDeployTrigger: checksPass`): the owner releases a tested `main` commit
-  with `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production`, and Render deploys it once
-  the `gate` check passes. Merging to `main` never deploys. DNS for `mcpwars.com` is at Namecheap (A
-  record to Render, `www` CNAME to `mcpwars.onrender.com`).
-- Settings live in `render.yaml` (synced by the Blueprint). A push that changes both code and
-  `render.yaml` deploys twice: the code first with the old settings, then the Blueprint sync applies
-  the new settings in a second deploy. Captains may therefore see a rules change announced in two
-  steps. The admin token is generated by Render; never print or commit it.
-- Before pushing an engine version bump, rehearse the upgrade locally: run the previous build on a
-  local Postgres, start the new build against the same database, and check the handover, the
-  adoption and `af-server verify`. Pass the database as `DATABASE_URL`, not `--db`: the handover
-  listener only starts from the environment variable, as in production. Start the previous build
-  on that database (or restore the backup with it) before the new build touches it: once a build with
-  a later storage schema has written to a store (an import, or any open of a redb file, which always
-  opens as the writer, `verify` included), older builds refuse it.
+- Production: Render Blueprint `mcpwars` (web service `mcpwars` + Postgres) in the GitHub org repo
+  `mcpwars/mcpwars`. The service deploys the `production` branch once `gate` passes on it
+  (`render.yaml` `branch: production`, `autoDeployTrigger: checksPass`); `main` never deploys code.
+  The flow is in How work ships. DNS for `mcpwars.com` is at Namecheap (A record to Render, `www`
+  CNAME to `mcpwars.onrender.com`).
+- Settings live in `render.yaml`, applied by the Blueprint, whose auto-sync reads it from `main`:
+  a change takes effect when it merges, and an environment change redeploys the code on
+  `production`. The admin token is generated by Render; never print or commit it.
+- **Rehearse every release that bumps `ENGINE_VERSION` or the storage schema** on a verified
+  production backup: restore it into a local Postgres, run the live build on it, start the
+  candidate against the same database, then check the handover, the adoption, `af-server verify`
+  and that the old build is now refused. Pass the database as `DATABASE_URL`, not `--db`: the
+  handover listener only starts from the environment variable, as in production. Start the live
+  build on that database (or restore the backup with it) before the candidate touches it: once a
+  build with a later storage schema has written to a store (an import, or any open of a redb file,
+  which always opens as the writer, `verify` included), older builds refuse it.
+- **Backups:** `GET /api/sysop/backup` streams a redb file with no `Content-Length`, so a cut
+  transfer can look complete: run `af-server verify` on a copy of every downloaded backup before
+  relying on it. `verify`, `import` and `export` need about 3 GB of RAM: never run them in the
+  Render shell (the service plan has 2 GB).
 - **CI gate:** `.github/workflows/ci.yml`, one job named `gate`, on every pull request and every
   push to `main` or `production`. It runs `scripts/ci.sh` (commit range from the pull request or
   the push) and the store tests against a Postgres 17 service with `AF_REQUIRE_POSTGRES=1`. Pull
@@ -940,7 +980,7 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
   startup, else `AF_GIT_COMMIT` baked in at compile time, else "unknown" (only a hex commit id is
   ever shown), the live rules label, `documentation::revision()` and the process start time. Like
   `/healthz` it answers 503 while the server waits for the writer lock and is not in robots or the
-  sitemap. Use it to check which build a deploy put live.
+  sitemap. After a release, its `commit` must be the released SHA.
 - The toolchain is pinned in `rust-toolchain.toml` and the Dockerfile build image
   (`rust:<exact version>-bookworm`); change both together. `Cargo.toml` declares no `rust-version`.
 - Full runbook: `docs/DEPLOY.md`.
@@ -949,6 +989,7 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
 
 **Changing game rules or balance**
 1. For the live universe: `AF_RULES_PATCH` in `render.yaml` or the sysop console (both announce).
+   A `render.yaml` change applies when it merges to `main`, so its pull request is a release.
 2. For new universes too: update the default in `core/src/rules.rs` (and its `default_*` fn).
 3. Update `docs/DECISIONS.md` with the reason, and the guide text if it quotes the number.
 
@@ -959,7 +1000,8 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
 4. Update inline descriptions, categories and examples beside the tool. Generated
    references update automatically. Change authored guidance only when behavior
    needs explanation; validate documentation routes and catalog discovery together.
-5. Bump `ENGINE_VERSION` if serialized state or behaviour changed.
+5. Bump `ENGINE_VERSION` if serialized state or behaviour changed, and rehearse the upgrade
+   (Deploying) before asking the owner to release it.
 
 **Changing what the public can see**
 Edit `core/src/public.rs` only, keep its leak test passing, and record the reason in DECISIONS.

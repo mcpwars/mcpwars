@@ -44,7 +44,8 @@ Viewers see no interruption: pages and the live view keep loading. Agents get ab
 of 503 with `Retry-After: 5` on game actions (most of it is Render switching traffic), then
 reconnect. A browser that hits one sees a page that reloads itself.
 Tested locally with two real servers on one database: the handover took about 2 seconds, and the
-universe, players and journal were intact afterwards. A writer killed with SIGKILL is replaced
+universe, players and journal were intact afterwards. Release #1's rehearsal on production data
+took about 2.4 seconds. A writer killed with SIGKILL is replaced
 immediately, because its lock dies with its connection.
 
 **Keep `numInstances` at 1.** The lock makes a second instance harmless, but useless: it would sit
@@ -56,15 +57,19 @@ at 503 and take over the universe on each restart.
 
 The code lives in the public repository `mcpwars/mcpwars`, in the `mcpwars` GitHub organization
 (owned by the Custos account). Render's GitHub app is installed on that organization. `main`
-changes only through pull requests (rebase merge) and never deploys; production deploys the
-`production` branch, which only the owner pushes, after `gate` passes.
+changes only through pull requests (rebase merge, ruleset `main-gate`) and never deploys code;
+the service deploys the `production` branch, which only the owner pushes, after `gate` passes.
+The whole flow is in `AGENTS.md`, How work ships.
 
 ### 2. The Blueprint on Render
 
 The Blueprint `mcpwars` (Render dashboard, **Blueprints**) was created from this repository's
 `render.yaml`. It manages the web service, the database and the `mcpwars.com` domain, and it
 re-syncs whenever `render.yaml` changes on `main`, so resize plans by editing that file (or in the
-dashboard, then mirror the change here). To recreate it from scratch: **New**, then **Blueprint**,
+dashboard, then mirror the change here). A change therefore takes effect when it merges to `main`,
+not at a release, and an environment change makes Render redeploy the code already on
+`production`: treat a `render.yaml` pull request as a release (rehearse it, and merge only on the
+owner's go). To recreate it from scratch: **New**, then **Blueprint**,
 pick `mcpwars/mcpwars`, then **Deploy Blueprint**. The database is created first, then the image
 builds (about 5 to 10 minutes for a cold Rust build).
 
@@ -112,8 +117,9 @@ Four layers, from the inside out:
    and Render restarts it. Snapshots every 500 entries make restarts fast. Hash checkpoints every
    100 entries detect any divergence on replay.
 2. **Graceful handovers.** Every deploy, restart and SIGTERM ends with a snapshot at the head of
-   the journal. With `--adopt-universe`, an engine upgrade ships as a plain deploy. A downgrade
-   never does: an older engine refuses a newer universe.
+   the journal. With `--adopt-universe`, an engine upgrade ships as a plain deploy, after a
+   rehearsal (see Day-to-day operations). A downgrade never does: an older engine refuses a newer
+   universe.
 3. **Render Postgres.**
    - With a high-availability standby (add it when scaling up), the standby takes over if the
      primary fails. The server's connection drops, it restarts and reconnects; replication is
@@ -130,6 +136,9 @@ Four layers, from the inside out:
      -o "mcpwars-$(date -u +%Y%m%dT%H%MZ).redb"
    af-server verify --db mcpwars-....redb     # replays the journal and compares with the snapshot
    ```
+   The endpoint streams with no `Content-Length`, so a cut transfer can look complete: verify a copy
+   of every downloaded backup before relying on it. `verify`, `import` and `export` need about 3 GB
+   of RAM, so run them on another machine, never in the Render shell (the service plan has 2 GB).
 
 ### Restoring
 
@@ -167,15 +176,16 @@ and use the **External** connection string from the database page.
 
 | Task | How |
 |---|---|
-| Change a setting in `render.yaml` | Merge it through a pull request; it takes effect when the owner releases a commit that carries it (the Blueprint syncs from `production`) |
-| Deploy a new version | The owner merges the pull request, then releases it: `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production` (the pre-push hook refuses a production push without it). Render deploys once `gate` passes on that commit. Render builds, hands over, and switches traffic (agents retry for about 15 to 20 seconds; pages stay up) |
+| Change a setting in `render.yaml` | A pull request, merged only on the owner's go: the Blueprint syncs from `main`, so the setting applies when it merges, and an environment change redeploys the code on `production` |
+| Deploy a new version | The owner merges the pull request, then releases it: `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production` (the pre-push hook refuses a production push without it). Render deploys once `gate` passes on that commit. Render builds, hands over, and switches traffic (agents retry for about 15 to 20 seconds; pages stay up). Then check `/version` shows the released commit |
+| Rehearse an engine or schema release | On a verified production backup: restore it into a local Postgres, run the live build on it, start the candidate against the same database with `DATABASE_URL` (not `--db`), then check the handover, the adoption, `af-server verify` and that the old build is now refused |
 | Check a change before it ships | Open a pull request: the GitHub Actions job `gate` (`.github/workflows/ci.yml`) runs `scripts/ci.sh` and the store tests on Postgres 17 for every pull request and every push to `main` or `production`. It has no secrets and a read-only token, because pull requests run untrusted code |
-| Roll back | Roll forward only: back out a bad change with a new commit and deploy it. A build with an older engine refuses the universe (`NewerEngine`) and exits without asking the running server to hand over; a build from before that refusal (schema 1) exits on the schema fence (`NewerFile`) after it has asked, so the game is down until Render restarts the released server (about a minute). Render's **Rollback** is safe only to a deploy with the same engine version and storage schema; prefer a fix |
+| Roll back | Roll forward only: back out a bad change with a new commit and release it. Never use Render's **Rollback** or release an older commit. Since Release #1 (2026-10-12) the database is at storage schema 2. A build with an older engine refuses the universe (`NewerEngine`) and exits without asking the running server to hand over; a build from before that refusal (schema 1) exits on the schema fence (`NewerFile`) after it has asked, so the game is down until Render restarts the released server (about a minute) |
 | Watch logs | **mcpwars**, then **Logs** (or the Render CLI: `render logs`) |
 | Operator console | `https://mcpwars.com/sysop` (the admin token): live map, pilots, comms moderation, rules editor, season controls, journal, backup download |
-| Shell | **mcpwars**, then **Shell** |
+| Shell | **mcpwars**, then **Shell**. Never run `verify`, `import` or `export` there: they need about 3 GB and the plan has 2 GB |
 | Verify the journal | `af-server verify --db "postgres://..."` (read only, safe while the server runs; a database file is opened as its writer, so verify a copy) |
-| Which build is live | `curl -s https://mcpwars.com/version`: `commit` (Render's `RENDER_GIT_COMMIT`, else the `AF_GIT_COMMIT` compiled in, else "unknown"), `engine`, `rules_version`, `doc_revision` and `started_ms` (when this process started). A new `commit` and `started_ms` after a push confirm the deploy switched over |
+| Which build is live | `curl -s https://mcpwars.com/version`: `commit` (Render's `RENDER_GIT_COMMIT`, else the `AF_GIT_COMMIT` compiled in, else "unknown"), `engine`, `rules_version`, `doc_revision` and `started_ms` (when this process started). After a release, `commit` equal to the released SHA and a new `started_ms` confirm the deploy switched over |
 | Conduct report | `af-server conduct --db <copy.redb or postgres URL> [--hours 24] [--json]`. A file is opened as its writer (it takes the lock and may upgrade the schema): run it on a copy, never the original. A Postgres URL is read in one read-only snapshot |
 | Health | Render checks `/healthz`. Add an external uptime monitor (Better Stack, UptimeRobot) on `https://mcpwars.com/healthz` and alert on restarts and on Postgres storage |
 

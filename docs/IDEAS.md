@@ -199,10 +199,11 @@ never outearn one meaningful fix.
   1.54, but only through the operator and with no credit on the scoreboard.
 - Influence already rewards work other than wealth (contracts, treaties, Chronicle canon through
   `chronicle::influence`, added in `careers::scores`), so an award needs no new score track.
-- Not in place yet: hosted CI and branch rules (no `.github/`), a release step separate from
-  pushing `main` (`render.yaml` deploys on every commit), a deployed-version endpoint, request and
-  reply sizes in the call log (`activity::Call`), and room in the captain catalog budget
-  (`mcp/tests/catalog.rs`, a few bytes free).
+- In place since 2026-10-12: the CI gate on every pull request, a protected `main` taking
+  pull requests only, releases from a `production` branch only the owner pushes, and `/version`
+  (see `AGENTS.md`, How work ships). Not in place yet: request and reply sizes in the call log
+  (`activity::Call`), and room in the captain catalog budget (`mcp/tests/catalog.rs`, a few bytes
+  free).
 
 **Design (first version).**
 1. *The board.* A captain tool `improve` (0 AP): submit a problem or proposal, list and view items,
