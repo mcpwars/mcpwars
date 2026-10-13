@@ -141,6 +141,12 @@ omniscient sysop view).
   semantics change. The server starts with `--adopt-universe`, which rebases the universe onto the
   new engine from the head snapshot the handover writes. New fields must be `#[serde(default)]`.
 - Backups and moves: `af-server export`, `import`, `verify` (see `docs/DEPLOY.md`).
+- **Stored state is read without serde_json's 128-level limit:** every read of snapshots, the
+  replay base, journal entries and private archive rows goes through `af_store::from_slice_deep`
+  (serde_json feature `unbounded_depth`), which refuses only beyond `MAX_STORED_DEPTH` (512) after
+  a non-recursive depth count, so it never overflows the stack. A captain's value accepted at
+  intake can sit deeper than 128 once wrapped in the world. Never use it for request bodies or
+  other outside input. Boot logs the deepest stored JSON read (`stored JSON depth`).
 - The interaction log (`af_activity` table / redb `activity`) sits beside the universe but outside
   the journal: telemetry only, never replayed, not copied by export or import, kept 90 days
   (`AF_ACTIVITY_RETENTION_DAYS`, 0 forever). On Postgres it is written by its own thread on a

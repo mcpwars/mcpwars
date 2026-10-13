@@ -149,7 +149,7 @@ pub fn report(entries: &[(u64, Vec<u8>)], w: &World, exact: bool, since_ms: u64)
     let mut all: BTreeMap<PlayerId, Acts> = BTreeMap::new();
     let (mut unread, mut last_ms, mut first_ms) = (0usize, 0u64, u64::MAX);
     for (_, raw) in entries {
-        let Ok(e) = serde_json::from_slice::<Value>(raw) else {
+        let Ok(e) = af_store::from_slice_deep::<Value>(raw) else {
             unread += 1;
             continue;
         };
