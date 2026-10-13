@@ -1624,7 +1624,7 @@
             "default": []
           },
           "max_toll": {
-            "description": "Pay tolls up to this each without turning back (default 0); charted tolls within it are planned through.",
+            "description": "Pay tolls up to this each without turning back (default 0). Charted tolls within it are planned through and their lap total kept from the purchase; an uncharted one met in flight may turn the ship back.",
             "type": [
               "integer",
               "null"

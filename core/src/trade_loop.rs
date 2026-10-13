@@ -23,7 +23,7 @@ pub struct Args {
     /// Sectors neither leg may enter, checked before buying (default none; at most one per galaxy sector).
     #[serde(default)]
     pub avoid_sectors: Vec<SectorId>,
-    /// Pay tolls up to this each without turning back (default 0); charted tolls within it are planned through.
+    /// Pay tolls up to this each without turning back (default 0). Charted tolls within it are planned through and their lap total kept from the purchase; an uncharted one met in flight may turn the ship back.
     #[serde(default)]
     pub max_toll: Option<i64>,
 }
@@ -70,6 +70,7 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     let applied_toll = a.max_toll.unwrap_or(0);
     let toll_cap = if p.doctrine.pay_tolls { applied_toll } else { 0 };
     let mut planned: Option<(Vec<SectorId>, Vec<SectorId>)> = None;
+    let mut toll_reserve = 0;
     'laps: for _ in 0..a.laps {
         // path::plot_on always lets the destination through, so an excluded port is caught here.
         if let Some(port) = [a.buy_at, a.sell_at].into_iter().find(|s| avoid.contains(s)) {
@@ -95,6 +96,24 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             break;
         }
         planned = Some((outbound.path.clone(), inbound.path.clone()));
+        // Credits kept back from the purchase (engine 1.57): every charted toll this lap's planned
+        // legs would pay (the planner's own predicate, entry into each sector after a leg's start,
+        // a sector crossed twice counted twice), so a lap that buys does not reach a toll it cannot
+        // pay. Purchases are untaxed and the sale's tax comes out of its proceeds, so nothing else
+        // is reserved. An uncharted toll met in flight cannot be known here. Allowance 0: none.
+        toll_reserve = if toll_cap > 0 {
+            outbound
+                .path
+                .iter()
+                .skip(1)
+                .chain(inbound.path.iter().skip(1))
+                .filter_map(|s| chart.get(s))
+                .filter(|k| crate::knowledge::known_payable_toll(ctx.w, pid, k, toll_cap))
+                .filter_map(|k| k.toll)
+                .sum()
+        } else {
+            0
+        };
         if !outbound.hazards.is_empty() || !inbound.hazards.is_empty() {
             stop = Some("Known hazard at a port.".into());
             break;
@@ -139,21 +158,47 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             .unwrap_or(0);
         let demand = capacity * port.fill_pct[a.commodity.idx()] / 100;
         buy.quantity = Some(buy.quantity.unwrap_or(i64::MAX).min(demand));
-        match crate::trade::quote(ctx.w, pid, &buy) {
-            Ok(q) => {
-                let discount = crate::economy::exp_discount(&ctx.w.rules, ctx.w.players[&pid].experience);
-                let bid = (port.prices[a.commodity.idx()] + discount)
-                    * (100 + crate::events::boom_pct(ctx.w, a.sell_at, a.commodity.idx()))
-                    / 100;
-                if bid * q.filled <= q.total {
-                    stop = Some("Observed buyer quote does not cover the current purchase cost.".into());
-                    break;
-                }
-            }
+        let mut q = match crate::trade::quote(ctx.w, pid, &buy) {
+            Ok(q) => q,
             Err(r) => {
                 stop = Some(r.to_string());
                 break;
             }
+        };
+        let discount = crate::economy::exp_discount(&ctx.w.rules, ctx.w.players[&pid].experience);
+        let credits = ctx.w.players[&pid].credits;
+        if toll_reserve > 0 && credits - q.total < toll_reserve {
+            let seller = ctx.w.sector(a.buy_at).and_then(|s| s.port.as_ref());
+            let cap = seller.map_or(0, |sp| {
+                crate::economy::max_affordable(&ctx.w.rules, sp, a.commodity.idx(), credits - toll_reserve, q.filled, discount)
+            });
+            if cap <= 0 {
+                stop = Some(format!(
+                    "Credits cannot buy one unit and keep the toll reserve of {toll_reserve} credits for the charted tolls this lap plans to pay."
+                ));
+                break;
+            }
+            buy.quantity = Some(cap);
+            q = match crate::trade::quote(ctx.w, pid, &buy) {
+                Ok(q) => q,
+                Err(r) => {
+                    stop = Some(r.to_string());
+                    break;
+                }
+            };
+        }
+        let bid = (port.prices[a.commodity.idx()] + discount) * (100 + crate::events::boom_pct(ctx.w, a.sell_at, a.commodity.idx())) / 100;
+        // With a toll reserve the margin must also cover the tolls the lap pays; a lap that would
+        // lose money to them stops before buying (1.57). Without one this is the 1.55 check.
+        if bid * q.filled <= q.total + toll_reserve {
+            stop = Some(if toll_reserve > 0 {
+                format!(
+                    "Observed buyer quote does not cover the purchase cost plus the {toll_reserve} credits of charted tolls this lap pays."
+                )
+            } else {
+                "Observed buyer quote does not cover the current purchase cost.".into()
+            });
+            break;
         }
         match crate::trade::trade(ctx, pid, &buy) {
             Ok(out) => {
@@ -220,6 +265,10 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     // A default call's reply is unchanged: the policy appears only when one was given or full=true.
     if !avoid.is_empty() || a.max_toll.is_some() || a.full {
         let mut policy = json!({"avoid_sectors": avoid, "max_toll": applied_toll, "avoid_hazards": true});
+        // Only a call that names max_toll can reserve, so only its reply gains the field (1.57).
+        if a.max_toll.is_some() {
+            policy["toll_reserve"] = json!(toll_reserve);
+        }
         if a.full {
             let (outbound, inbound) = planned.unzip();
             policy["planned_outbound"] = json!(outbound);

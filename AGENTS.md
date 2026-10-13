@@ -436,7 +436,9 @@ omniscient sysop view).
   do on `autopilot_travel`, apply to both legs and are checked for the whole lap before its
   purchase. The planning and both legs share one toll allowance (`path::plot_within`,
   `nav::autopilot_within`): a charted toll the ship will pay (doctrine `pay_tolls` on, toll within
-  `max_toll`) is not a hazard, so a toll paid on one leg does not divert or strand the next.
+  `max_toll`) is not a hazard, so a toll paid on one leg does not divert or strand the next, and
+  each lap's purchase keeps back the sum of those charted tolls on both planned legs; a lap whose
+  observed margin cannot cover them stops before buying (engine 1.57, `policy.toll_reserve`).
   Omitted, the toll cap is 0, and without `full=true` the reply has no `policy` key. Partial
   progress is a successful outcome with final sector/cargo and a stop reason, never a refusal
   after mutation.
