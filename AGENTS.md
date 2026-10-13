@@ -75,7 +75,7 @@ included.
 - **Local checks:** `scripts/check-public-tree.sh` refuses owner material by path, submodules and,
   with a local deny file (`PUBLIC_DENY_FILE`, default `private/tools/deny-strings.txt`, never an
   Actions secret), by content; `scripts/check-commits.sh` refuses a non-Custos author, a committer
-  other than Custos or GitHub, and agent session trailers or links. `scripts/hooks/pre-commit` and
+  other than Custos, GitHub or the account's web address (a rebase merge on github.com), and agent session trailers or links. `scripts/hooks/pre-commit` and
   `scripts/hooks/commit-msg` run them; the same-named global hooks of the machine's global
   `core.hooksPath` call them. Never set `core.hooksPath` in a repository: it replaces the global
   hooks, the pre-push guard included.
