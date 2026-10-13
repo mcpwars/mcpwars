@@ -1,5 +1,7 @@
 //! A bounded, journaled sequence of ordinary trades and autopilot legs. Never waits for AP.
-use crate::cmd::{AutopilotArgs, TradeAction, TradeArgs};
+use std::collections::BTreeSet;
+
+use crate::cmd::{TradeAction, TradeArgs};
 use crate::engine::{Ctx, Outcome, Refusal, Res};
 use crate::model::*;
 use schemars::JsonSchema;
@@ -18,6 +20,12 @@ pub struct Args {
     /// Include complete per-operation replies (default false: totals and stop reason).
     #[serde(default)]
     pub full: bool,
+    /// Sectors neither leg may enter, checked before buying (default none; at most one per galaxy sector).
+    #[serde(default)]
+    pub avoid_sectors: Vec<SectorId>,
+    /// Pay tolls up to this each without turning back (default 0); charted tolls within it are planned through.
+    #[serde(default)]
+    pub max_toll: Option<i64>,
 }
 pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     let p = ctx.player(pid)?;
@@ -32,6 +40,19 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
             "Start at buy_at with no cargo of this commodity; choose distinct ports, positive quantity and 1-20 laps.",
         ));
     }
+    if a.max_toll.is_some_and(|t| t < 0) {
+        return Err(Refusal::new("invalid_args", "max_toll must be >= 0."));
+    }
+    // The list is journaled; more entries than the galaxy has sectors can only be a mistake.
+    if a.avoid_sectors.len() > ctx.w.sector_count() as usize {
+        return Err(Refusal::new(
+            "invalid_args",
+            format!(
+                "avoid_sectors lists more entries than the galaxy has sectors ({}).",
+                ctx.w.sector_count()
+            ),
+        ));
+    }
     let initial_ap = p.ap;
     let initial_credits = p.credits;
     let mut laps = 0;
@@ -40,14 +61,40 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     let mut steps: Vec<Value> = vec![];
     let mut stop: Option<String> = None;
     let mut events = vec![];
+    // The policy (avoid_sectors, max_toll) is checked for the whole lap before its purchase, so a
+    // lap it stops makes no change. Omitted, it is the old behaviour: no exclusions, toll cap 0.
+    // Planning and both legs share one toll allowance: a charted toll the ship would pay (doctrine
+    // pay_tolls on, toll within max_toll) is not a hazard, so a toll paid on one leg, and charted
+    // by paying it, does not divert or strand a later leg or lap.
+    let avoid: BTreeSet<SectorId> = a.avoid_sectors.iter().copied().collect();
+    let applied_toll = a.max_toll.unwrap_or(0);
+    let toll_cap = if p.doctrine.pay_tolls { applied_toll } else { 0 };
+    let mut planned: Option<(Vec<SectorId>, Vec<SectorId>)> = None;
     'laps: for _ in 0..a.laps {
+        // path::plot_on always lets the destination through, so an excluded port is caught here.
+        if let Some(port) = [a.buy_at, a.sell_at].into_iter().find(|s| avoid.contains(s)) {
+            stop = Some(format!(
+                "Sector {port} is one of this loop's ports and is in avoid_sectors: no lap can avoid it."
+            ));
+            break;
+        }
         let chart = crate::knowledge::merged(ctx.w, pid);
-        let outbound = crate::path::plot_on(ctx.w, pid, &chart, a.buy_at, a.sell_at, &Default::default(), true);
-        let inbound = crate::path::plot_on(ctx.w, pid, &chart, a.sell_at, a.buy_at, &Default::default(), true);
+        let outbound = crate::path::plot_within(ctx.w, pid, &chart, a.buy_at, a.sell_at, &avoid, true, toll_cap);
+        let inbound = crate::path::plot_within(ctx.w, pid, &chart, a.sell_at, a.buy_at, &avoid, true, toll_cap);
         let (Some(outbound), Some(inbound)) = (outbound, inbound) else {
-            stop = Some("No safe known round-trip route.".into());
+            stop = Some(if avoid.is_empty() {
+                "No safe known round-trip route.".into()
+            } else {
+                "No safe known round-trip route avoids avoid_sectors.".into()
+            });
             break;
         };
+        // Defensive: the plotted lap must not touch an excluded sector anywhere.
+        if outbound.path.iter().chain(inbound.path.iter()).any(|s| avoid.contains(s)) {
+            stop = Some("No safe known round-trip route avoids avoid_sectors.".into());
+            break;
+        }
+        planned = Some((outbound.path.clone(), inbound.path.clone()));
         if !outbound.hazards.is_empty() || !inbound.hazards.is_empty() {
             stop = Some("Known hazard at a port.".into());
             break;
@@ -121,13 +168,7 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         }
         for (destination, sell) in [(a.sell_at, true), (a.buy_at, false)] {
             let before_notices = ctx.w.players[&pid].next_notice;
-            let nav = AutopilotArgs {
-                destination_sector: destination,
-                avoid_sectors: vec![],
-                avoid_hazards: true,
-                max_toll: Some(0),
-            };
-            match crate::nav::autopilot(ctx, pid, &nav) {
+            match crate::nav::autopilot_within(ctx, pid, destination, &avoid, true, Some(applied_toll), toll_cap) {
                 Ok(out) => {
                     let arrived = out.reply["arrived"] == true;
                     let reason = out.reply["stop_reason"].as_str().map(str::to_string);
@@ -173,9 +214,19 @@ pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         laps += 1;
     }
     let p = &ctx.w.players[&pid];
-    let reply = json!({"completed_laps": laps, "requested_laps": a.laps, "ap_spent": initial_ap - p.ap, "credit_change_after_tax": p.credits - initial_credits,
+    let mut reply = json!({"completed_laps": laps, "requested_laps": a.laps, "ap_spent": initial_ap - p.ap, "credit_change_after_tax": p.credits - initial_credits,
         "units_bought": units_bought, "units_sold": units_sold, "sector": p.sector, "cargo_remaining": p.ship.cargo[a.commodity.idx()], "stop_reason": stop,
         "steps": if a.full { Some(steps) } else { None }, "note": "Each step uses normal AP, prices, taxes and navigation. Completed steps remain committed on interruption; check final sector and cargo before retrying. Never waits for AP or guarantees a profit."});
+    // A default call's reply is unchanged: the policy appears only when one was given or full=true.
+    if !avoid.is_empty() || a.max_toll.is_some() || a.full {
+        let mut policy = json!({"avoid_sectors": avoid, "max_toll": applied_toll, "avoid_hazards": true});
+        if a.full {
+            let (outbound, inbound) = planned.unzip();
+            policy["planned_outbound"] = json!(outbound);
+            policy["planned_inbound"] = json!(inbound);
+        }
+        reply["policy"] = policy;
+    }
     let mut out = ctx.finish(format!("Trade loop completed {laps} of {} laps.", a.laps), reply);
     out.events.extend(events);
     Ok(out)

@@ -27,7 +27,10 @@ use serde_json::{Value, json};
 // Engine 1.55 adds the improve tool (captains propose, claim and patch changes to this server's
 // code and docs; about 1,710 bytes, with the action list kept as a plain enum): the catalog
 // measured 58,904 bytes, and the budget is that plus 150.
-const TOOLS_BYTE_BUDGET: usize = 59_054;
+// Engine 1.56 adds avoid_sectors and max_toll to trade_loop (improve board item #8, the same
+// avoidance policy autopilot_travel takes; about 360 bytes of schema with the shortest field
+// docs that still say what each does): the catalog measured 59,266 bytes, budget that plus 150.
+const TOOLS_BYTE_BUDGET: usize = 59_416;
 
 fn current() -> Value {
     let tools: Vec<Value> = af_mcp::tools::catalog()

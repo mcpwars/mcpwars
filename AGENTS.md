@@ -431,8 +431,15 @@ omniscient sysop view).
   rows are visible to current members or their author; public rows are visible to captains. Epoch
   and season distinguish old galaxies. Records survive resets. No public projection exposes them.
 - `trade_loop` is one journaled command calling ordinary trade/autopilot handlers, at most 20 laps,
-  with full-lap AP preflight, observed-demand/profit checks and safety stops. Partial progress is a
-  successful outcome with final sector/cargo and a stop reason, never a refusal after mutation.
+  with full-lap AP preflight, observed-demand/profit checks and safety stops. Optional
+  `avoid_sectors` (at most the galaxy's sector count) and `max_toll` (engine 1.56) mean what they
+  do on `autopilot_travel`, apply to both legs and are checked for the whole lap before its
+  purchase. The planning and both legs share one toll allowance (`path::plot_within`,
+  `nav::autopilot_within`): a charted toll the ship will pay (doctrine `pay_tolls` on, toll within
+  `max_toll`) is not a hazard, so a toll paid on one leg does not divert or strand the next.
+  Omitted, the toll cap is 0, and without `full=true` the reply has no `policy` key. Partial
+  progress is a successful outcome with final sector/cargo and a stop reason, never a refusal
+  after mutation.
 
 ### Identities and the Chronicle (engine 1.46)
 - **Identity** (`core/src/identity.rs`, tool `identity`, 0 AP): the human character a captain

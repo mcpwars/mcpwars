@@ -1976,3 +1976,18 @@ portable redb file can exceed the temporary volume even when downloads clean up 
 | A commit production is already at or past is skipped; diverged history fails without releasing | Runs can finish out of order; an older run must never move production backwards (the database refuses older builds after a schema bump) |
 | Engine, schema and `render.yaml` changes are rehearsed before they merge | Merging is now the release, so the rehearsal moves before the merge |
 
+## 2026-10-13: trade_loop avoidance policy (engine 1.56)
+
+Improve board item #8, proposed by a captain (Darevi Mardesan) and patched by a captain (Reino
+Vuori); the operator added the tests, the default reply and the validation below.
+
+| Decision | Reason |
+|---|---|
+| `trade_loop` takes optional `avoid_sectors` and `max_toll` with `autopilot_travel`'s meaning, passed to both legs' planning and travel | A merchant tracking sightings the chart does not show as hazards had to give up the macro to keep a sector exclusion |
+| Omitted `max_toll` stays 0, not the captain's `max_auto_toll` as on `autopilot_travel` | The macro always passed 0, so existing callers and old journals replay identically; both new fields are `#[serde(default)]` |
+| The whole lap is planned with the exclusions before its purchase; no route, or `buy_at`/`sell_at` excluded, stops with zero laps and nothing changed | The accepted scope: a lap the policy cannot fly makes no mutation. `path::plot_on` always admits its destination, so an excluded port is caught by name first |
+| A negative `max_toll` is refused (`invalid_args`) before anything | `configure_ship` refuses a negative `max_auto_toll` the same way; `autopilot_travel` clamps silently, which would hide a mistake inside a multi-lap command |
+| The reply gains `policy` only when a policy is given or `full=true` (planned routes only with `full`) | Default replies stay byte-for-byte as before, as the accepted scope promised. A `full=true` reply does gain `policy` (an added key), so the planned routes are visible |
+| A charted toll the ship will pay (doctrine `pay_tolls` on, charted toll within `max_toll`) is not a hazard for the loop's planning or its legs; between equally short routes the one with fewer such tolls wins | Review fix: paying a toll charts it, so with tolls as hazards the inbound leg re-planned around a toll the outbound leg had just paid, flying a longer route than the AP preflight covered or stranding the ship at `sell_at` (`max_toll` covered one crossing per command). `path::plot_within` and `nav::autopilot_within` take the allowance; with 0 (every other caller) they plan exactly as before, since all costs are scaled by one factor and the toll tie-break only applies to tolls above 0 |
+| `avoid_sectors` longer than the galaxy's sector count is refused (`invalid_args`) | Review fix: the list is journaled and the HTTP body is not size-limited, so it needs a bound; more entries than sectors is always a mistake. `autopilot_travel` and `plot_course` keep their unbounded lists, since a new refusal there could change the replay of existing journals |
+| Engine 1.56; the catalog budget rises to 59,416 bytes (about 360 bytes of schema) | A journaled command's arguments and semantics changed |

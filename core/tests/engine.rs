@@ -6921,6 +6921,8 @@ fn feedback_trade_loop_requires_full_lap_ap_and_replays() {
         laps: 2,
         quantity: Some(1),
         full: true,
+        avoid_sectors: vec![],
+        max_toll: None,
     };
     let out = s.run(Actor::Player(a), Command::TradeLoop(args.clone())).unwrap();
     assert_eq!(out.reply["completed_laps"], 2);
@@ -6951,6 +6953,300 @@ fn feedback_trade_loop_requires_full_lap_ap_and_replays() {
     let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
     assert_eq!(out.reply["completed_laps"], 0);
     assert_eq!(before, s.p(a).credits);
+}
+
+// ---------------------------------------------------------------- trade_loop avoidance policy (engine 1.56)
+// Improve board item #8: trade_loop takes autopilot_travel's avoid_sectors and max_toll.
+
+/// A trade lane for the avoidance tests: buy at 2, sell at 3. The short way both ways is through
+/// 4 (2-4-3 and 3-4-2); the long way is 2-5-6-3 and 3-6-5-2. Every sector charted, no defences.
+fn avoid_loop_world(seed: u64) -> (Sim, PlayerId) {
+    let mut s = Sim::new(seed, 30).without_founding();
+    let a = s.join("Detour Pilot");
+    for (sid, warps) in [(2, vec![4, 5]), (3, vec![4, 6]), (4, vec![2, 3]), (5, vec![2, 6]), (6, vec![3, 5])] {
+        let sector = s.w.sector_mut(sid).unwrap();
+        sector.warps = warps;
+        sector.fighters = None;
+        sector.armid = None;
+    }
+    for (sid, side) in [(2, PortTrade::Sells), (3, PortTrade::Buys)] {
+        let mut port = s.w.sector(1).unwrap().port.clone().unwrap();
+        port.trades[0] = side;
+        port.stardock = false;
+        port.stock[0] = 5000;
+        port.capacity[0] = 5000;
+        s.w.sector_mut(sid).unwrap().port = Some(port);
+    }
+    let p = s.w.players.get_mut(&a).unwrap();
+    p.sector = 2;
+    p.ap = 1_000;
+    p.ship.cargo[0] = 0;
+    for sid in 2..=6 {
+        af_core::knowledge::observe(&mut s.w, a, sid, true);
+    }
+    (s, a)
+}
+
+fn avoid_loop_args(laps: u32) -> af_core::trade_loop::Args {
+    af_core::trade_loop::Args {
+        buy_at: 2,
+        sell_at: 3,
+        commodity: Commodity::FuelOre,
+        laps,
+        quantity: Some(1),
+        full: true,
+        avoid_sectors: vec![],
+        max_toll: None,
+    }
+}
+
+/// Every sector the loop's autopilot legs actually flew through.
+fn loop_sectors_taken(reply: &serde_json::Value) -> Vec<u64> {
+    reply["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["path_taken"].as_array())
+        .flatten()
+        .map(|s| s.as_u64().unwrap())
+        .collect()
+}
+
+#[test]
+fn trade_loop_avoid_sectors_never_enters_an_excluded_sector_and_replays() {
+    let (mut s, a) = avoid_loop_world(886);
+    let snapshot = s.w.clone();
+    let journal_start = s.journal.len();
+    // Without a policy the loop takes the short way through 4.
+    let out = s.run(Actor::Player(a), Command::TradeLoop(avoid_loop_args(1))).unwrap();
+    assert_eq!(out.reply["completed_laps"], 1);
+    assert!(loop_sectors_taken(&out.reply).contains(&4));
+    // Excluding 4 sends both legs the long way, every lap.
+    let mut args = avoid_loop_args(2);
+    args.avoid_sectors = vec![4];
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+    assert_eq!(out.reply["completed_laps"], 2, "{}", out.reply);
+    assert_eq!(out.reply["units_sold"], 2);
+    assert_eq!(out.reply["sector"], 2);
+    let taken = loop_sectors_taken(&out.reply);
+    assert!(!taken.contains(&4), "entered an excluded sector: {taken:?}");
+    assert!(taken.contains(&5) && taken.contains(&6));
+    let policy = &out.reply["policy"];
+    assert_eq!(policy["avoid_sectors"], serde_json::json!([4]));
+    assert_eq!(policy["max_toll"], 0);
+    assert_eq!(policy["planned_outbound"], serde_json::json!([2, 5, 6, 3]));
+    assert_eq!(policy["planned_inbound"], serde_json::json!([3, 6, 5, 2]));
+    let mut replay = snapshot;
+    for e in &s.journal[journal_start..] {
+        apply(&mut replay, e).unwrap();
+    }
+    assert_eq!(replay.state_hash(), s.w.state_hash());
+}
+
+#[test]
+fn trade_loop_without_a_route_meeting_the_policy_changes_nothing() {
+    let (mut s, a) = avoid_loop_world(887);
+    let snapshot = s.w.clone();
+    let journal_start = s.journal.len();
+    // No way around both 4 and 5; then each port itself excluded.
+    for (avoid, needle) in [(vec![4, 5], "avoid_sectors"), (vec![3], "Sector 3"), (vec![2], "Sector 2")] {
+        let before = s.p(a).clone();
+        let mut args = avoid_loop_args(3);
+        args.avoid_sectors = avoid;
+        let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+        let after = s.p(a);
+        assert_eq!(out.reply["completed_laps"], 0);
+        assert_eq!(out.reply["units_bought"], 0);
+        assert_eq!(out.reply["ap_spent"], 0);
+        assert_eq!(out.reply["credit_change_after_tax"], 0);
+        assert_eq!(out.reply["steps"], serde_json::json!([]));
+        assert!(out.reply["stop_reason"].as_str().unwrap().contains(needle), "{}", out.reply);
+        assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::Value::Null);
+        assert_eq!(
+            (after.credits, after.ap, after.sector, after.ship.cargo),
+            (before.credits, before.ap, before.sector, before.ship.cargo)
+        );
+        assert_eq!(after.doctrine, before.doctrine);
+    }
+    // A negative toll cap is refused before anything, leaving the world untouched.
+    let before = normalized_hash(&s.w);
+    let mut args = avoid_loop_args(1);
+    args.max_toll = Some(-1);
+    let err = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap_err();
+    assert_eq!(err.code, "invalid_args");
+    assert_eq!(before, normalized_hash(&s.w));
+    let mut replay = snapshot;
+    for e in &s.journal[journal_start..] {
+        let _ = apply(&mut replay, e);
+    }
+    assert_eq!(replay.state_hash(), s.w.state_hash());
+}
+
+#[test]
+fn trade_loop_default_reply_and_behaviour_are_unchanged() {
+    let (mut s, a) = avoid_loop_world(888);
+    let mut args = avoid_loop_args(1);
+    args.full = false;
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args.clone())).unwrap();
+    assert_eq!(out.reply["completed_laps"], 1);
+    let keys: Vec<&str> = out.reply.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut expected = vec![
+        "ap_spent",
+        "cargo_remaining",
+        "completed_laps",
+        "credit_change_after_tax",
+        "note",
+        "requested_laps",
+        "sector",
+        "steps",
+        "stop_reason",
+        "units_bought",
+        "units_sold",
+    ];
+    expected.sort_unstable();
+    let mut keys_sorted = keys.clone();
+    keys_sorted.sort_unstable();
+    assert_eq!(keys_sorted, expected, "a default call gains no policy key");
+    // A journal entry written before 1.56 has neither field and reads as the defaults.
+    let old: af_core::trade_loop::Args =
+        serde_json::from_value(serde_json::json!({"buy_at": 2, "sell_at": 3, "commodity": "fuel_ore", "laps": 1})).unwrap();
+    assert!(old.avoid_sectors.is_empty() && old.max_toll.is_none());
+    // Naming a policy without full=true echoes it, without planned routes.
+    args.max_toll = Some(0);
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+    assert_eq!(out.reply["policy"]["max_toll"], 0);
+    assert!(out.reply["policy"].get("planned_outbound").is_none());
+}
+
+#[test]
+fn trade_loop_max_toll_pays_up_to_the_cap_and_restores_doctrine() {
+    // A toll of 100 at sell_at that the captain's chart does not show yet (charted before the
+    // stack arrived), so only navigation meets it. Once met, it is charted and routed around, so
+    // each cap gets a fresh world.
+    let toll_world = || {
+        let (mut s, a) = avoid_loop_world(889);
+        s.w.players.get_mut(&a).unwrap().credits = 100_000;
+        s.w.players.get_mut(&a).unwrap().aggressor = true;
+        let enemy = s.join("Toll Keeper");
+        // Enough fighters that the owner's price, not count x toll_per_fighter, sets the toll.
+        let mut stack = FighterStack::new(enemy, 100, FighterMode::Toll);
+        stack.toll_price = Some(100);
+        s.w.sector_mut(3).unwrap().fighters = Some(stack);
+        s.w.sector_mut(3).unwrap().fedspace = false;
+        (s, a)
+    };
+    for (cap, laps, paid) in [(None, 0, 0), (Some(99), 0, 0), (Some(100), 1, 100)] {
+        let (mut s, a) = toll_world();
+        let doctrine = s.p(a).doctrine.clone();
+        let snapshot = s.w.clone();
+        let journal_start = s.journal.len();
+        let mut args = avoid_loop_args(1);
+        args.max_toll = cap;
+        let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+        assert_eq!(out.reply["completed_laps"], laps, "cap {cap:?}: {}", out.reply);
+        assert_eq!(s.p(a).stats.tolls_paid, paid);
+        if laps == 0 {
+            // Turned back after buying: committed progress, reported.
+            assert_eq!(out.reply["cargo_remaining"], 1);
+            assert!(out.reply["stop_reason"].as_str().unwrap().contains("toll"), "{}", out.reply);
+        }
+        assert_eq!(out.reply["policy"]["max_toll"], cap.unwrap_or(0));
+        assert_eq!(s.p(a).doctrine, doctrine, "autopilot restores the captain's own toll setting");
+        let mut replay = snapshot;
+        for e in &s.journal[journal_start..] {
+            apply(&mut replay, e).unwrap();
+        }
+        assert_eq!(replay.state_hash(), s.w.state_hash());
+    }
+}
+
+/// A 100-credit toll at sector 4, on the short way both ways, from a hostile stack. `charted`
+/// says whether the captain's chart already shows it; otherwise the first crossing charts it.
+fn toll_at_4_world(seed: u64, charted: bool) -> (Sim, PlayerId) {
+    let (mut s, a) = avoid_loop_world(seed);
+    s.w.players.get_mut(&a).unwrap().credits = 100_000;
+    s.w.players.get_mut(&a).unwrap().aggressor = true;
+    let enemy = s.join("Toll Keeper");
+    let mut stack = FighterStack::new(enemy, 100, FighterMode::Toll);
+    stack.toll_price = Some(100);
+    s.w.sector_mut(4).unwrap().fighters = Some(stack);
+    s.w.sector_mut(4).unwrap().fedspace = false;
+    if charted {
+        af_core::knowledge::observe(&mut s.w, a, 4, true);
+    }
+    (s, a)
+}
+
+#[test]
+fn trade_loop_paid_toll_on_the_way_does_not_divert_or_strand_later_legs() {
+    for charted in [false, true] {
+        let (mut s, a) = toll_at_4_world(890, charted);
+        // AP for exactly two laps of the short way (2-4-3-4-2): the preflight's plan, nothing spare.
+        let warp_ap = s.w.rules.ship(s.p(a).ship.class).warp_ap;
+        let lap = 4 * warp_ap + 2 * s.w.rules.ap_trade;
+        s.w.players.get_mut(&a).unwrap().ap = 2 * lap;
+        let snapshot = s.w.clone();
+        let journal_start = s.journal.len();
+        let mut args = avoid_loop_args(2);
+        args.max_toll = Some(100);
+        let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+        assert_eq!(out.reply["completed_laps"], 2, "charted {charted}: {}", out.reply);
+        assert_eq!(out.reply["sector"], 2);
+        assert_eq!(out.reply["ap_spent"], 2 * lap);
+        assert_eq!(s.p(a).stats.tolls_paid, 400, "four crossings of sector 4");
+        let taken = loop_sectors_taken(&out.reply);
+        assert!(!taken.contains(&5) && !taken.contains(&6), "diverted: {taken:?}");
+        assert_eq!(out.reply["policy"]["planned_inbound"], serde_json::json!([3, 4, 2]));
+        let mut replay = snapshot;
+        for e in &s.journal[journal_start..] {
+            apply(&mut replay, e).unwrap();
+        }
+        assert_eq!(replay.state_hash(), s.w.state_hash());
+    }
+    // Below the cap, or with paying tolls switched off in the doctrine, the charted toll is still a
+    // hazard: the lap is planned the long way round and never pays.
+    for (cap, pay) in [(Some(99), true), (Some(100), false)] {
+        let (mut s, a) = toll_at_4_world(891, true);
+        s.w.players.get_mut(&a).unwrap().doctrine.pay_tolls = pay;
+        let mut args = avoid_loop_args(1);
+        args.max_toll = cap;
+        let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+        assert_eq!(out.reply["completed_laps"], 1, "{}", out.reply);
+        assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::json!([2, 5, 6, 3]));
+        assert_eq!(s.p(a).stats.tolls_paid, 0);
+    }
+    // Between equally short routes, the one without a toll wins.
+    let (mut s, a) = toll_at_4_world(892, true);
+    s.w.sector_mut(2).unwrap().warps = vec![4, 5, 7];
+    s.w.sector_mut(3).unwrap().warps = vec![4, 6, 7];
+    let seven = s.w.sector_mut(7).unwrap();
+    seven.warps = vec![2, 3];
+    seven.fighters = None;
+    seven.armid = None;
+    for sid in [2, 3, 7] {
+        af_core::knowledge::observe(&mut s.w, a, sid, true);
+    }
+    let mut args = avoid_loop_args(1);
+    args.max_toll = Some(100);
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+    assert_eq!(out.reply["completed_laps"], 1, "{}", out.reply);
+    assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::json!([2, 7, 3]));
+    assert_eq!(s.p(a).stats.tolls_paid, 0);
+}
+
+#[test]
+fn trade_loop_refuses_an_avoid_list_longer_than_the_galaxy() {
+    let (mut s, a) = avoid_loop_world(893);
+    let before = normalized_hash(&s.w);
+    let mut args = avoid_loop_args(1);
+    args.avoid_sectors = vec![9; s.w.sector_count() as usize + 1];
+    let err = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap_err();
+    assert_eq!(err.code, "invalid_args");
+    assert_eq!(before, normalized_hash(&s.w));
+    let mut args = avoid_loop_args(1);
+    args.avoid_sectors = vec![9; s.w.sector_count() as usize];
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+    assert_eq!(out.reply["completed_laps"], 1, "{}", out.reply);
 }
 
 #[test]

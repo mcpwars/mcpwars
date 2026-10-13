@@ -70,13 +70,37 @@ pub fn plot_on(
     avoid: &BTreeSet<SectorId>,
     avoid_hazards: bool,
 ) -> Option<Plotted> {
+    plot_within(w, pid, chart, from, to, avoid, avoid_hazards, 0)
+}
+
+/// `plot_on` for a pilot who pays charted tolls up to `toll_cap` each: those sectors are not
+/// hazards, and among equally short routes the one with fewer of them wins. With `toll_cap` 0 it
+/// is exactly `plot_on` (every cost is scaled by the same factor, which keeps the same choices).
+#[allow(clippy::too_many_arguments)]
+pub fn plot_within(
+    w: &World,
+    pid: PlayerId,
+    chart: &BTreeMap<SectorId, KnownSector>,
+    from: SectorId,
+    to: SectorId,
+    avoid: &BTreeSet<SectorId>,
+    avoid_hazards: bool,
+    toll_cap: i64,
+) -> Option<Plotted> {
+    const HOP: u64 = 1_000;
     if from == to {
         return Some(Plotted {
             path: vec![from],
             hazards: vec![],
         });
     }
-    let hazard = |s: SectorId| chart.get(&s).map(|k| knowledge::known_hazard(w, pid, k)).unwrap_or(false);
+    let hazard = |s: SectorId| {
+        chart
+            .get(&s)
+            .map(|k| knowledge::known_hazard_within(w, pid, k, toll_cap))
+            .unwrap_or(false)
+    };
+    let toll = |s: SectorId| chart.get(&s).is_some_and(|k| knowledge::known_payable_toll(w, pid, k, toll_cap));
     let mut dist: BTreeMap<SectorId, u64> = BTreeMap::from([(from, 0)]);
     let mut prev: BTreeMap<SectorId, SectorId> = BTreeMap::new();
     let mut heap = BinaryHeap::from([Reverse((0u64, from))]);
@@ -101,12 +125,15 @@ pub fn plot_on(
             if avoid.contains(&v) && v != to {
                 continue;
             }
-            let mut cost = 1u64;
+            let mut cost = HOP;
             if hazard(v) {
                 if avoid_hazards && v != to {
                     continue;
                 }
-                cost += 50;
+                cost += 50 * HOP;
+            } else if toll(v) {
+                // Fewer than HOP tolls can never make a route a hop longer: a tie-break only.
+                cost += 1;
             }
             let nd = d + cost;
             if nd < *dist.get(&v).unwrap_or(&u64::MAX) {
