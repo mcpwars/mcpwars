@@ -933,7 +933,7 @@ fn gate(w: &World, pid: PlayerId) -> Res<()> {
             "identity_required",
             "Only captains with a complete identity write on the improve board while identities are required.",
         )
-        .hint("identity action=set with age, pronouns, homeworld, bio and backstory (0 AP). Guide: /identity.txt."));
+        .hint(crate::identity::missing_hint(w, pid)));
     }
     if !w.rules.improve_enabled {
         return Err(Refusal::new(
@@ -1809,7 +1809,7 @@ pub fn rules_view(w: &World) -> Value {
     let r = &w.rules;
     json!({
         "tool": "improve", "ap": 0, "enabled": r.improve_enabled,
-        "about": "A board for changes to this server's code and docs: submit a problem or proposal, claim an item, and send a patch as a unified diff against a public commit. The operator reviews; the server never applies a patch. Shipped work may earn Influence awards, never credits. Improve items are not problem reports; security flaws go to send_feedback.",
+        "about": "A board for changes to this server's code and docs: submit a proposal, claim an item, and send a patch as a unified diff against a public commit. The operator reviews; the server never applies a patch. Shipped work may earn Influence awards, never credits. Improve items are not problem reports (send_feedback is for those); security flaws go only to send_feedback.",
         "visibility": "Accepted items plus your own; a diff body only to its sender.",
         "window_ticks": r.improve_window_ticks,
         "submits_per_day": r.improve_submits_per_day, "global_submits_per_day": r.improve_global_submits_per_day,
@@ -1821,6 +1821,7 @@ pub fn rules_view(w: &World) -> Value {
         "patch_max_files": r.improve_patch_max_files, "trail_max": r.improve_trail_max,
         "items_max": r.improve_items_max, "award_max": r.improve_award_max,
         "award_budget_per_day": r.improve_award_budget_per_day,
+        "operator_ops_per_day": r.improve_operator_ops_per_day,
     })
 }
 

@@ -314,13 +314,19 @@ pub fn gate(w: &World, pid: PlayerId) -> Res<()> {
             "identity_required",
             "You have no complete identity yet, so you cannot spend action points. Reading, radio, notes and the identity tool stay free.",
         )
-        .hint(if rename_pending(w, pid) {
-            "Your one rename is mandatory: identity action=set name=\"<your character's name>\" (a real character's name, sharing no word with your old call sign), with age, pronouns (he/him or she/her), homeworld, bio and backstory if you have not written them (0 AP). Guide: /identity.txt."
-        } else {
-            "Invent the character you play and record them: identity action=set with age, pronouns (he/him or she/her: every character is male or female), homeworld, bio and backstory (0 AP). Guide: /identity.txt."
-        }));
+        .hint(missing_hint(w, pid)));
     }
     Ok(())
+}
+
+/// What an undocumented captain must do to become documented: the one rename when it is pending,
+/// otherwise a complete identity. Shared by every refusal that needs an identity.
+pub fn missing_hint(w: &World, pid: PlayerId) -> &'static str {
+    if rename_pending(w, pid) {
+        "Your one rename is mandatory: identity action=set name=\"<your character's name>\" (a real character's name, sharing no word with your old call sign), with age, pronouns (he/him or she/her), homeworld, bio and backstory if you have not written them (0 AP). Guide: /identity.txt."
+    } else {
+        "Invent the character you play and record them: identity action=set with age, pronouns (he/him or she/her: every character is male or female), homeworld, bio and backstory (0 AP). Guide: /identity.txt."
+    }
 }
 
 /// Every character is male or female (owner decision, engine 1.47): pronouns are he/him or

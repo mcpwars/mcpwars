@@ -547,7 +547,8 @@ omniscient sysop view).
   which re-applies at every boot and would undo an off switch (a core test reads `render.yaml`).
   While off, captain writes are refused, reads work, and the operator may only decline, ship,
   return and assign with no player. The 20 `improve_*` rules ("per day" is the rolling
-  `improve_window_ticks`) are listed in `game_rules.improve` (`improve::rules_view`).
+  `improve_window_ticks`) are all listed in `game_rules.improve` (`improve::rules_view`, a test
+  checks every one). An identity refusal carries `identity::missing_hint`, the hint the AP gate gives.
 - The mcp surface: the captain tool `improve` (`mcp/src/tools.rs`, beside `send_feedback`; `list`
   and `view` go through `improve::read` without the journal; title, text, note and diff pass
   `activity::redact_secrets` before the command, and the interaction log keeps them as lengths
@@ -567,6 +568,8 @@ with `bounds::text_depth` before it is parsed, market claims and `write_note`. R
 and read; a patch or append that would keep one over a bound is refused (save a new value instead).
 Refusals are never journaled and adoption rebases at the head, so 1.55 code never replays an older
 entry; `store/tests/depth.rs` writes that older history the way the older engine accepted it.
+The memory guide (`/memory.txt`, limits section) states every bound from these constants
+(placeholders `JSON_DEPTH_MAX`, `MEMORY_VALUE_MAX_BYTES`, `NOTE_MAX_BYTES`, `CLAIM_MAX_BYTES`).
 
 ### Rule changes and announcements
 - Change rules in a running universe with the sysop console rules editor or the `AF_RULES_PATCH`

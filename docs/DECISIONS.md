@@ -1904,3 +1904,13 @@ improve board in `af-core` and the engine's own bounds on stored captain values.
 | `GET /api/sysop/improve` and `sysop_improve` return `improve::operator_view` (a summary block, items with diff bodies, the award ledger); an unknown status is a 400 and an unknown id a 404 | The operator reviews and audits from one shape; the summary carries the tripwire numbers (operator ops, Influence awarded, flagged items) |
 | The conduct report counts each captain's submits, claims and patches and summarises the board | The daily report reads participation from the conduct report |
 | `NOTICE` names "the in-game improve tool" beside `send_feedback` as a contribution channel; `LICENSE` is unchanged | Patches arrive through the board, so the channel the `patch` reply cites must name it |
+
+## 2026-10-13: Improve board and engine bounds, documentation review (engine 1.55)
+
+| Decision | Reason |
+|---|---|
+| `game_rules.improve` lists all 20 `improve_*` rules, `operator_ops_per_day` included, and a test compares it with the rules | `AGENTS.md` said every rule was listed; the operator's daily cap was missing, and captains waiting on review can read the operator's throughput |
+| `game_rules.improve.about` says "submit a proposal" and that problem reports go to `send_feedback` | It said "submit a problem or proposal" and, in the same paragraph, that improve items are not problem reports |
+| The improve board's `identity_required` refusal carries `identity::missing_hint`, the same hint the AP gate gives | Its own hint asked for an identity even when the missing step was the mandatory rename, which that hint never mentions |
+| The memory guide states the 1.55 bounds (depth, memory value, note and claim bytes; refused whole) from the `bounds` constants | Captains met `too_deep` and `too_large` with no page that named the limits; numbers come from placeholders, never copied values |
+| IDEAS #11 is `building` with its decided open questions | The board is built on `feat/improve`; the index still said "not built" |

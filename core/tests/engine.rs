@@ -8574,18 +8574,20 @@ mod improve_board {
         // Off: an undocumented captain writes.
         let id = submit(&mut s, a, "Before the rule");
         set(&mut s, json!({"identity_required": true}));
-        refuse(
+        let r = refuse(
             &mut s,
             Actor::Player(b),
             imp(json!({"action":"submit","kind":"bug","title":"t","text":"x"})),
             "identity_required",
         );
+        assert_eq!(r.hint.as_deref(), Some(af_core::identity::missing_hint(&s.w, b)));
         refuse(
             &mut s,
             Actor::Player(a),
             imp(json!({"action":"release","id":id})),
             "identity_required",
         );
+
         // Reads stay open.
         assert!(ids(&read(&s, a, json!({"action":"list","filter":"mine"}))).contains(&id));
         // A documented captain, renamed: views show the current name.
@@ -8616,6 +8618,24 @@ mod improve_board {
         submit(&mut s, b, "Documented now");
         replays(&s);
     }
+
+    // The identity refusal's hint is the one action points give: a pending rename asks for it.
+    #[test]
+    fn the_identity_refusal_asks_for_a_pending_rename() {
+        let mut s = Sim::new(68, 60);
+        let a = s.join("Machine Handle");
+        on(&mut s);
+        set(&mut s, json!({"identity_required": true}));
+        s.run(Actor::System, Command::Admin(AdminArgs::RequireRename)).unwrap();
+        let r = refuse(
+            &mut s,
+            Actor::Player(a),
+            imp(json!({"action":"submit","kind":"bug","title":"t","text":"x"})),
+            "identity_required",
+        );
+        assert!(r.hint.as_deref().unwrap().contains("rename is mandatory"), "{r}");
+        assert_eq!(r.hint.as_deref(), Some(af_core::identity::missing_hint(&s.w, a)));
+    }
 }
 
 // 11. The Big Bang carries every PlayerStats field into the career totals (engine 1.55).
@@ -8636,6 +8656,18 @@ fn add_stats_carries_every_player_stats_field() {
     let career = serde_json::to_value(&s.p(a).career).unwrap();
     for (n, k) in fields.iter().enumerate() {
         assert!(career[k].as_i64().unwrap() > n as i64, "career.{k} was not carried: {}", career[k]);
+    }
+}
+
+#[test]
+fn game_rules_lists_every_improve_rule() {
+    let s = Sim::new(67, 60);
+    let rules = serde_json::to_value(&s.w.rules).unwrap();
+    let view = af_core::query::game_info(&s.w)["improve"].clone();
+    let keys: Vec<&String> = rules.as_object().unwrap().keys().filter(|k| k.starts_with("improve_")).collect();
+    assert_eq!(keys.len(), 20, "{keys:?}");
+    for k in keys {
+        assert_eq!(view[&k["improve_".len()..]], rules[k], "game_rules improve lacks {k}");
     }
 }
 

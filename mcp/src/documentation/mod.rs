@@ -225,7 +225,7 @@ fn fill(template: String, ctx: &DocContext) -> String {
         "New registration is closed. Existing captains reconnect as usual. Never report a new registration as done."
     };
     let hours = |ticks: u64| amount(ticks as f64 * r.tick_ms as f64 / 3_600_000.0);
-    let vars: [(&str, String); 68] = [
+    let vars: [(&str, String); 72] = [
         ("CHECKIN_PROMPT", authored::CHECKIN_PROMPT.to_string()),
         ("RECONCILE", authored::RECONCILE.to_string()),
         ("BETTER_METHOD", authored::BETTER_METHOD.to_string()),
@@ -294,6 +294,10 @@ fn fill(template: String, ctx: &DocContext) -> String {
             }
             .to_string(),
         ),
+        ("JSON_DEPTH_MAX", af_core::bounds::MAX_JSON_DEPTH.to_string()),
+        ("MEMORY_VALUE_MAX_BYTES", af_core::bounds::MEMORY_VALUE_MAX_BYTES.to_string()),
+        ("NOTE_MAX_BYTES", af_core::bounds::NOTE_MAX_BYTES.to_string()),
+        ("CLAIM_MAX_BYTES", af_core::bounds::CLAIM_MAX_BYTES.to_string()),
         ("CHRONICLE_BODY_MAX", af_core::chronicle::BODY_MAX.to_string()),
         ("CHRONICLE_CONTENT_RULE", af_core::chronicle::CONTENT_RULE.to_string()),
         ("CHRONICLE_CANON_RULE", "two while fewer than fifteen captains are active, otherwise three".to_string()),
