@@ -737,6 +737,7 @@ fn reply(ok: bool, text: impl Into<String>, data: Value) -> ToolReply {
     }
 }
 
+/// Operator calls are exempt from the captain and owner argument depth cap (`tools::MAX_ARG_DEPTH`).
 pub async fn call(game: &Game, access: &SysopAccess, name: &str, args: &Value) -> ToolReply {
     let args = &crate::tools::coerce_args(&catalog(), name, args);
     macro_rules! p {

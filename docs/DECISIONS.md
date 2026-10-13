@@ -1808,3 +1808,12 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | Read-only connections still open schema 1 without migrating (`READ_COMPATIBLE_FROM`) | The fence changed no table, so `verify`, `export` and reports with the new build keep working on a database the fenced server has not opened yet |
 | A starting server reads `schema_version` and `base` without the writer lock (`af_store::check_takeover`) and exits before asking for the handover when either is newer; an empty store, an older schema and an older engine pass | Asking first would make the running server snapshot and release the lock for a successor that then refuses, leaving the game down until the released server times out and restarts. Ignoring the older-schema case is what lets the first fenced deploy boot at all |
 | Pre-fence builds still ask for the handover before they read the schema | Already deployed code cannot change. The cost is about a minute of downtime until Render restarts the released server, with nothing lost; DEPLOY says roll forward only |
+
+## 2026-10-12: An argument depth cap at intake
+
+| Decision | Reason |
+|---|---|
+| Captain and owner tool calls whose arguments, after `coerce_args`, nest more than 40 levels of objects and arrays (`tools::MAX_ARG_DEPTH`, the arguments object counts as one) are refused with `too_deep` before parsing, so nothing is journaled; operator calls are exempt | Arbitrary JSON (memory data, market claims) reached the journal and the world at any depth the transport parser allowed, and every later replay, snapshot and read walks it. Measuring after coercion also catches a JSON string the schema turns into an array |
+| The depth is counted with an explicit stack (`tools::json_depth`), never by recursion | A deep value must not cost stack depth in the check that exists to bound it |
+| 40 leaves room for a memory export of records holding data 32 deep to re-import (six wrapping levels: arguments, bundle, records, record, versions, version) | Export then import must round-trip whatever the engine bound will accept |
+| This is a mcp-layer guard only. The real limit is the engine bound (32 levels, with byte caps on notes, memory values and claims), which comes with the next engine bump; until then a JSON string in memory `data`, which the engine parses, passes this cap by design | Bounding stored values is a change to what the engine accepts, so it waits for a journaled engine version; the intake cap needs no bump and ships now |

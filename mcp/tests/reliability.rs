@@ -245,3 +245,86 @@ fn server_start_with_adopt_refuses_a_newer_engine_and_writes_nothing() {
     assert_eq!((meta("base"), meta("base_world")), before);
     let _ = std::fs::remove_file(&path);
 }
+
+/// `n` nested containers, alternating objects and arrays, around a scalar.
+fn nest(n: usize) -> Value {
+    let mut v = json!(1);
+    for i in 0..n {
+        v = if i % 2 == 0 { json!({ "k": v }) } else { json!([v]) };
+    }
+    v
+}
+
+fn last_seq(game: &Game) -> Option<u64> {
+    game.journal_tail.lock().unwrap().back().map(|e| e.seq)
+}
+
+#[tokio::test]
+async fn arguments_deeper_than_the_cap_are_refused_before_the_journal() {
+    assert_eq!(tools::json_depth(&json!(1)), 0);
+    assert_eq!(tools::json_depth(&json!({})), 1);
+    assert_eq!(tools::json_depth(&json!({"a": [1, {"b": []}], "c": 2})), 4);
+    assert_eq!(tools::json_depth(&nest(40)), 40);
+    let game = Game::spawn(generate(&GenesisConfig::new(17, 60)), None);
+    let (a, _) = game.register("Deep Thinker", Some("test".into()), PlayerKind::Human).await.unwrap();
+    // The arguments object is one level, so data of 39 levels makes 40 in all.
+    let ok = json!({"action":"save", "key":"deep", "expected_revision":0, "data": nest(39)});
+    assert_eq!(tools::json_depth(&ok), tools::MAX_ARG_DEPTH);
+    let before = last_seq(&game);
+    let reply = tools::call(&game, a, "memory", &ok).await;
+    assert!(reply.ok, "{}", reply.text);
+    assert_ne!(last_seq(&game), before);
+
+    let deep = json!({"action":"save", "key":"deeper", "expected_revision":0, "data": nest(40)});
+    assert_eq!(tools::json_depth(&deep), tools::MAX_ARG_DEPTH + 1);
+    let state = game.read(move |w| serde_json::to_value(&w.players[&a]).unwrap()).await;
+    let before = last_seq(&game);
+    let reply = tools::call(&game, a, "memory", &deep).await;
+    assert!(!reply.ok);
+    assert_eq!(reply.data["error"]["code"], "too_deep");
+    assert_eq!(last_seq(&game), before);
+    assert_eq!(game.read(move |w| serde_json::to_value(&w.players[&a]).unwrap()).await, state);
+
+    // A string the schema reads as an array is coerced first, then measured.
+    let mut sections = json!(["status"]);
+    for _ in 0..40 {
+        sections = json!([sections]);
+    }
+    let coerced = json!({"sections": sections.to_string()});
+    let reply = tools::call(&game, a, "get_briefing", &coerced).await;
+    assert_eq!(reply.data["error"]["code"], "too_deep", "{}", reply.text);
+
+    // The owner connection has the same cap.
+    let before = last_seq(&game);
+    let reply = tools::owner_call(&game, a, "owner_coach", &json!({"text":"hold course", "extra": nest(40)})).await;
+    assert!(!reply.ok);
+    assert_eq!(reply.data["error"]["code"], "too_deep");
+    assert_eq!(last_seq(&game), before);
+    let reply = tools::owner_call(&game, a, "owner_coach", &json!({"text":"hold course", "extra": nest(39)})).await;
+    assert!(reply.ok, "{}", reply.text);
+    assert_ne!(last_seq(&game), before);
+}
+
+#[tokio::test]
+async fn a_memory_export_of_data_32_deep_re_imports() {
+    let game = Game::spawn(generate(&GenesisConfig::new(17, 60)), None);
+    let (a, _) = game
+        .register("Deep Archivist", Some("test".into()), PlayerKind::Human)
+        .await
+        .unwrap();
+    let (b, _) = game.register("Deep Heir", Some("test".into()), PlayerKind::Human).await.unwrap();
+    let data = nest(32);
+    let saved = json!({"action":"save", "key":"lore", "expected_revision":0, "data": data});
+    assert!(tools::call(&game, a, "memory", &saved).await.ok);
+    let export = tools::call(&game, a, "memory", &json!({"action":"export"})).await;
+    assert!(export.ok, "{}", export.text);
+    let bundle = export.data["result"].clone();
+    let import = json!({"action":"import", "data": bundle});
+    // Six wrapping levels (arguments, bundle, records, record, versions, version) around data 32 deep.
+    assert_eq!(tools::json_depth(&import), 32 + 6);
+    let reply = tools::call(&game, b, "memory", &import).await;
+    assert!(reply.ok, "{}", reply.text);
+    let read = tools::call(&game, b, "memory", &json!({"action":"read", "key":"lore"})).await;
+    assert!(read.ok, "{}", read.text);
+    assert_eq!(read.data["result"]["data"], data);
+}
