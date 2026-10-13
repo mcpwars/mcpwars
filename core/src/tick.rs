@@ -9,6 +9,14 @@ use crate::player;
 
 pub fn tick(ctx: &mut Ctx) -> Res<Outcome> {
     ctx.w.tick += 1;
+    // Engine 1.58: languages stored before ids existed get theirs, in creation order.
+    if ctx.w.languages.values().any(|l| l.id == 0) {
+        crate::language::assign_ids(ctx.w);
+    }
+    // Engine 1.58: Chronicle pages stored before contributor lists existed get theirs, once.
+    if ctx.w.chronicle.pages.values().any(|p| p.contributors.is_none()) {
+        crate::chronicle::backfill_contributors(ctx.w);
+    }
     crate::memory::expire(ctx.w);
     let t = ctx.w.tick;
     let rules = ctx.w.rules.clone();
@@ -46,6 +54,9 @@ pub fn tick(ctx: &mut Ctx) -> Res<Outcome> {
     crate::constitution::tick(ctx);
     crate::government::tick(ctx);
     crate::founding::pay_grants(ctx);
+    if rules.language_retire_days > 0 && t.is_multiple_of(player::ticks_per_day(&rules).max(1) as u64) {
+        crate::language::auto_retire(ctx);
+    }
 
     if t.is_multiple_of(1_440) {
         // Deployed fighters need upkeep: 1% desert each day.

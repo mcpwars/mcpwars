@@ -89,6 +89,16 @@ pub struct Outcome {
     pub events: Vec<Event>,
 }
 
+/// The engine 1.58 notice fields `Ctx::notify_with` sets beyond the kind and server text.
+#[derive(Clone, Debug, Default)]
+pub struct NoticeExtra {
+    /// Player-written words, shown only as untrusted player text.
+    pub quote: Option<String>,
+    pub about: Option<crate::mention::Place>,
+    pub mention: Option<crate::mention::MentionRef>,
+    pub fold: Option<Fold>,
+}
+
 /// Mutable execution context threaded through command handlers.
 pub struct Ctx<'a> {
     pub w: &'a mut World,
@@ -145,22 +155,89 @@ impl<'a> Ctx<'a> {
 
     /// Push a private notice into a player's inbox.
     pub fn notify(&mut self, pid: PlayerId, kind: &str, text: impl Into<String>) {
+        self.notify_with(pid, kind, text, NoticeExtra::default());
+    }
+
+    /// Push a notice with the engine 1.58 fields (a quote, what it is about, a mention mark, a
+    /// fold). Returns the new notice id, or None for an NPC or an unknown player.
+    pub fn notify_with(&mut self, pid: PlayerId, kind: &str, text: impl Into<String>, extra: NoticeExtra) -> Option<u64> {
         let tick = self.w.tick;
-        if let Some(p) = self.w.players.get_mut(&pid) {
-            if p.kind == PlayerKind::Npc {
-                return;
-            }
-            let id = p.next_notice;
-            p.next_notice += 1;
-            p.inbox.push(Notice {
-                id,
-                tick,
-                at_ms: self.w.now_ms,
-                kind: kind.into(),
-                text: text.into(),
-                read: false,
-            });
+        let at_ms = self.w.now_ms;
+        let p = self.w.players.get_mut(&pid)?;
+        if p.kind == PlayerKind::Npc {
+            return None;
         }
+        let id = p.next_notice;
+        p.next_notice += 1;
+        p.inbox.push(Notice {
+            id,
+            tick,
+            at_ms,
+            kind: kind.into(),
+            text: text.into(),
+            read: false,
+            quote: extra.quote,
+            about: extra.about,
+            mention: extra.mention,
+            fold: extra.fold,
+            superseded_by: None,
+            struck_quote: None,
+        });
+        Some(id)
+    }
+
+    /// Push a folding notice (engine 1.58): when the captain still has an unread notice of the
+    /// same kind and fold key, the new notice carries the merged range and the old one is marked
+    /// read and points at it. The new notice always has a new id, so waiters wake and a late read
+    /// receipt for the old id never marks unseen content read.
+    pub fn notify_fold(
+        &mut self,
+        pid: PlayerId,
+        kind: &str,
+        fold: Fold,
+        text_of: impl Fn(&World, &Fold) -> String,
+        quote: Option<String>,
+        about: Option<crate::mention::Place>,
+    ) -> Option<u64> {
+        // Read phase: find the newest unread notice of the same key and merge.
+        let (old, merged) = {
+            let w: &World = self.w;
+            let p = w.players.get(&pid)?;
+            let found = p
+                .inbox
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, n)| !n.read && n.kind == kind && n.fold.as_ref().map(Fold::key) == Some(fold.key()));
+            match found {
+                Some((i, n)) => {
+                    let mut m = n.fold.clone().expect("matched a fold");
+                    m.merge(&fold);
+                    (Some(i), m)
+                }
+                None => (None, fold),
+            }
+        };
+        let text = text_of(self.w, &merged);
+        // Write phase.
+        let new_id = self.notify_with(
+            pid,
+            kind,
+            text,
+            NoticeExtra {
+                quote,
+                about,
+                mention: None,
+                fold: Some(merged),
+            },
+        )?;
+        if let Some(i) = old
+            && let Some(n) = self.w.players.get_mut(&pid).and_then(|p| p.inbox.get_mut(i))
+        {
+            n.read = true;
+            n.superseded_by = Some(new_id);
+        }
+        Some(new_id)
     }
 
     pub fn player(&self, pid: PlayerId) -> Res<&Player> {
@@ -278,6 +355,11 @@ fn apply_inner(w: &mut World, e: &Entry) -> Res<Outcome> {
             if let Command::Improve(a) = cmd {
                 return crate::improve::write(&mut ctx, pid, a);
             }
+            // Muting mentions is about the captain's own inbox: it works during an intermission
+            // and is not logged to the captain's human.
+            if let Command::Mentions(a) = cmd {
+                return crate::mention::write(&mut ctx, pid, a);
+            }
             if ctx.w.season.finished {
                 return Err(
                     Refusal::new("season_over", "The season has ended. Final standings are on the leaderboard.")
@@ -365,7 +447,8 @@ fn dispatch(ctx: &mut Ctx, pid: PlayerId, cmd: &Command) -> Res<Outcome> {
         | Command::Owner(_)
         | Command::Recover(_)
         | Command::Feedback(_)
-        | Command::Improve(_) => {
+        | Command::Improve(_)
+        | Command::Mentions(_) => {
             unreachable!()
         }
     };

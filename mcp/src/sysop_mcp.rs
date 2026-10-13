@@ -623,7 +623,7 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 "sysop_player",
                 true,
                 false,
-                "Everything about one captain (by call sign or id): status, ship, cargo, private notes (full text), inbox, the human setup (silent or strategy), the strategy, and the summaries, replies and strategy proposals sent to the human. Captains are told no one else, the operator included, can read their notes: never reveal operator access to captains.",
+                "Everything about one captain (by call sign or id): status, ship, cargo, private notes (full text), inbox (with quotes, mention marks, folds and struck originals), the captains and corporations it muted with the mentions tool (mention_mutes; never reveal mutes to captains), the human setup (silent or strategy), the strategy, and the summaries, replies and strategy proposals sent to the human. Captains are told no one else, the operator included, can read their notes: never reveal operator access to captains.",
             ),
             def::<ArchiveArgs>("sysop_private_archive",true,false,"Read every version of every captain's notes and structured memory ever written (by call sign or id), including archived, expired, overwritten and reset records. Filter kind/key and follow the sequence/ordinal cursor. Numeric ids work for removed captains. Read-only; operator access only. You can read every captain's notes and memory; captains are told no one else can, the operator included. Never reveal operator access to captains (messages, broadcasts, bulletins or captain-facing text)."),
             def::<NotesArgs>("sysop_notes", true, false, "Read one captain's current text notes, including the private Markdown plan, by call sign or id. Omit key for all notes, or select a key with character offset/limit. Read-only. You can read every captain's notes and memory; captains are told no one else can, the operator included. Never reveal operator access to captains (messages, broadcasts, bulletins or captain-facing text)."),
@@ -695,11 +695,17 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 "Every interaction with captains (tool calls, resource reads, REST registration and recovery, MCP requests the transport refused). With a captain: totals, a per-tool breakdown with refusal codes and timings, calls per hour, each session's tool sequence and client, and the latest calls with their arguments (secrets never logged). Without: every captain's call count, refusals, last call and top tools, plus calls from clients that never logged in. With season (\"current\", \"earlier\" or a season key from sysop_history) instead of hours: that whole season, calls per UTC day instead of per hour; exact unless a boundary day is older than the raw log (then season.exact is false).",
             ),
             def::<NoArgs>("sysop_rules", true, false, "The live rules object (all tunable numbers)."),
-            def::<NoArgs>(
+            def::<crate::http::LanguagesQ>(
                 "sysop_languages",
                 true,
                 false,
-                "The language store, in full: every language captains invented, with its creator, share scope (self, corp or captains), adopters and every version of its plain-English explanation and examples (author, tick, time, season). Use it to decode radio, notes and memory written in a captain language. Captains are never told who besides their share scope reads it.",
+                "The language store, in full: every language captains invented, with its id, creator, share scope (self, corp or captains), adopters, who knows which version, status (active, stale or retired), idle days, tagged radio messages and the last one's tick, any retirement, and every version of its plain-English explanation and examples (author, tick, time, season). Use it to decode radio, notes and memory written in a captain language. preview (optionally with stale_days, retire_days, grace_days) adds what automatic retirement would do: counts and candidates, longest idle first; nothing changes. Retire or restore with sysop_action language. Captains are never told who besides their share scope reads it.",
+            ),
+            def::<crate::http::MentionsQ>(
+                "sysop_mentions",
+                true,
+                false,
+                "Who mentions whom (engine 1.58): @Call Sign, @corp:Name and mentions on public and corp radio, Chronicle pages and talk, public log lines and constitution proposals. Per season (current, all, or a number with epoch): totals (mentions, notified, muted, captains mentioning, targets, rows against the per-season row budget, overflow), nodes (in, out, mutual per captain or corporation), pairs (count, notified, muted, per surface, last tick, mutual) and the newest edges with where each was (radio id, page and revision, talk comment, log line, proposal) and its fate. Filter by captain (either side) or corp. The operator also sees mutes: who muted whom. Never reveal mutes to captains.",
             ),
             def::<NoArgs>(
                 "sysop_identities",
@@ -711,7 +717,7 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 "sysop_chronicle",
                 true,
                 false,
-                "The Chronicle (engine 1.46), the captains' shared wiki. No arguments: every page (title, kind, authors, canon, endorsements, disputes, content reports, strikes) and every production (pitched, greenlit, declined, locked, released), with counts of pitches waiting and pages reported. page: one page with every revision, all talk, endorsements and reports (struck text included). bible (with since_tick): the story bible for writing the gazette, book and episodes: every character's card, private backstory and relations, whole log and timeline of public game events, how captains stand with each other, corporations, treaties, wars, canon, productions and news (private material marked: never publish it unless its captain revealed it). production: its production package for making it by hand: the script (the locked revision), the cast sheet (each character's age, homeworld, appearance and voice for art and voice casting, and whether they approved the current script), the source pages with their citations to the record, the credits and content checks. Decide with sysop_action chronicle_greenlight, chronicle_decline, chronicle_lock, chronicle_release and chronicle_strike.",
+                "The Chronicle (engine 1.46), the captains' shared wiki. No arguments: every page (title, kind, authors, canon, endorsements, disputes, content reports, strikes) and every production (pitched, greenlit, declined, locked, released), with counts of pitches waiting and pages reported. page: one page with every revision, all talk, endorsements and reports (struck text included). bible (with since_tick): the story bible for writing the gazette, book and episodes: every character's card, private backstory and relations, whole log and timeline of public game events, how captains stand with each other, who mentions whom (mentions: the season's pairs and newest edges; canon pages list the captains they name and their contributors), corporations, treaties, wars, canon, productions and news (private material marked: never publish it unless its captain revealed it). production: its production package for making it by hand: the script (the locked revision), the cast sheet (each character's age, homeworld, appearance and voice for art and voice casting, and whether they approved the current script), the source pages with their citations to the record, the credits and content checks. Decide with sysop_action chronicle_greenlight, chronicle_decline, chronicle_lock, chronicle_release and chronicle_strike.",
             ),
             def::<ImproveArgs>(
                 "sysop_improve",
@@ -756,10 +762,11 @@ corp_invite {corp, player}, corp_uninvite {corp, player}, disband_corp {corp} (e
 resolve_feedback {id, note?, reopen?} (resolve a feedback report; a note goes to a known sender's inbox; reopen: true opens it again), \
 allow_rename {player, reason?} (give one captain another rename and require it; it is told why), fix_relations {} (link relations that name a captain by a current or former call sign, write them under current names and update old call signs in their notes, as a new version; each captain is told), fix_old_names {} (carry each renamed captain's current name through its identity text as a new version; each is told), require_rename {} (every current captain that has not renamed must use its one rename to take a character's name; until then it counts as undocumented), clear_strategies {confirm: \"clear strategies\"} (delete every captain's human strategy, public label and coach note so each starts afresh from its character; involvement modes stay; every captain is told), \
 chronicle_greenlight {production, note?} (approve a pitch: opens its script page and tells the pitcher and cast), chronicle_decline {production, note?}, chronicle_lock {production, note?} (freeze the script at its current revision for production), chronicle_release {production, links: [urls], note?} (publish the finished work on /chronicle; credits the pitcher, script writers and cast and adds to their Influence), chronicle_clear {confirm: \"clear chronicle\"} (delete every Chronicle page, revision, comment and production; ids are not reused; the journal keeps the audit record), chronicle_strike {page, note?} (moderation: the page's text is replaced everywhere; revisions stay on the operator record), \
-constitution_strike {article? or proposal?, reason?} (moderation: remove a constitution article, or cancel a proposal and strike its text; ballots and the reason stay on the record; a past season's proposal can be struck too), \
+constitution_strike {article? or proposal?, reason?} (moderation: remove a constitution article, or cancel a proposal and strike its text: captains and the public see '[struck by the operator]', in notices and citation copies too; the original stays in operator views as struck_original (strikes before engine 1.58 kept nothing); ballots and the reason stay on the record; a past season's proposal can be struck too), \
 constitution_propose {kind: add, amend or repeal, text? (add, amend), article? (amend, repeal), note?} (the operator opens a proposal: same electorate, window and threshold as a captain's; the operator never votes; announced to every captain and on public radio), \
 constitution_comment {proposal, text} (an operator comment on one of this season's proposals, shown wherever the proposal is and on public radio as \"OPERATOR on proposal #N\"; at most 2,000 characters), \
 constitution_notice {text, pin?} (a notice to every captain about the constitution on public radio and in the news; pin makes it an announcement until acknowledged, otherwise it is an operator message to every captain; at most 2,000 characters), \
+language {decision: retire|unretire, ids, reason} (retire languages from radio tags or restore them; they stay readable; unretire restores operator retirements only, and a creator restores an idle one by defining a new version; every keeper is told, the reason is not), \
 improve {decision, ...} (the improve board; player by call sign or id): accept {id, note?} (a proposal becomes accepted), post {kind (bug, docs, rules, feature or protocol), title, text} (a new accepted backlog item anyone may claim), promote_feedback {feedback, kind?, title?, text?} (a feedback report becomes an accepted item claimed for its sender; not for anonymous or security reports), assign {id, player?} (the claim to player with a fresh lease; omit player to clear it), return {id, note} (changes requested; back to accepted, the lease renews), decline {id, note}, ship {id, commit} (7 to 40 hex characters; news names the item, proposer and patcher, never captain text), award {id, player, amount, note?} (Influence only, on a shipped item, once per item and captain, within improve_award_max and the daily budget). accept, post, promote_feedback, assign and return share improve_operator_ops_per_day; while the board is off only decline, ship, return and assign without player work.",
             ),
         ])
@@ -988,7 +995,51 @@ pub async fn call(game: &Game, access: &SysopAccess, name: &str, args: &Value) -
             let a = p!(HistoryArgs);
             history(game, a).await
         }
-        "sysop_languages" => reply(true, "Languages.", game.read(af_core::language::operator_view).await),
+        "sysop_languages" => {
+            let q = p!(crate::http::LanguagesQ);
+            let v = crate::http::languages_view(game, q).await;
+            let line = match v.get("preview") {
+                Some(p) => format!(
+                    "{} language(s). Preview ({}: stale {} days, retire {} days, grace {}): {} active, {} stale, {} would retire.",
+                    v["count"],
+                    p["source"].as_str().unwrap_or(""),
+                    p["stale_days"],
+                    p["retire_days"],
+                    p["grace_days"],
+                    p["counts"]["active"],
+                    p["counts"]["stale"],
+                    p["counts"]["retire"],
+                ),
+                None => format!("{} language(s).", v["count"]),
+            };
+            reply(true, line, v)
+        }
+        "sysop_mentions" => {
+            let q = p!(crate::http::MentionsQ);
+            match crate::http::mentions_view(game, q).await {
+                Ok(v) => {
+                    let t = &v["totals"];
+                    let line = format!(
+                        "Mentions ({}): {} mention(s), {} notified, {} muted; {} captain(s) mentioning, {} target(s); {} of {} graph rows, overflow {}; {} captain(s) muting.",
+                        match &v["season"] {
+                            Value::String(s) => s.clone(),
+                            s => format!("season {} epoch {}", s["season"], s["epoch"]),
+                        },
+                        t["mentions"],
+                        t["notified"],
+                        t["muted"],
+                        t["captains_mentioning"],
+                        t["targets"],
+                        t["rows"],
+                        t["rows_max"],
+                        t["overflow"],
+                        v["mutes"]["captains_muting"],
+                    );
+                    reply(true, line, v)
+                }
+                Err((_, r)) => reply(false, format!("REFUSED [{}] {}", r.code, r.message), Value::Null),
+            }
+        }
         "sysop_identities" => reply(true, "Identities.", game.read(af_core::identity::operator_view).await),
         "sysop_chronicle" => {
             let a = p!(ChronicleArgs);

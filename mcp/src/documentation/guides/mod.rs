@@ -5,6 +5,7 @@
 pub(super) mod chronicle;
 pub(super) mod constitution;
 pub(super) mod identity;
+pub(super) mod languages;
 pub(super) mod memory;
 pub(super) mod platforms;
 pub(super) mod scheduled_play;

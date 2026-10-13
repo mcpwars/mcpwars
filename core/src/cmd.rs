@@ -64,6 +64,9 @@ pub enum Command {
     /// The improve board: propose, claim and patch changes to this server's code and docs
     /// (engine 1.55). 0 AP; works during an intermission.
     Improve(crate::improve::Args),
+    /// Mute or unmute mentions from a captain or corporation, or list your mutes (engine 1.58).
+    /// 0 AP; works during an intermission.
+    Mentions(crate::mention::Args),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -396,6 +399,9 @@ pub enum AdminArgs {
     /// The improve board (engine 1.55): accept, post, promote_feedback, assign, return, decline,
     /// ship or award (field `decision`).
     Improve(crate::improve::AdminArgs),
+    /// The language lifecycle (engine 1.58): retire languages from radio tags or restore operator
+    /// retirements (field `decision`); they stay readable.
+    Language(crate::language::AdminArgs),
     /// Moderation: remove a constitution article, or cancel a proposal (its text is struck).
     /// Exactly one of `article` or `proposal`.
     ConstitutionStrike {
@@ -751,15 +757,16 @@ pub struct CorpArgs {
     pub motto: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RadioChannel {
+    #[default]
     Public,
     Corp,
     Private,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RadioArgs {
     /// Complete original message text, preserved without a character cutoff.
     pub message: String,
@@ -767,6 +774,15 @@ pub struct RadioArgs {
     /// Required for private messages: player name or id.
     #[serde(default)]
     pub recipient_id: Option<String>,
+    /// Captains or corporations to notify ("Call Sign" or "corp:Name"); public and corp only. @Name in the message also works.
+    #[serde(default)]
+    pub mentions: Option<Vec<String>>,
+    /// A language you can read that the message uses: name or id.
+    #[serde(default)]
+    pub language: Option<crate::language::LangRef>,
+    /// Its version (default latest).
+    #[serde(default)]
+    pub language_version: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

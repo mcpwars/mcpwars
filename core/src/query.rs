@@ -94,7 +94,7 @@ pub struct InboxArgs {
     /// Radio sender's call sign or id.
     #[serde(default)]
     pub sender: Option<String>,
-    /// Notice kind (excludes radio).
+    /// Notice kind (excludes radio); "mention" also matches notices that mention you.
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
@@ -369,6 +369,7 @@ pub fn status(w: &World, pid: PlayerId) -> Res<Value> {
         "sectors_charted": p.knowledge.len(), "sectors_explored": p.stats.sectors_explored,
         "bounty_on_you": w.bounties.get(&pid).map(|b| b.amount),
         "unread_notices": unread, "unread_radio": radio_unread,
+        "unread_mentions": crate::mention::unread(p),
         "unread_hails": p.inbox.iter().filter(|n| !n.read && n.kind == "hail").count(),
         "career": {"seasons_played": p.seasons_played, "best_finish": p.best_finish, "trades": p.career.trades, "trade_profit": p.career.trade_profit, "kills": p.career.kills},
         "stats": {"trades": p.stats.trades, "trade_profit": p.stats.trade_profit, "kills": p.stats.kills, "deaths": p.stats.deaths,
@@ -379,14 +380,20 @@ pub fn status(w: &World, pid: PlayerId) -> Res<Value> {
 
 /// One-call wake-up: status digest, current sector, unread notices, corp, hints.
 pub fn briefing(w: &World, pid: PlayerId) -> Res<Value> {
+    briefing_full(w, pid, false)
+}
+
+/// The briefing; `compact` keeps sections that are costly to build to their short forms.
+fn briefing_full(w: &World, pid: PlayerId, compact: bool) -> Res<Value> {
     let p = player_or(w, pid)?;
+    // Pure mention notices leave the preview: comms.mentions counts them (riders stay).
     let notices: Vec<Value> = p
         .inbox
         .iter()
-        .filter(|n| !n.read)
+        .filter(|n| !n.read && n.kind != "mention")
         .rev()
         .take(10)
-        .map(|n| json!({"id": n.id, "tick": n.tick, "kind": n.kind, "text": n.text}))
+        .map(|n| notice_row(w, n, json!({"id": n.id, "tick": n.tick, "kind": n.kind, "text": n.text})))
         .collect();
     let st = status(w, pid)?;
     let radio: Vec<&RadioMsg> = visible_radio(w, pid).filter(|m| radio_is_unread(p, m) && m.from != pid).collect();
@@ -395,7 +402,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Res<Value> {
         .rev()
         .take(8)
         .rev()
-        .map(|m| json!({"id": m.id, "tick": m.tick, "from": m.from_name, "channel": channel_name(&m.channel), "from_operator": m.from == SYSOP && m.from_name == crate::social::OPERATOR_NAME, "message": crate::social::radio_text(m)}))
+        .map(|m| radio_extras(w, pid, m, json!({"id": m.id, "tick": m.tick, "from": m.from_name, "channel": channel_name(&m.channel), "from_operator": m.from == SYSOP && m.from_name == crate::social::OPERATOR_NAME, "message": crate::social::radio_text(m)})))
         .collect();
     let mut v = json!({
         "status": {
@@ -417,6 +424,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Res<Value> {
         "inbox_continuation": {
             "tool": "read_inbox", "arguments": {},
             "unread_notices_total": p.inbox.iter().filter(|n| !n.read).count(),
+            "unread_mentions_total": crate::mention::unread(p),
             "unread_radio_total": visible_radio(w, pid).filter(|m| radio_is_unread(p, m) && m.from != pid).count(),
             "note": "Briefing lists are previews. Read complete pages through read_inbox; follow continuation.next_arguments until has_more is false. Only returned messages are marked read."
         },
@@ -426,7 +434,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Res<Value> {
         "federation_rewards": st["federation_rewards"],
         "comms": comms_view(w, p),
         "identity": crate::identity::briefing(w, pid),
-        "chronicle": crate::chronicle::briefing(w, pid),
+        "chronicle": crate::chronicle::briefing(w, pid, compact),
     });
     if let Some(c) = crate::constitution::briefing(w, pid) {
         v["constitution"] = c;
@@ -439,7 +447,7 @@ pub fn briefing(w: &World, pid: PlayerId) -> Res<Value> {
 }
 
 pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
-    let mut v = briefing(w, pid)?;
+    let mut v = briefing_full(w, pid, a.compact)?;
     let mut omitted = vec![];
     let o = v.as_object_mut().unwrap();
     // Optional top-level briefing keys. Keep the list complete even for keys that appear only
@@ -482,7 +490,7 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
             o.insert("ap_advice".into(), ap_advice(w, p, true));
         }
         if let Some(comms) = o.get_mut("comms").and_then(Value::as_object_mut) {
-            comms.retain(|k, _| ["nudge", "new_captains", "welcome", "languages"].contains(&k.as_str()));
+            comms.retain(|k, _| ["nudge", "new_captains", "welcome", "languages", "mentions"].contains(&k.as_str()));
             comms.insert(
                 "complete".into(),
                 json!({"tool": "get_briefing", "arguments": {"sections": ["comms"]}}),
@@ -502,6 +510,10 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
                     if let Some(row) = row.as_object_mut() {
                         row.remove("text");
                         row.remove("message");
+                        row.remove("quote");
+                        if let Some(fold) = row.get_mut("fold").and_then(Value::as_object_mut) {
+                            fold.remove("by");
+                        }
                     }
                 }
             }
@@ -584,7 +596,10 @@ pub fn changes(w: &World, pid: PlayerId, a: &ChangesArgs) -> Res<Value> {
     let observation_end = observations.len().min(limit);
     let more_observations = observations.len() > observation_end;
     let end = radio.len().min(limit);
-    let messages: Vec<Value> = radio[..end].iter().map(|m| json!({"id": m.id, "tick": m.tick, "from": m.from_name, "channel": channel_name(&m.channel), "message": crate::social::radio_text(m)})).collect();
+    let messages: Vec<Value> = radio[..end]
+        .iter()
+        .map(|m| radio_extras(w, pid, m, json!({"id": m.id, "tick": m.tick, "from": m.from_name, "channel": channel_name(&m.channel), "message": crate::social::radio_text(m)})))
+        .collect();
     let mut next = serde_json::to_value(a).unwrap();
     next["through_tick"] = json!(through);
     next["after_sector"] = observations[..observation_end]
@@ -718,8 +733,31 @@ fn comms_view(w: &World, p: &Player) -> Value {
         "captains": others,
     });
     let languages = crate::language::mine(w, p.id);
-    if !languages.is_empty() {
+    let unfamiliar = unfamiliar_languages(w, p);
+    if !languages.is_empty() || !unfamiliar.is_empty() {
         v["languages"] = json!({"yours": languages, "read": "If you cannot read something, call language action=read name=<name>."});
+        if !unfamiliar.is_empty() {
+            v["languages"]["unfamiliar"] = json!({
+                "note": "Unread messages use language versions you do not know. language action=read id=<id>; language action=adopt id=<id> marks the latest version known.",
+                "languages": unfamiliar,
+            });
+        }
+    }
+    let mentions = crate::mention::unread(p);
+    if mentions > 0 {
+        let latest = p
+            .inbox
+            .iter()
+            .filter(|n| !n.read && (n.kind == "mention" || n.mention.is_some()))
+            .max_by_key(|n| n.id);
+        let latest = latest.and_then(|n| {
+            let from = crate::mention::captain_name(w, n.mention.as_ref()?.from);
+            Some(match &n.about {
+                Some(place) => format!("{from} on {}", place.label()),
+                None => from,
+            })
+        });
+        v["mentions"] = json!({"unread": mentions, "latest": latest, "read": "read_inbox kind=mention"});
     }
     if !new.is_empty() {
         v["new_captains"] = json!(new);
@@ -879,9 +917,18 @@ pub fn hints(w: &World, pid: PlayerId, briefing: bool) -> Vec<String> {
     } else if p.ship.cargo_used() > 0 {
         h.push("Carrying cargo: list_ports(side=buys) shows charted ports that will buy it.".into());
     }
-    let unread = p.inbox.iter().filter(|n| !n.read).count();
+    // Mention notices are counted apart: they never crowd out the notices that need action.
+    let unread = p.inbox.iter().filter(|n| !n.read && n.kind != "mention").count();
+    let mentions = crate::mention::unread(p);
     if unread > 0 {
-        h.push(format!("{unread} unread notice(s): read_inbox."));
+        let extra = if mentions > 0 {
+            format!(" ({mentions} mention(s))")
+        } else {
+            String::new()
+        };
+        h.push(format!("{unread} unread notice(s): read_inbox{extra}."));
+    } else if mentions > 0 {
+        h.push(format!("{mentions} unread mention(s): read_inbox kind=mention."));
     }
     if briefing && p.knowledge.values().filter(|k| k.port.is_some()).count() < 4 {
         h.push("Few ports charted yet: explore adjacent sectors (warp) or launch ether probes to map trade lanes.".into());
@@ -1116,6 +1163,127 @@ pub fn list_ports(w: &World, pid: PlayerId, a: &ListPortsArgs) -> Res<Value> {
     Ok(json!({"ports": rows.into_iter().take(limit).map(|r| r.1).collect::<Vec<_>>(), "total_matching": total}))
 }
 
+/// Engine 1.58 keys on a notice row: the player words it carries (untrusted), who mentioned the
+/// captain and where, a folded range and the notice that superseded it. `struck_quote` never
+/// reaches a captain.
+fn notice_row(w: &World, n: &Notice, mut row: Value) -> Value {
+    if let Some(q) = &n.quote {
+        row["quote"] = untrusted(q);
+    }
+    if let Some(m) = &n.mention {
+        row["mention"] = json!({
+            "from": crate::mention::captain_name(w, m.from),
+            "via_corp": m.via_corp.as_ref().map(|c| crate::mention::corp_name(w, c.id, Some(&c.name))),
+            "where": n.about.as_ref().map(place_json),
+        });
+    }
+    if let Some(f) = &n.fold {
+        let mut v = serde_json::to_value(f).unwrap_or(Value::Null);
+        let by = match f {
+            Fold::Language { by, .. } | Fold::PageRevised { by, .. } | Fold::Talk { by, .. } => by,
+        };
+        v["by"] = json!(by.iter().map(|p| crate::mention::captain_name(w, *p)).collect::<Vec<_>>());
+        row["fold"] = v;
+    }
+    if let Some(s) = n.superseded_by {
+        row["superseded_by"] = json!(s);
+    }
+    row
+}
+
+/// A place as captains read it: its ids and a short label.
+fn place_json(p: &crate::mention::Place) -> Value {
+    let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
+    v["label"] = json!(p.label());
+    v
+}
+
+/// Engine 1.58 keys on a radio row: who the message mentions (current names), whether that
+/// includes the reader or its corporation, and the language tag (its name only for a reader who
+/// can read the language).
+fn radio_extras(w: &World, pid: PlayerId, m: &RadioMsg, mut row: Value) -> Value {
+    if !m.mentions.is_empty() {
+        row["mentions"] = json!(m.mentions.names(w));
+        let corp = w.players.get(&pid).and_then(|p| p.corp);
+        let you =
+            m.mentions.hits(crate::mention::Target::Captain(pid)) || corp.is_some_and(|c| m.mentions.hits(crate::mention::Target::Corp(c)));
+        if you {
+            row["mentions_you"] = json!(true);
+        }
+    }
+    if let Some(t) = &m.language {
+        let lang = crate::language::by_ref(w, &crate::language::LangRef::Id(t.id))
+            .map(|(_, l)| l)
+            .filter(|l| crate::language::can_read(w, l, pid));
+        row["language"] = match lang {
+            Some(l) => json!({"id": t.id, "name": untrusted(&l.name), "version": t.version, "you_can_read": true}),
+            None => json!({"id": t.id, "version": t.version, "you_can_read": false}),
+        };
+    }
+    row
+}
+
+/// Unread radio from others tagged with a language version the captain does not know (or a
+/// language it cannot read): up to three languages, newest first. Retired languages are skipped.
+fn unfamiliar_languages(w: &World, p: &Player) -> Vec<Value> {
+    struct Group {
+        status: &'static str,
+        version: u32,
+        messages: usize,
+        latest: u64,
+        latest_from: PlayerId,
+    }
+    let by_id: BTreeMap<u64, &crate::language::Language> = w.languages.iter().map(|(k, l)| (crate::language::id_of(w, k), l)).collect();
+    let mut groups: BTreeMap<u64, Group> = BTreeMap::new();
+    for m in visible_radio(w, p.id).filter(|m| m.from != p.id && radio_is_unread(p, m)) {
+        let Some(tag) = m.language else { continue };
+        let Some(l) = by_id.get(&tag.id) else { continue };
+        if l.retired.is_some() {
+            continue;
+        }
+        let status = if !crate::language::can_read(w, l, p.id) {
+            "not_shared"
+        } else if crate::language::known(l, p.id) < tag.version {
+            "unfamiliar"
+        } else {
+            continue;
+        };
+        let g = groups.entry(tag.id).or_insert(Group {
+            status,
+            version: 0,
+            messages: 0,
+            latest: 0,
+            latest_from: m.from,
+        });
+        g.version = g.version.max(tag.version);
+        g.messages += 1;
+        if m.id >= g.latest {
+            g.latest = m.id;
+            g.latest_from = m.from;
+        }
+    }
+    let mut rows: Vec<(u64, u64, &Group)> = groups.iter().map(|(id, g)| (g.latest, *id, g)).collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    rows.into_iter()
+        .take(3)
+        .map(|(_, id, g)| {
+            let mut v = json!({
+                "id": id,
+                "version": g.version,
+                "messages": g.messages,
+                "latest_from": crate::mention::captain_name(w, g.latest_from),
+                "status": g.status,
+            });
+            if g.status != "not_shared"
+                && let Some(l) = by_id.get(&id)
+            {
+                v["name"] = untrusted(&l.name);
+            }
+            v
+        })
+        .collect()
+}
+
 pub fn visible_radio(w: &World, pid: PlayerId) -> impl Iterator<Item = &RadioMsg> {
     let corp = w.players.get(&pid).and_then(|p| p.corp);
     w.radio.iter().filter(move |m| match &m.channel {
@@ -1149,7 +1317,11 @@ pub fn inbox(w: &World, pid: PlayerId, a: &InboxArgs) -> Res<(Value, u64, u64)> 
         .filter(|n| a.include_read || !n.read)
         .filter(|n| n.id > a.after_notice_id.unwrap_or(0))
         .filter(|n| a.since_tick.is_none_or(|t| n.tick > t))
-        .filter(|n| a.kind.as_ref().is_none_or(|k| &n.kind == k))
+        .filter(|n| {
+            a.kind
+                .as_ref()
+                .is_none_or(|k| &n.kind == k || (k == "mention" && n.mention.is_some()))
+        })
         .filter(|_| a.channel.is_none() && a.sender.is_none())
         .collect();
     let notices: Vec<&Notice> = eligible_notices.iter().take(limit).copied().collect();
@@ -1185,11 +1357,11 @@ pub fn inbox(w: &World, pid: PlayerId, a: &InboxArgs) -> Res<(Value, u64, u64)> 
         next
     });
     let mut view = json!({
-        "notices": notices.iter().map(|n| json!({"id": n.id, "tick": n.tick, "at_ms": n.at_ms, "kind": n.kind, "text": n.text, "read": n.read})).collect::<Vec<_>>(),
-        "radio": msgs.iter().map(|m| json!({
+        "notices": notices.iter().map(|n| notice_row(w, n, json!({"id": n.id, "tick": n.tick, "at_ms": n.at_ms, "kind": n.kind, "text": n.text, "read": n.read}))).collect::<Vec<_>>(),
+        "radio": msgs.iter().map(|m| radio_extras(w, pid, m, json!({
             "id": m.id, "tick": m.tick, "at_ms": m.at_ms, "from": m.from_name,
             "channel": channel_name(&m.channel), "from_operator": m.from == SYSOP && m.from_name == crate::social::OPERATOR_NAME, "message": crate::social::radio_text(m),
-        })).collect::<Vec<_>>(),
+        }))).collect::<Vec<_>>(),
         "read_receipt": {
             "notice_ids": notices.iter().map(|n| n.id).collect::<Vec<_>>(),
             "radio_ids": msgs.iter().map(|m| m.id).collect::<Vec<_>>(),
@@ -1223,6 +1395,7 @@ pub fn inbox(w: &World, pid: PlayerId, a: &InboxArgs) -> Res<(Value, u64, u64)> 
             for item in view[key].as_array_mut().unwrap() {
                 item.as_object_mut().unwrap().remove("text");
                 item.as_object_mut().unwrap().remove("message");
+                item.as_object_mut().unwrap().remove("quote");
             }
         }
         view["delivery"] = json!(
@@ -1507,6 +1680,8 @@ pub fn game_info(w: &World) -> Value {
                       "depot_markup_bp": r.territory_depot_markup_bp},
         "founding_era": crate::founding::rules_view(w),
         "improve": crate::improve::rules_view(w),
+        "mentions": crate::mention::rules_view(w),
+        "languages": crate::language::rules_view(w),
         "geography": {"fedspace": format!("sectors 1-{}: no combat, no deployments", r.fedspace_sectors), "stardock_sector": r.stardock_sector,
                       "colonists": "bought at Stardock (sector 1), 25 per hold"},
         "economy": {"commodities": ["fuel_ore", "organics", "equipment"], "base_prices": r.base_price,

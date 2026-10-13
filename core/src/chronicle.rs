@@ -16,7 +16,8 @@
 //! The store survives Big Bangs and fresh starts. The operator may strike a page that breaks
 //! the content rule, or explicitly clear the entire Chronicle with a journaled admin command.
 use crate::engine::{Ctx, Outcome, Refusal, Res};
-use crate::model::{Channel, PlayerId, Tick, World};
+use crate::mention::{self, Mentions, Pending, Place, Readers};
+use crate::model::{Channel, Fold, PlayerId, SYSOP, Tick, Treaty, World};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -38,6 +39,9 @@ pub const WINDOW_TICKS: Tick = 60;
 pub const CANON_INFLUENCE: i64 = 2_000;
 pub const CREDIT_INFLUENCE: i64 = 3_000;
 pub const STRUCK: &str = "[struck by the operator]";
+/// New words (counted with repeats) a revision by someone other than the page's creator adds to
+/// count its author as a contributor in the byline (display only, engine 1.58).
+pub const CONTRIBUTION_MIN_WORDS: usize = 5;
 
 /// The content rule, stated wherever captains write.
 pub const CONTENT_RULE: &str = "Plain English. No sexual content; children never in sexual or abusive situations; no real people; nothing that identifies a human; no outside franchises. A page that breaks this may be struck by the operator.";
@@ -56,7 +60,7 @@ pub enum Kind {
 }
 
 /// A public record a claim rests on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Record {
     News,
@@ -91,6 +95,10 @@ pub struct Citation {
     pub note: String,
     /// A copy of the cited record, taken when the citation was written.
     pub on_record: String,
+    /// The copy as it was before the operator struck the cited record (engine 1.58). Operator
+    /// views only; `on_record` then reads as struck.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub struck_original: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -108,6 +116,9 @@ pub struct Revision {
     pub summary: String,
     #[serde(default)]
     pub citations: Vec<Citation>,
+    /// Captains and corporations it mentions (engine 1.58), shown under their current names.
+    #[serde(default, skip_serializing_if = "Mentions::is_empty")]
+    pub mentions: Mentions,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -125,6 +136,9 @@ pub struct Comment {
     pub citations: Vec<Citation>,
     /// The page revision it was written against.
     pub revision: u32,
+    /// Captains and corporations it mentions (engine 1.58; none on a struck page).
+    #[serde(default, skip_serializing_if = "Mentions::is_empty")]
+    pub mentions: Mentions,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -178,6 +192,11 @@ pub struct Page {
     /// Script pages: their production.
     #[serde(default)]
     pub production: Option<u64>,
+    /// The substantive contributors (see `contributors`), worked out once per revision when it
+    /// is written (engine 1.58), so a read never re-compares revision bodies. `None` on a page
+    /// stored before 1.58 until the next tick fills it (`backfill_contributors`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contributors: Option<Vec<PlayerId>>,
 }
 
 impl Page {
@@ -321,6 +340,9 @@ pub struct Args {
     pub revision: Option<u32>,
     #[serde(default)]
     pub before: Option<u64>,
+    /// Captains or corporations to notify ("Call Sign" or "corp:Name"); @Name in the text also works.
+    #[serde(default)]
+    pub mentions: Option<Vec<String>>,
 }
 
 impl Args {
@@ -541,6 +563,7 @@ fn verify(w: &World, c: &Cite) -> Res<Citation> {
         tick: c.tick,
         note,
         on_record,
+        struck_original: None,
     })
 }
 
@@ -558,6 +581,319 @@ fn citations(w: &World, cs: &Option<Vec<Cite>>) -> Res<Vec<Citation>> {
         ));
     }
     cs.iter().map(|c| verify(w, c)).collect()
+}
+
+// ---------------------------------------------------------------- who a write tells (engine 1.58)
+
+/// What a citation points at. A page tells a record's participants only about keys it never
+/// carried before, so removing a citation and adding it back tells no one again.
+type Key = (Record, Option<u64>, Option<Tick>);
+
+/// A news citation is found by its tick; every other record by its id, so a tick given beside
+/// an id (stored but never checked) cannot make the same record look new.
+fn key(c: &Citation) -> Key {
+    match c.record {
+        Record::News => (c.record, None, c.tick),
+        _ => (c.record, c.id, None),
+    }
+}
+
+/// Every citation key a page has carried, in any revision or talk comment.
+fn ever_keys(p: &Page) -> BTreeSet<Key> {
+    p.revisions
+        .iter()
+        .flat_map(|r| r.citations.iter())
+        .chain(p.talk.iter().flat_map(|t| t.citations.iter()))
+        .map(key)
+        .collect()
+}
+
+fn is_captain(w: &World, pid: PlayerId) -> bool {
+    w.players
+        .get(&pid)
+        .is_some_and(|p| p.npc.is_none() && p.kind != crate::model::PlayerKind::Npc)
+}
+
+/// A captain's part in a treaty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// A captain side.
+    Party,
+    /// The current CEO of a corporation side.
+    Ceo,
+    /// A current member of a corporation side.
+    Member,
+}
+
+/// The corporations that are a treaty's sides (a captain side has none).
+fn treaty_corps(t: &Treaty) -> Vec<crate::model::CorpId> {
+    [(t.a, t.a_player), (t.b, t.b_player)]
+        .into_iter()
+        .filter(|(c, p)| p.is_none() && *c != 0)
+        .map(|(c, _)| c)
+        .collect()
+}
+
+pub fn treaty_role(w: &World, t: &Treaty, pid: PlayerId) -> Option<Role> {
+    if t.a_player == Some(pid) || t.b_player == Some(pid) {
+        return Some(Role::Party);
+    }
+    let corps = treaty_corps(t);
+    if corps.iter().any(|c| w.corps.get(c).is_some_and(|k| k.ceo == pid)) {
+        return Some(Role::Ceo);
+    }
+    let mine = w.players.get(&pid).and_then(|p| p.corp);
+    mine.filter(|m| corps.contains(m)).map(|_| Role::Member)
+}
+
+/// A constitution proposal, live or in the permanent record.
+fn find_proposal(w: &World, id: u64) -> Option<&crate::constitution::Proposal> {
+    w.constitution
+        .proposals
+        .iter()
+        .find(|p| p.id == id)
+        .or_else(|| w.archive.constitutions.iter().flat_map(|r| r.proposals.iter()).find(|p| p.id == id))
+}
+
+/// The captain who proposed a proposal (never the operator).
+fn proposer(w: &World, id: u64) -> Option<PlayerId> {
+    find_proposal(w, id)
+        .filter(|p| !p.by_operator && p.proposer != SYSOP)
+        .map(|p| p.proposer)
+}
+
+/// The captains whose proposals made a live article, in history order.
+fn article_proposers(w: &World, id: u64) -> Vec<PlayerId> {
+    let mut out = vec![];
+    for v in w.constitution.articles.iter().filter(|a| a.id == id).flat_map(|a| a.history.iter()) {
+        if let Some(p) = proposer(w, v.proposal)
+            && !out.contains(&p)
+        {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Who sent a radio message (never the operator or the Federation relay).
+fn radio_from(w: &World, id: u64) -> Option<PlayerId> {
+    w.radio
+        .binary_search_by_key(&id, |m| m.id)
+        .ok()
+        .map(|i| w.radio[i].from)
+        .filter(|f| *f != SYSOP)
+}
+
+/// The captains a citation's record belongs to, with what to call the record in their notice.
+/// A corporation side of a treaty is told through its current CEO only.
+pub fn participants(w: &World, c: &Citation) -> Vec<(PlayerId, String)> {
+    let Some(id) = c.id else {
+        return vec![];
+    };
+    let mut out: Vec<(PlayerId, String)> = match c.record {
+        Record::News => vec![],
+        Record::Radio => radio_from(w, id)
+            .map(|p| (p, format!("your public radio message {id}")))
+            .into_iter()
+            .collect(),
+        Record::Treaty => {
+            let Some(t) = w.treaties.get(&id) else {
+                return vec![];
+            };
+            let signed = t.signed_tick.is_some();
+            let mut v = vec![];
+            for p in [t.a_player, t.b_player].into_iter().flatten() {
+                v.push((
+                    p,
+                    if signed {
+                        format!("the treaty you signed (treaty #{id})")
+                    } else {
+                        format!("a treaty proposal you were party to (treaty #{id})")
+                    },
+                ));
+            }
+            for k in treaty_corps(t) {
+                if let Some(corp) = w.corps.get(&k) {
+                    v.push((
+                        corp.ceo,
+                        if signed {
+                            format!("a treaty your corporation signed (treaty #{id})")
+                        } else {
+                            format!("a treaty proposal of your corporation (treaty #{id})")
+                        },
+                    ));
+                }
+            }
+            v
+        }
+        Record::Proposal => proposer(w, id)
+            .map(|p| (p, format!("your constitution proposal #{id}")))
+            .into_iter()
+            .collect(),
+        Record::Article => article_proposers(w, id)
+            .into_iter()
+            .map(|p| (p, format!("article {id}, which you proposed")))
+            .collect(),
+        Record::Page => w
+            .chronicle
+            .pages
+            .get(&id)
+            .map(|p| p.authors().into_iter().map(|a| (a, format!("your Chronicle page {id}"))).collect())
+            .unwrap_or_default(),
+    };
+    out.retain(|(p, _)| is_captain(w, *p));
+    out
+}
+
+/// The notice an author or endorser gets for a revision: folded per page while unread.
+fn revision_pending(w: &World, page: u64, revision: u32, by: PlayerId, title: &str) -> Pending {
+    let fold = Fold::PageRevised {
+        page,
+        from_revision: revision,
+        to_revision: revision,
+        by: vec![by],
+    };
+    Pending {
+        kind: "chronicle",
+        text: mention::fold_text(w, &fold),
+        quote: Some(title.to_string()),
+        about: Some(Place::Page { page, revision }),
+        fold: Some(fold),
+    }
+}
+
+/// Tell the participants of each record a write cites for the first time on its page: a line on
+/// the notice they get anyway (which then no longer folds), or a notice of its own. Returns how
+/// many captains it reaches.
+#[allow(clippy::too_many_arguments)]
+fn cite_pendings(
+    w: &World,
+    from: PlayerId,
+    cites: &[Citation],
+    ever: &BTreeSet<Key>,
+    page: u64,
+    title: &str,
+    about: &Place,
+    others: &mut BTreeMap<PlayerId, Pending>,
+) -> usize {
+    let mut fresh: BTreeSet<Key> = BTreeSet::new();
+    let mut said: BTreeSet<(PlayerId, String)> = BTreeSet::new();
+    let mut told: BTreeSet<PlayerId> = BTreeSet::new();
+    for c in cites {
+        if ever.contains(&key(c)) || !fresh.insert(key(c)) {
+            continue;
+        }
+        for (p, what) in participants(w, c) {
+            if p == from || !said.insert((p, what.clone())) {
+                continue;
+            }
+            told.insert(p);
+            match others.get_mut(&p) {
+                Some(n) => {
+                    n.text.push_str(&format!(" It cites {what}."));
+                    n.fold = None;
+                }
+                None => {
+                    others.insert(
+                        p,
+                        Pending {
+                            kind: "chronicle",
+                            text: format!("A Chronicle account cites {what}: page {page}. chronicle action=read page={page}."),
+                            quote: Some(title.to_string()),
+                            about: Some(about.clone()),
+                            fold: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    told.len()
+}
+
+/// Whether revision `i` makes its author a contributor: by someone other than the creator,
+/// adding at least `CONTRIBUTION_MIN_WORDS` new words to the body and summary or a citation the
+/// revision before lacked.
+fn contributes(p: &Page, i: usize) -> bool {
+    fn words(r: &Revision) -> BTreeMap<String, usize> {
+        let mut m = BTreeMap::new();
+        for w in r.body.split_whitespace().chain(r.summary.split_whitespace()) {
+            let w = w.to_lowercase();
+            let w = w.trim_matches(|c: char| c.is_ascii_punctuation());
+            if !w.is_empty() {
+                *m.entry(w.to_string()).or_insert(0) += 1;
+            }
+        }
+        m
+    }
+    if i == 0 || i >= p.revisions.len() {
+        return false;
+    }
+    let (prev, r) = (&p.revisions[i - 1], &p.revisions[i]);
+    if r.author == p.created_by {
+        return false;
+    }
+    let old: BTreeSet<Key> = prev.citations.iter().map(key).collect();
+    if r.citations.iter().any(|c| !old.contains(&key(c))) {
+        return true;
+    }
+    let (before, after) = (words(prev), words(r));
+    let added: usize = after
+        .iter()
+        .map(|(w, n)| n.saturating_sub(before.get(w).copied().unwrap_or(0)))
+        .sum();
+    added >= CONTRIBUTION_MIN_WORDS
+}
+
+/// Every revision compared with the one before: what `Page.contributors` holds, worked out from
+/// scratch. Only for a page stored before engine 1.58 (once) and for tests.
+pub fn compute_contributors(p: &Page) -> Vec<PlayerId> {
+    let mut out = vec![];
+    for i in 1..p.revisions.len() {
+        let author = p.revisions[i].author;
+        if !out.contains(&author) && contributes(p, i) {
+            out.push(author);
+        }
+    }
+    out
+}
+
+/// The substantive contributors, in first-contribution order (display only: Influence is
+/// unchanged). Reads the stored list; a page stored before 1.58 is compared once, until the next
+/// tick stores its list.
+pub fn contributors(p: &Page) -> Vec<PlayerId> {
+    match &p.contributors {
+        Some(v) => v.clone(),
+        None => compute_contributors(p),
+    }
+}
+
+/// After a revision is pushed: compare only it with the one before (or, on a page stored
+/// before 1.58, work out the whole list once).
+fn note_contribution(p: &mut Page) {
+    let last = p.revisions.len() - 1;
+    match &p.contributors {
+        None => p.contributors = Some(compute_contributors(p)),
+        Some(v) => {
+            let author = p.revisions[last].author;
+            if !v.contains(&author) && contributes(p, last) {
+                p.contributors.get_or_insert_with(Vec::new).push(author);
+            }
+        }
+    }
+}
+
+/// Store the contributor list of every page written before engine 1.58 (run by the tick; once
+/// stored, a list is only extended by `note_contribution`). Returns how many pages it filled.
+pub fn backfill_contributors(w: &mut World) -> usize {
+    let mut n = 0;
+    for p in w.chronicle.pages.values_mut() {
+        if p.contributors.is_none() {
+            p.contributors = Some(compute_contributors(p));
+            n += 1;
+        }
+    }
+    n
 }
 
 // ---------------------------------------------------------------- views
@@ -582,8 +918,49 @@ fn citation_json(c: &Citation) -> Value {
     json!({"record": c.record, "id": c.id, "tick": c.tick, "note": c.note, "on_record": c.on_record})
 }
 
+/// A citation for the operator: with the original copy a strike replaced (engine 1.58).
+fn operator_citation_json(c: &Citation) -> Value {
+    let mut v = citation_json(c);
+    if let Some(o) = &c.struck_original {
+        v["struck_original"] = json!(o);
+    }
+    v
+}
+
+/// Who a page view is for. Names differ (a removed captain reads `#id` to captains and is left
+/// out of public views), and a struck page shows no byline or mentions except to the operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Captain,
+    Public,
+    Operator,
+}
+
+fn names_for(w: &World, ids: &[PlayerId], view: View) -> Vec<String> {
+    match view {
+        View::Public => ids.iter().filter(|p| is_captain(w, **p)).map(|p| name_of(w, *p)).collect(),
+        View::Captain | View::Operator => ids.iter().map(|p| name_of(w, *p)).collect(),
+    }
+}
+
+fn mention_names(w: &World, m: &Mentions, view: View) -> Vec<String> {
+    match view {
+        View::Public => m.public_names(w),
+        View::Captain | View::Operator => m.names(w),
+    }
+}
+
+/// The byline: the creator and the substantive contributors (display only).
+fn byline(w: &World, p: &Page, view: View) -> Value {
+    let mut b = json!({"contributors": names_for(w, &contributors(p), view)});
+    if view != View::Public || is_captain(w, p.created_by) {
+        b["created_by"] = json!(name_of(w, p.created_by));
+    }
+    b
+}
+
 /// One page in full (struck pages show no text).
-pub fn page_json(w: &World, p: &Page, revision: Option<u32>) -> Res<Value> {
+pub fn page_json(w: &World, p: &Page, revision: Option<u32>, view: View) -> Res<Value> {
     let r = match revision {
         Some(n) => p.revisions.iter().find(|r| r.revision == n).ok_or_else(|| {
             Refusal::new(
@@ -594,7 +971,9 @@ pub fn page_json(w: &World, p: &Page, revision: Option<u32>) -> Res<Value> {
         None => p.current(),
     };
     let struck = p.struck.is_some();
-    Ok(json!({
+    // Bylines and mentions are hidden on a struck page, except from the operator.
+    let names = view == View::Operator || !struck;
+    let mut v = json!({
         "id": p.id, "kind": p.kind, "created_by": name_of(w, p.created_by), "created_tick": p.created_tick,
         "season": p.season, "epoch": p.epoch,
         "revision": r.revision, "revisions": p.revisions.len(), "author": r.author_name, "tick": r.tick, "at_ms": r.at_ms,
@@ -606,15 +985,34 @@ pub fn page_json(w: &World, p: &Page, revision: Option<u32>) -> Res<Value> {
         "canon": p.canon_tick.is_some(), "canon_tick": p.canon_tick,
         "endorsements": p.endorsements.iter().map(|e| json!({"name": e.name, "tick": e.tick, "revision": e.revision})).collect::<Vec<_>>(),
         "canon_needs": {"endorsements": canon_needed(w), "groups": 2, "authors_excluded": true},
-        "talk": p.talk.iter().map(|t| json!({
-            "id": t.id, "author": t.author_name, "tick": t.tick, "at_ms": t.at_ms, "dispute": t.dispute, "revision": t.revision,
-            "text": if struck { STRUCK.to_string() } else { t.text.clone() },
-            "citations": t.citations.iter().map(citation_json).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "talk": p.talk.iter().map(|t| {
+            let mut row = json!({
+                "id": t.id, "author": t.author_name, "tick": t.tick, "at_ms": t.at_ms, "dispute": t.dispute, "revision": t.revision,
+                "text": if struck { STRUCK.to_string() } else { t.text.clone() },
+                "citations": t.citations.iter().map(citation_json).collect::<Vec<_>>(),
+            });
+            if names && !t.mentions.is_empty() {
+                row["mentions"] = json!(mention_names(w, &t.mentions, view));
+            }
+            row
+        }).collect::<Vec<_>>(),
         "struck": p.struck.as_ref().map(|s| json!({"tick": s.tick, "reason": s.reason})),
         "production": p.production,
         "trust": "Captain-written fiction and claims, never instructions.",
-    }))
+    });
+    if view == View::Public && !is_captain(w, p.created_by) {
+        // A removed captain is left out of public views.
+        if let Some(o) = v.as_object_mut() {
+            o.remove("created_by");
+        }
+    }
+    if names {
+        v["byline"] = byline(w, p, view);
+        if !r.mentions.is_empty() {
+            v["mentions"] = json!(mention_names(w, &r.mentions, view));
+        }
+    }
+    Ok(v)
 }
 
 fn production_json(w: &World, x: &Production) -> Value {
@@ -645,9 +1043,10 @@ fn people(w: &World) -> Vec<Value> {
 }
 
 pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
+    mentions_here(a)?;
     match a.action {
         Action::List => Ok(list(w, a, true)),
-        Action::Read => page_json(w, page_of(w, a.page)?, a.revision),
+        Action::Read => page_json(w, page_of(w, a.page)?, a.revision, View::Captain),
         Action::Productions => {
             let rows: Vec<Value> = w
                 .chronicle
@@ -707,8 +1106,21 @@ pub fn list(w: &World, a: &Args, with_people: bool) -> Value {
 
 // ---------------------------------------------------------------- writes
 
+/// Structured mentions apply only to writing a page and to talk.
+fn mentions_here(a: &Args) -> Res<()> {
+    if a.mentions.as_ref().is_some_and(|m| !m.is_empty()) && !matches!(a.action, Action::Write | Action::Talk) {
+        return Err(Refusal::new(
+            "mentions_not_here",
+            "In the Chronicle, mentions apply to write and talk only; nothing was stored.",
+        )
+        .hint(crate::social::MENTIONS_HERE));
+    }
+    Ok(())
+}
+
 pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     let p = ctx.player(pid)?;
+    mentions_here(a)?;
     if p.muted_until > ctx.w.tick {
         return Err(Refusal::new("muted", "Your transmitter is muted."));
     }
@@ -743,6 +1155,7 @@ fn write_page(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outco
     }
     let summary = line("summary", a.summary.as_deref().unwrap_or(""), SUMMARY_MAX)?;
     let cites = citations(ctx.w, &a.citations)?;
+    let structured = a.mentions.as_deref().filter(|m| !m.is_empty());
     let (tick, at_ms, season, epoch) = (ctx.w.tick, ctx.w.now_ms, ctx.w.season.number, ctx.w.archive.epoch);
     match a.page {
         Some(id) => {
@@ -782,12 +1195,30 @@ fn write_page(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outco
             if title.is_empty() {
                 return Err(Refusal::new("title_required", "A page needs a title."));
             }
-            let page = ctx.w.chronicle.pages.get_mut(&id).expect("found above");
+            // Engine 1.58: who is told, worked out before anything changes. Authors and endorsers
+            // get one combined revision notice; captains part of a record cited here for the
+            // first time are told; mentions ride on those notices or get their own.
             let revision = page.revisions.len() as u32 + 1;
+            let prior = page.current().mentions.clone();
+            let mut watchers: BTreeSet<PlayerId> = page.authors();
+            watchers.extend(page.endorsements.iter().map(|e| e.player));
+            let ever = ever_keys(page);
+            let texts = [title.as_str(), summary.as_str(), body.as_str()];
+            let res = mention::resolve(ctx.w, structured, &texts)?;
+            let place = Place::Page { page: id, revision };
+            let mut others: BTreeMap<PlayerId, Pending> = BTreeMap::new();
+            for p in watchers.into_iter().filter(|p| *p != pid && is_captain(ctx.w, *p)) {
+                others.insert(p, revision_pending(ctx.w, id, revision, pid, &title));
+            }
+            let authors = others.len();
+            let cited = cite_pendings(ctx.w, pid, &cites, &ever, id, &title, &place, &mut others);
+            let plan = mention::plan(ctx.w, pid, &res, Readers::Everyone, &prior, &others, &texts);
+            // Validated: from here on the write succeeds.
+            let page = ctx.w.chronicle.pages.get_mut(&id).expect("found above");
             page.revisions.push(Revision {
                 revision,
                 author: pid,
-                author_name: name,
+                author_name: name.clone(),
                 tick,
                 at_ms,
                 season,
@@ -796,10 +1227,18 @@ fn write_page(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outco
                 body,
                 summary,
                 citations: cites,
+                mentions: res.mentions.clone(),
             });
-            Ok(ctx.finish(
-                format!("Page {id} revised (revision {revision})."),
-                json!({"page": id, "revision": revision, "title": title}),
+            note_contribution(page);
+            mention::send(ctx, pid, &name, &plan, place.clone(), others);
+            mention::commit(ctx, pid, &plan, &place);
+            let reply = json!({"page": id, "revision": revision, "title": title, "told": {"authors": authors, "cited": cited}});
+            Ok(finish_told(
+                ctx,
+                &res,
+                &plan,
+                reply,
+                format!("Page {id} revised (revision {revision})"),
             ))
         }
         None => {
@@ -827,8 +1266,15 @@ fn write_page(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outco
             if title.is_empty() {
                 return Err(Refusal::new("title_required", "A page needs a title."));
             }
-            ctx.w.chronicle.next_page += 1;
-            let id = ctx.w.chronicle.next_page;
+            let id = ctx.w.chronicle.next_page + 1;
+            let texts = [title.as_str(), summary.as_str(), body.as_str()];
+            let res = mention::resolve(ctx.w, structured, &texts)?;
+            let place = Place::Page { page: id, revision: 1 };
+            let mut others: BTreeMap<PlayerId, Pending> = BTreeMap::new();
+            let cited = cite_pendings(ctx.w, pid, &cites, &BTreeSet::new(), id, &title, &place, &mut others);
+            let plan = mention::plan(ctx.w, pid, &res, Readers::Everyone, &Mentions::default(), &others, &texts);
+            // Validated: from here on the write succeeds.
+            ctx.w.chronicle.next_page = id;
             ctx.w.chronicle.pages.insert(
                 id,
                 Page {
@@ -850,6 +1296,7 @@ fn write_page(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outco
                         body,
                         summary,
                         citations: cites,
+                        mentions: res.mentions.clone(),
                     }],
                     talk: vec![],
                     endorsements: vec![],
@@ -858,6 +1305,7 @@ fn write_page(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outco
                     reports: vec![],
                     struck: None,
                     production: None,
+                    contributors: Some(vec![]),
                 },
             );
             ctx.event(
@@ -868,12 +1316,24 @@ fn write_page(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outco
                 format!("{name} wrote a new Chronicle page: {title}."),
                 json!({"page": id}),
             );
-            Ok(ctx.finish(
-                format!("Page {id} created: {title}."),
-                json!({"page": id, "revision": 1, "title": title}),
-            ))
+            mention::send(ctx, pid, &name, &plan, place.clone(), others);
+            mention::commit(ctx, pid, &plan, &place);
+            let reply = json!({"page": id, "revision": 1, "title": title, "told": {"authors": 0, "cited": cited}});
+            Ok(finish_told(ctx, &res, &plan, reply, format!("Page {id} created: {title}")))
         }
     }
+}
+
+/// The reply's mentions block and the summary's count (never an excerpt).
+fn finish_told(ctx: &mut Ctx, res: &mention::Resolution, plan: &mention::Plan, mut reply: Value, summary: String) -> Outcome {
+    if let Some(m) = mention::report(ctx.w, res, plan) {
+        reply["mentions"] = m;
+    }
+    let summary = match mention::summary(res, plan) {
+        Some(s) => format!("{summary}; {s}."),
+        None => format!("{summary}."),
+    };
+    ctx.finish(summary, reply)
 }
 
 fn talk(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outcome> {
@@ -889,8 +1349,65 @@ fn talk(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outcome> {
     }
     let cites = citations(ctx.w, &a.citations)?;
     let dispute = a.dispute.unwrap_or(false);
-    ctx.w.chronicle.next_comment += 1;
-    let cid = ctx.w.chronicle.next_comment;
+    // Engine 1.58: every author is told (a dispute on its own, plain comments combined per
+    // page); captains part of a record first cited on this page are told; mentions ride along.
+    // On a struck page the text is not read for mentions and no citation is announced.
+    let struck = page.struck.is_some();
+    let title = struck_text(page, &page.current().title);
+    let ever = ever_keys(page);
+    let authors = page.authors();
+    let cid = ctx.w.chronicle.next_comment + 1;
+    let place = Place::Talk { page: id, comment: cid };
+    let structured = a.mentions.as_deref().filter(|m| !m.is_empty());
+    let res = if struck {
+        mention::Resolution::default()
+    } else {
+        mention::resolve(ctx.w, structured, &[body.as_str()])?
+    };
+    let n_cites = cites.len();
+    let mut others: BTreeMap<PlayerId, Pending> = BTreeMap::new();
+    for p in authors.into_iter().filter(|p| *p != pid && is_captain(ctx.w, *p)) {
+        let pending = if dispute {
+            let with = match n_cites {
+                0 => "with no citations".to_string(),
+                1 => "with 1 citation".to_string(),
+                n => format!("with {n} citations"),
+            };
+            Pending {
+                kind: "chronicle",
+                text: format!("{name} disputed Chronicle page {id}, which you wrote, {with}. chronicle action=read page={id}."),
+                quote: Some(title.clone()),
+                about: Some(place.clone()),
+                fold: None,
+            }
+        } else {
+            let fold = Fold::Talk {
+                page: id,
+                from_comment: cid,
+                to_comment: cid,
+                comments: 1,
+                by: vec![pid],
+            };
+            Pending {
+                kind: "chronicle",
+                text: mention::fold_text(ctx.w, &fold),
+                quote: Some(title.clone()),
+                about: Some(place.clone()),
+                fold: Some(fold),
+            }
+        };
+        others.insert(p, pending);
+    }
+    let told_authors = others.len();
+    let cited = if struck {
+        0
+    } else {
+        cite_pendings(ctx.w, pid, &cites, &ever, id, &title, &place, &mut others)
+    };
+    let plan = mention::plan(ctx.w, pid, &res, Readers::Everyone, &Mentions::default(), &others, &[body.as_str()]);
+    let tried = structured.is_some() || body.contains('@');
+    // Validated: from here on the write succeeds.
+    ctx.w.chronicle.next_comment = cid;
     let (tick, at_ms) = (ctx.w.tick, ctx.w.now_ms);
     let page = ctx.w.chronicle.pages.get_mut(&id).expect("found above");
     page.talk.push(Comment {
@@ -903,22 +1420,18 @@ fn talk(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outcome> {
         dispute,
         citations: cites,
         revision,
+        mentions: res.mentions.clone(),
     });
-    let (creator, title) = (page.created_by, page.current().title.clone());
-    if creator != pid {
-        ctx.notify(
-            creator,
-            "chronicle",
-            format!(
-                "{name} {} your Chronicle page {id} ({title}). chronicle action=read page={id}.",
-                if dispute { "disputed" } else { "commented on" }
-            ),
-        );
+    mention::send(ctx, pid, &name, &plan, place.clone(), others);
+    let mut reply = json!({"page": id, "comment": cid, "dispute": dispute, "told": {"authors": told_authors, "cited": cited}});
+    if struck {
+        if tried {
+            reply["mentions"] = json!({"note": "page struck: mentions tell no one"});
+        }
+        return Ok(ctx.finish(format!("Comment {cid} added to page {id}."), reply));
     }
-    Ok(ctx.finish(
-        format!("Comment {cid} added to page {id}."),
-        json!({"page": id, "comment": cid, "dispute": dispute}),
-    ))
+    mention::commit(ctx, pid, &plan, &place);
+    Ok(finish_told(ctx, &res, &plan, reply, format!("Comment {cid} added to page {id}")))
 }
 
 fn endorse(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outcome> {
@@ -959,6 +1472,28 @@ fn endorse(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outcome>
         let line = format!("The Chronicle page \"{title}\" became canon.");
         ctx.news(line.clone());
         ctx.event("chronicle_canon", None, vec![creator], true, line, json!({"page": id}));
+        // Engine 1.58: captains named on the page (not its authors) get a timeline moment, only
+        // at the endorsement that makes it canon. Corporation mentions give none.
+        let page = &ctx.w.chronicle.pages[&id];
+        let authors = page.authors();
+        let named: Vec<PlayerId> = page
+            .current()
+            .mentions
+            .captains
+            .iter()
+            .copied()
+            .filter(|c| is_captain(ctx.w, *c) && !authors.contains(c))
+            .collect();
+        if !named.is_empty() {
+            ctx.event(
+                "chronicle_named",
+                None,
+                named,
+                true,
+                format!("Named on the Chronicle page \"{title}\", which became canon."),
+                json!({"page": id}),
+            );
+        }
         ctx.notify(
             creator,
             "chronicle",
@@ -1165,7 +1700,13 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
                     if note.is_empty() { String::new() } else { format!(": {note}") }
                 ),
             );
-            Ok(ctx.finish(format!("Page {id} struck."), json!({"page": id, "struck": true})))
+            // Engine 1.58: notice quotes about the page and citation copies of it read as struck
+            // too; the originals stay in the operator record.
+            let copies = mention::scrub_copies(ctx.w, mention::Item::Page(id));
+            Ok(ctx.finish(
+                format!("Page {id} struck."),
+                json!({"page": id, "struck": true, "copies_scrubbed": copies}),
+            ))
         }
         AdminAction::Greenlight | AdminAction::Decline => {
             let x = production_of(ctx.w, a.production)?;
@@ -1222,6 +1763,7 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
                         body,
                         summary: "Opened by the operator's greenlight.".into(),
                         citations: vec![],
+                        mentions: Mentions::default(),
                     }],
                     talk: vec![],
                     endorsements: vec![],
@@ -1230,6 +1772,7 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
                     reports: vec![],
                     struck: None,
                     production: Some(id),
+                    contributors: Some(vec![]),
                 },
             );
             let x = ctx.w.chronicle.productions.get_mut(&id).expect("found above");
@@ -1371,8 +1914,148 @@ pub fn influence(w: &World, pid: PlayerId) -> i64 {
     canon * CANON_INFLUENCE + credits * CREDIT_INFLUENCE
 }
 
-/// The briefing's line: counts and what changed for you.
-pub fn briefing(w: &World, pid: PlayerId) -> Value {
+/// What a captain was part of, for the briefing's discovery list.
+struct Mine {
+    treaties: BTreeSet<u64>,
+    proposals: BTreeSet<u64>,
+    articles: BTreeSet<u64>,
+    pages: BTreeSet<u64>,
+}
+
+impl Mine {
+    fn of(w: &World, pid: PlayerId) -> Self {
+        let proposals: BTreeSet<u64> = w
+            .constitution
+            .proposals
+            .iter()
+            .filter(|p| p.proposer == pid && !p.by_operator && pid != SYSOP)
+            .map(|p| p.id)
+            .collect();
+        Mine {
+            treaties: w
+                .treaties
+                .values()
+                .filter(|t| treaty_role(w, t, pid).is_some())
+                .map(|t| t.id)
+                .collect(),
+            articles: w
+                .constitution
+                .articles
+                .iter()
+                .filter(|a| a.history.iter().any(|v| proposer(w, v.proposal) == Some(pid)))
+                .map(|a| a.id)
+                .collect(),
+            pages: w
+                .chronicle
+                .pages
+                .values()
+                .filter(|p| p.revisions.iter().any(|r| r.author == pid))
+                .map(|p| p.id)
+                .collect(),
+            proposals,
+        }
+    }
+
+    fn cites(&self, w: &World, pid: PlayerId, c: &Citation) -> bool {
+        let Some(id) = c.id else {
+            return false;
+        };
+        match c.record {
+            Record::News => false,
+            Record::Radio => radio_from(w, id) == Some(pid),
+            Record::Treaty => self.treaties.contains(&id),
+            Record::Proposal => self.proposals.contains(&id),
+            Record::Article => self.articles.contains(&id),
+            Record::Page => self.pages.contains(&id),
+        }
+    }
+}
+
+/// When the captain last worked on a page: a revision, an endorsement or a talk comment.
+fn last_touch(p: &Page, pid: PlayerId) -> Option<(Tick, u64)> {
+    p.revisions
+        .iter()
+        .filter(|r| r.author == pid)
+        .map(|r| (r.tick, r.at_ms))
+        .chain(p.endorsements.iter().filter(|e| e.player == pid).map(|e| (e.tick, e.at_ms)))
+        .chain(p.talk.iter().filter(|t| t.author == pid).map(|t| (t.tick, t.at_ms)))
+        .max()
+}
+
+/// Why a page someone else revised in the last game day is for the captain, if it is.
+fn for_you(w: &World, pid: PlayerId, corp: Option<crate::model::CorpId>, mine: &Mine, p: &Page) -> Option<&'static str> {
+    let r = p.current();
+    if r.mentions.hits(mention::Target::Captain(pid)) {
+        return Some("mentions you");
+    }
+    if corp.is_some_and(|c| r.mentions.hits(mention::Target::Corp(c))) {
+        return Some("mentions your corporation");
+    }
+    if r.citations.iter().any(|c| mine.cites(w, pid, c)) {
+        return Some("cites a record you were part of");
+    }
+    if last_touch(p, pid).is_some_and(|t| (r.tick, r.at_ms) > t) {
+        return Some("revised since you last worked on it");
+    }
+    None
+}
+
+/// A record of the captain's that no Chronicle page cites: a signed treaty it is a party to (or
+/// whose corporation side it leads), or a live article from its proposals. One a game day, in
+/// turn. Never a request.
+fn unwritten(w: &World, pid: PlayerId, tpd: u64) -> Option<Value> {
+    let mut cited: BTreeSet<(Record, u64)> = BTreeSet::new();
+    for p in w.chronicle.pages.values().filter(|p| p.struck.is_none()) {
+        for c in p.current().citations.iter().chain(p.talk.iter().flat_map(|t| t.citations.iter())) {
+            if let Some(id) = c.id {
+                cited.insert((c.record, id));
+            }
+        }
+    }
+    let mut cands: Vec<(String, Record, u64)> = vec![];
+    for t in w.treaties.values().filter(|t| t.signed_tick.is_some()) {
+        let whose = match treaty_role(w, t, pid) {
+            Some(Role::Party) => "yours",
+            Some(Role::Ceo) => "your corporation's",
+            _ => continue,
+        };
+        if !cited.contains(&(Record::Treaty, t.id)) {
+            cands.push((
+                format!("Treaty #{} ({whose}) has no Chronicle page citing it.", t.id),
+                Record::Treaty,
+                t.id,
+            ));
+        }
+    }
+    let mut articles: Vec<&crate::constitution::Article> = w
+        .constitution
+        .articles
+        .iter()
+        .filter(|a| a.history.iter().any(|v| proposer(w, v.proposal) == Some(pid)))
+        .collect();
+    articles.sort_by_key(|a| a.id);
+    for a in articles {
+        let covered = cited.contains(&(Record::Article, a.id)) || a.history.iter().any(|v| cited.contains(&(Record::Proposal, v.proposal)));
+        if !covered {
+            cands.push((
+                format!("Article {} (yours) has no Chronicle page citing it.", a.id),
+                Record::Article,
+                a.id,
+            ));
+        }
+    }
+    if cands.is_empty() {
+        return None;
+    }
+    let (fact, record, id) = &cands[((w.tick / tpd.max(1)) as usize) % cands.len()];
+    Some(json!({"fact": fact, "record": record, "id": id}))
+}
+
+/// The briefing's line: counts and what changed for you. Pages others revised in the last game
+/// day that mention you or your corporation, cite a record you were part of, or were revised
+/// since you last worked on them (`for_you`, at most two, and the full count); and one record
+/// of yours no page cites (`unwritten`). Compact keeps only the count.
+pub fn briefing(w: &World, pid: PlayerId, compact: bool) -> Value {
     let c = &w.chronicle;
     let mine_open: Vec<u64> = c
         .productions
@@ -1380,24 +2063,60 @@ pub fn briefing(w: &World, pid: PlayerId) -> Value {
         .filter(|x| x.status == Status::Greenlit && (x.cast.contains(&pid) || x.pitched_by == pid))
         .map(|x| x.id)
         .collect();
-    json!({
+    let mut v = json!({
         "pages": c.pages.len(),
         "canon": c.pages.values().filter(|p| p.canon_tick.is_some()).count(),
         "your_open_productions": mine_open,
         "how": "chronicle action=list; write pages (0 AP), cite the record, endorse others' pages into canon, pitch productions. Guide: /chronicle.txt.",
-    })
+    });
+    let tpd = crate::player::ticks_per_day(&w.rules).max(1) as u64;
+    let corp = w.players.get(&pid).and_then(|p| p.corp);
+    let mine = Mine::of(w, pid);
+    let mut recent: Vec<&Page> = c
+        .pages
+        .values()
+        .filter(|p| p.struck.is_none() && w.tick.saturating_sub(p.current().tick) < tpd && p.current().author != pid)
+        .collect();
+    recent.sort_by_key(|p| std::cmp::Reverse((p.current().tick, p.current().at_ms, p.id)));
+    let mut rows = vec![];
+    let mut count = 0;
+    for p in recent {
+        if let Some(why) = for_you(w, pid, corp, &mine, p) {
+            count += 1;
+            if !compact && rows.len() < 2 {
+                rows.push(json!({"page": p.id, "title": crate::query::untrusted(&p.current().title), "why": why}));
+            }
+        }
+    }
+    v["for_you_count"] = json!(count);
+    if !compact {
+        v["for_you"] = json!(rows);
+        if let Some(u) = unwritten(w, pid, tpd) {
+            v["unwritten"] = u;
+        }
+    }
+    v
 }
 
 /// The public view (spectators): pages without operator detail, sector numbers scrubbed.
 pub fn public_view(w: &World, a: &Args) -> Value {
     let mut v = list(w, a, true);
+    // A removed captain is left out of public author lists (captains read `#id`).
+    if let Some(rows) = v["pages"].as_array_mut() {
+        for r in rows {
+            if let Some(p) = r["id"].as_u64().and_then(|id| w.chronicle.pages.get(&id)) {
+                let ids: Vec<PlayerId> = p.authors().into_iter().collect();
+                r["authors"] = json!(names_for(w, &ids, View::Public));
+            }
+        }
+    }
     scrub_value(&mut v);
     v
 }
 
 pub fn public_page(w: &World, id: u64) -> Option<Value> {
     let p = w.chronicle.pages.get(&id)?;
-    let mut v = page_json(w, p, None).ok()?;
+    let mut v = page_json(w, p, None, View::Public).ok()?;
     if let Some(o) = v.as_object_mut() {
         o.remove("trust");
     }
@@ -1453,7 +2172,7 @@ pub fn operator_view(w: &World) -> Value {
 pub fn operator_page(w: &World, id: u64) -> Res<Value> {
     let p = page_of(w, Some(id))?;
     Ok(
-        json!({"page": page_json(w, p, None)?, "revisions": p.revisions, "talk": p.talk, "reports": p.reports, "struck": p.struck, "endorsements": p.endorsements}),
+        json!({"page": page_json(w, p, None, View::Operator)?, "byline": byline(w, p, View::Operator), "revisions": p.revisions, "talk": p.talk, "reports": p.reports, "struck": p.struck, "endorsements": p.endorsements}),
     )
 }
 
@@ -1486,7 +2205,7 @@ pub fn production_package(w: &World, id: u64) -> Res<Value> {
             let r = p.current();
             json!({"id": p.id, "title": struck_text(p, &r.title), "body": struck_text(p, &r.body), "canon": p.canon_tick.is_some(),
                    "citations": r.citations.iter().map(citation_json).collect::<Vec<_>>(), "struck": p.struck.is_some(),
-                   "reports": p.reports.len()})
+                   "reports": p.reports.len(), "contributors": names_for(w, &contributors(p), View::Operator)})
         })
         .collect();
     let mut credits: BTreeSet<String> = x.cast.iter().map(|c| name_of(w, *c)).collect();
@@ -1495,13 +2214,24 @@ pub fn production_package(w: &World, id: u64) -> Res<Value> {
         credits.extend(s.authors().iter().map(|a| name_of(w, *a)));
     }
     let script_struck = script.is_some_and(|s| s.struck.is_some());
+    // Substantive contributors (display only): the script's first, then each source's.
+    let mut all_contributors: Vec<PlayerId> = vec![];
+    for p in script.into_iter().chain(x.pages.iter().filter_map(|id| w.chronicle.pages.get(id))) {
+        for c in contributors(p) {
+            if !all_contributors.contains(&c) {
+                all_contributors.push(c);
+            }
+        }
+    }
     Ok(json!({
         "production": production_json(w, x),
         "script": script_rev.map(|r| json!({"page": x.script_page, "revision": r.revision, "title": r.title,
-            "body": if script_struck { STRUCK.to_string() } else { r.body.clone() }, "authors": script.map(|s| s.authors().iter().map(|a| name_of(w, *a)).collect::<Vec<_>>())})),
+            "body": if script_struck { STRUCK.to_string() } else { r.body.clone() }, "authors": script.map(|s| s.authors().iter().map(|a| name_of(w, *a)).collect::<Vec<_>>()),
+            "contributors": script.map(|s| names_for(w, &contributors(s), View::Operator))})),
         "cast_sheet": cast,
         "sources": canon,
         "credits": credits,
+        "contributors": names_for(w, &all_contributors, View::Operator),
         "checks": {
             "unapproved_cast": x.cast.iter().filter(|c| script_rev.is_none_or(|r| x.approvals.get(c) != Some(&r.revision))).map(|c| name_of(w, *c)).collect::<Vec<_>>(),
             "script_reports": script.map_or(0, |s| s.reports.len()),
@@ -1516,7 +2246,7 @@ pub fn production_package(w: &World, id: u64) -> Res<Value> {
 /// newest first, sector numbers scrubbed, no ids.
 pub fn public_person(w: &World, name: &str, before: Option<u64>) -> Option<Value> {
     let p = w.player_by_name(name).filter(|p| p.npc.is_none())?;
-    let mut v = crate::identity::story(w, p.id, false, before, 50);
+    let mut v = crate::identity::public_story(w, p.id, before, 50);
     v["card"] = json!(crate::identity::card(w, p.id));
     v["pages"] = json!(
         w.chronicle
@@ -1528,6 +2258,8 @@ pub fn public_person(w: &World, name: &str, before: Option<u64>) -> Option<Value
             .map(|pg| json!({"id": pg.id, "kind": pg.kind, "title": pg.current().title, "canon": pg.canon_tick.is_some()}))
             .collect::<Vec<_>>()
     );
+    // Public items that name this captain (engine 1.58), checked at read time.
+    v["mentioned_in"] = json!(crate::public::mentioned_in(w, crate::mention::Target::Captain(p.id)));
     scrub_value(&mut v);
     Some(v)
 }
@@ -1568,7 +2300,7 @@ pub fn story_bible(w: &World, since: Option<Tick>) -> Value {
                 },
                 "log": i.map(|i| i.log.iter().filter(|e| e.tick >= since).map(|e| json!({"n": e.n, "tick": e.tick, "at_ms": e.at_ms,
                     "text": e.text, "mood": e.mood, "private": e.private, "about": e.about.iter().map(|a| name_of(w, *a)).collect::<Vec<_>>(),
-                    "citations": e.citations.iter().map(citation_json).collect::<Vec<_>>()})).collect::<Vec<_>>()).unwrap_or_default(),
+                    "citations": e.citations.iter().map(operator_citation_json).collect::<Vec<_>>(), "mentions": e.mentions.names(w)})).collect::<Vec<_>>()).unwrap_or_default(),
                 "moments": i.map(|i| i.moments.iter().filter(|m| m.tick >= since).map(|m| json!({"tick": m.tick, "at_ms": m.at_ms,
                     "kind": m.kind, "text": m.text, "with": m.with.iter().map(|c| name_of(w, *c)).collect::<Vec<_>>()})).collect::<Vec<_>>()).unwrap_or_default(),
             })
@@ -1605,6 +2337,7 @@ pub fn story_bible(w: &World, since: Option<Tick>) -> Value {
             let r = p.current();
             json!({"id": p.id, "kind": p.kind, "title": r.title, "body": r.body, "authors": p.authors().iter().map(|a| name_of(w, *a)).collect::<Vec<_>>(),
                    "citations": r.citations.iter().map(citation_json).collect::<Vec<_>>(),
+                   "mentions": r.mentions.names(w), "contributors": names_for(w, &contributors(p), View::Operator),
                    "disputes": p.talk.iter().filter(|t| t.dispute).map(|t| json!({"by": t.author_name, "text": t.text})).collect::<Vec<_>>()})
         })
         .collect();
@@ -1630,5 +2363,6 @@ pub fn story_bible(w: &World, since: Option<Tick>) -> Value {
         "productions": w.chronicle.productions.values().map(|x| production_json(w, x)).collect::<Vec<_>>(),
         "news": w.news.iter().filter(|n| n.tick >= since).map(|n| json!({"tick": n.tick, "headline": n.headline})).collect::<Vec<_>>(),
         "champions": crate::careers::champions(w),
+        "mentions": mention::operator_view(w, mention::SeasonSel::Current, None, None, 200, Some(since)),
     })
 }

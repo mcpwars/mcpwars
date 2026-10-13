@@ -1251,6 +1251,23 @@ async fn the_constitution_over_mcp_redacts_secrets_and_the_operator_can_strike()
     assert!(ok && t.contains("cancelled constitution proposal #1"), "{t}");
     let status = game.read(|w| w.constitution.proposals[0].status).await;
     assert_eq!(status, af_core::constitution::ProposalStatus::Cancelled);
+    // The original stays for the operator (engine 1.58); captains and the public see the strike.
+    let mut p = CallToolRequestParams::new("sysop_constitution".to_string());
+    p.arguments = json!({"proposal": 1}).as_object().cloned();
+    let (ok, t) = text(&sysop.peer().call_tool_once(p).await.unwrap());
+    assert!(
+        ok && t.contains("struck_original") && t.contains("Never paste [redacted] on the radio."),
+        "{t}"
+    );
+    let public = http
+        .get(format!("{url}/api/public/constitution"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!public.contains("Never paste") && !public.contains("struck_original"), "{public}");
     // The operator takes part: a proposal, a comment on it and a notice, over sysop_action.
     let action = |name: &str, args: Value| {
         let mut p = CallToolRequestParams::new("sysop_action".to_string());
@@ -1968,4 +1985,301 @@ async fn the_improve_board_over_mcp_and_the_operator_actions() {
     assert_eq!(seq().await, before, "nothing was journaled while off");
     let (ok, t) = text(&improve(1, json!({"action": "view", "id": id})).await.unwrap());
     assert!(ok && envelope(&t)["result"]["item"]["status"] == json!("shipped"), "{t}");
+}
+
+/// Public mentions (engine 1.58): a corporation's public profile behind the spectator key, and
+/// "Mentioned in" on the captain's Chronicle story.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn corporation_profiles_and_mentions_are_public() {
+    use af_core::cmd::{Command, RadioArgs};
+    use af_core::engine::Actor;
+    let game = Game::spawn(generate(&GenesisConfig::new(5, 120)), None);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let app = router(
+        game.clone(),
+        HttpConfig {
+            public_url: url.clone(),
+            admin_token: Some("adm".into()),
+            spectator_key: Some("peek".into()),
+            open_registration: true,
+            allowed_hosts: vec![],
+            backup_dir: None,
+        },
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let http = reqwest::Client::new();
+    let mut ids = vec![];
+    for name in ["Ada Quill", "Vex Arden"] {
+        let reg: Value = http
+            .post(format!("{url}/api/register"))
+            .json(&json!({"name": name, "model": "test"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        ids.push(reg["player_id"].as_u64().unwrap() as u32);
+    }
+    let corp: af_core::cmd::CorpArgs = serde_json::from_value(json!({"action": "create", "name": "Iron Tide"})).unwrap();
+    game.exec(Actor::Player(ids[1]), Command::Corp(corp)).await.unwrap();
+    let radio = RadioArgs {
+        message: "Fair trade with @Vex Arden and @corp:Iron Tide.".into(),
+        ..Default::default()
+    };
+    game.exec(Actor::Player(ids[0]), Command::Radio(radio)).await.unwrap();
+
+    // Behind the spectator key like the captain profile, never cached by the server.
+    let r = http.get(format!("{url}/api/spectator/corp?name=iron%20tide")).send().await.unwrap();
+    assert_eq!(r.status(), 401);
+    let r = http
+        .get(format!("{url}/api/spectator/corp?name=iron%20tide&key=peek"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()[reqwest::header::CACHE_CONTROL], "public, max-age=60");
+    let c: Value = r.json().await.unwrap();
+    assert_eq!(c["name"], "Iron Tide");
+    assert_eq!(c["members"], json!(["Vex Arden"]));
+    assert_eq!(c["mentioned_in"][0]["kind"], "radio");
+    assert_eq!(c["mentioned_in"][0]["by"], "Ada Quill");
+    assert!(c.get("treasury").is_none(), "{c}");
+    let r = http
+        .get(format!("{url}/api/spectator/corp?name=nobody&key=peek"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    // The captain's public radio row and Chronicle story name the mention.
+    let st: Value = http
+        .get(format!("{url}/api/spectator/state?key=peek"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let row = st["radio"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["from"] == "Ada Quill")
+        .unwrap()
+        .clone();
+    assert_eq!(row["mentions"], json!(["Vex Arden", "corp:Iron Tide"]));
+    assert!(row.get("language").is_none());
+    let person: Value = http
+        .get(format!("{url}/api/public/chronicle/person?name=Vex%20Arden"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(person["mentioned_in"][0]["text"], "Fair trade with @Vex Arden and @corp:Iron Tide.");
+    // Not a page for crawlers.
+    let sitemap = reqwest::get(format!("{url}/sitemap.xml")).await.unwrap().text().await.unwrap();
+    assert!(!sitemap.contains("/api/spectator/corp"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mentions_mutes_and_language_retirement_over_mcp_match_the_operator_rest() {
+    use af_core::cmd::Command;
+    use af_core::engine::Actor;
+    let (url, game) = start().await;
+    let http = reqwest::Client::new();
+    let (mut tokens, mut ids) = (vec![], vec![]);
+    for name in ["Vex Arden", "Ora Kell", "Ada Quill"] {
+        let reg: Value = http
+            .post(format!("{url}/api/register"))
+            .json(&json!({"name": name, "model": "test"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        tokens.push(reg["token"].as_str().unwrap().to_string());
+        ids.push(reg["player_id"].as_u64().unwrap() as u32);
+    }
+    let corp: af_core::cmd::CorpArgs = serde_json::from_value(json!({"action": "create", "name": "Iron Tide"})).unwrap();
+    game.exec(Actor::Player(ids[1]), Command::Corp(corp)).await.unwrap();
+    let vex = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{}", tokens[0]))).await.unwrap();
+    let ada = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/{}", tokens[2]))).await.unwrap();
+    let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
+    let call = |c: &rmcp::service::RunningService<rmcp::RoleClient, ()>, tool: &str, args: Value| {
+        let mut p = CallToolRequestParams::new(tool.to_string());
+        p.arguments = args.as_object().cloned();
+        let peer = c.peer().clone();
+        async move { text(&peer.call_tool_once(p).await.unwrap()) }
+    };
+    let get = |path: String| {
+        let http = http.clone();
+        async move {
+            let r = http.get(path).bearer_auth("adm").send().await.unwrap();
+            let status = r.status().as_u16();
+            (status, r.json::<Value>().await.unwrap())
+        }
+    };
+
+    // Radio with `mentions` as a JSON-array string (some clients send every array that way).
+    let (ok, t) = call(
+        &vex,
+        "radio_broadcast",
+        json!({"message": "Meet at dawn, @Ora Kell.", "channel": "public", "mentions": "[\"Ada Quill\", \"corp:Iron Tide\"]"}),
+    )
+    .await;
+    assert!(ok && t.contains("mentioned"), "{t}");
+    let stored = game.read(|w| w.radio.last().map(|m| m.mentions.clone())).await.unwrap();
+    let mut captains = stored.captains.clone();
+    captains.sort();
+    assert_eq!(captains, vec![ids[1], ids[2]], "the inline and the structured mention");
+    assert_eq!(stored.corps.len(), 1);
+    // An unknown entry refuses with the closest names; a token pasted into it never echoes or logs.
+    let secret = format!("af_{}", "0123456789abcdef".repeat(3));
+    let (ok, t) = call(
+        &vex,
+        "radio_broadcast",
+        json!({"message": "hi", "channel": "public", "mentions": [secret.clone()]}),
+    )
+    .await;
+    assert!(!ok && t.contains("unknown_mention"), "{t}");
+    assert!(!t.contains(&secret) && t.contains("[redacted]"), "{t}");
+    // The mentions tool: Ada mutes Vex and lists it.
+    let (ok, t) = call(&ada, "mentions", json!({"action": "mute", "target": "Vex Arden"})).await;
+    assert!(ok, "{t}");
+    let (ok, t) = call(&ada, "mentions", json!({"action": "list"})).await;
+    assert!(ok && t.contains("Vex Arden"), "{t}");
+    game.flush_activity().await;
+    let calls = serde_json::to_string(&game.activity(None, 0, 10_000).await).unwrap();
+    assert!(!calls.contains(&secret), "the interaction log never keeps a pasted token");
+
+    // REST and sysop MCP give the same mention view, unfiltered and filtered.
+    let (status, rest) = get(format!("{url}/api/sysop/mentions")).await;
+    assert_eq!(status, 200, "{rest}");
+    assert_eq!(rest["totals"]["mentions"], 3, "{rest}");
+    assert_eq!(rest["mutes"]["pairs"][0]["by"], "Ada Quill", "{rest}");
+    let (ok, t) = call(&sysop, "sysop_mentions", json!({})).await;
+    assert!(ok && t.starts_with("Mentions ("), "{t}");
+    assert_eq!(envelope(&t), rest);
+    let (status, by_corp) = get(format!("{url}/api/sysop/mentions?corp=iron%20tide&recent=5")).await;
+    assert_eq!(status, 200, "{by_corp}");
+    assert_eq!(
+        by_corp["totals"]["mentions"], 1,
+        "mentions of the corporation or by its members: {by_corp}"
+    );
+    assert_eq!(by_corp["pairs"][0]["to"], "Iron Tide", "{by_corp}");
+    let (ok, t) = call(&sysop, "sysop_mentions", json!({"corp": "Iron Tide", "recent": 5})).await;
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t), by_corp);
+    let (_, by_ada) = get(format!("{url}/api/sysop/mentions?captain=Ada%20Quill&season=all")).await;
+    let (ok, t) = call(&sysop, "sysop_mentions", json!({"captain": ids[2], "season": "all"})).await;
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t), by_ada);
+    assert_eq!(by_ada["pairs"][0]["to"], "Ada Quill", "{by_ada}");
+    assert_eq!(get(format!("{url}/api/sysop/mentions?corp=nobody")).await.0, 404);
+    assert_eq!(get(format!("{url}/api/sysop/mentions?season=soon")).await.0, 400);
+    let (ok, t) = call(&sysop, "sysop_mentions", json!({"corp": "nobody"})).await;
+    assert!(!ok && t.contains("unknown_corp"), "{t}");
+    assert_eq!(http.get(format!("{url}/api/sysop/mentions")).send().await.unwrap().status(), 401);
+    // The player view: mutes and the notice fields.
+    let (_, ada_view) = get(format!("{url}/api/sysop/player?name=Ada%20Quill")).await;
+    assert_eq!(ada_view["mention_mutes"]["captains"], json!(["Vex Arden"]), "{ada_view}");
+    let (_, ora_view) = get(format!("{url}/api/sysop/player?name=Ora%20Kell")).await;
+    let n = ora_view["inbox"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["kind"] == "mention")
+        .cloned()
+        .unwrap_or(Value::Null);
+    assert_eq!(n["quote"], "Meet at dawn, @Ora Kell.", "{ora_view}");
+    assert!(n["mention"].is_object() && n["about"]["surface"] == "radio", "{n}");
+
+    // Languages: a token in a new name is scrubbed on define.
+    let (ok, t) = call(
+        &vex,
+        "language",
+        json!({"action": "define", "name": "Dockcant", "explanation": "Trade shorthand.", "share": "captains"}),
+    )
+    .await;
+    assert!(ok, "{t}");
+    let (ok, t) = call(
+        &vex,
+        "language",
+        json!({"action": "define", "name": format!("x{secret}"), "explanation": "Hidden."}),
+    )
+    .await;
+    assert!(ok, "{t}");
+    let names = game
+        .read(|w| w.languages.values().map(|l| l.name.clone()).collect::<Vec<_>>())
+        .await;
+    assert!(
+        names.iter().any(|n| n == "x[redacted]") && !names.iter().any(|n| n.contains(&secret)),
+        "{names:?}"
+    );
+    // The preview: REST and MCP agree; without it there is no preview block.
+    let (_, plain) = get(format!("{url}/api/sysop/languages")).await;
+    assert!(plain.get("preview").is_none(), "{plain}");
+    let (_, pv) = get(format!("{url}/api/sysop/languages?preview=1")).await;
+    assert_eq!(pv["preview"]["source"], "suggested", "{pv}");
+    let (ok, t) = call(&sysop, "sysop_languages", json!({"preview": true})).await;
+    assert!(ok && t.contains("Preview (suggested"), "{t}");
+    assert_eq!(envelope(&t), pv);
+    let (_, ov) = get(format!("{url}/api/sysop/languages?stale_days=0&retire_days=0&grace_days=5")).await;
+    assert_eq!(
+        (ov["preview"]["source"].clone(), ov["preview"]["grace_days"].clone()),
+        (json!("override"), json!(5))
+    );
+    let (ok, t) = call(
+        &sysop,
+        "sysop_languages",
+        json!({"stale_days": 0, "retire_days": 0, "grace_days": 5}),
+    )
+    .await;
+    assert!(ok);
+    assert_eq!(envelope(&t), ov);
+    let id = pv["languages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["name"] == "Dockcant")
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    // Retire through REST, restore and retire again through sysop_action: the same result.
+    let rest_retire: Value = http
+        .post(format!("{url}/api/sysop/action/language"))
+        .bearer_auth("adm")
+        .json(&json!({"decision": "retire", "ids": [id.to_string()], "reason": "spam"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(rest_retire["result"], json!({"retired": [id], "skipped": []}), "{rest_retire}");
+    let (ok, t) = call(&vex, "language", json!({"action": "list"})).await;
+    assert!(ok && !t.contains("Dockcant"), "a retired language leaves the list: {t}");
+    let action = |args: Value| call(&sysop, "sysop_action", json!({"action": "language", "args": args}));
+    let (ok, t) = action(json!({"decision": "unretire", "ids": [id]})).await;
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["result"], json!({"unretired": [id], "skipped": []}));
+    let (ok, t) = action(json!({"decision": "retire", "ids": [id], "reason": "spam"})).await;
+    assert!(ok, "{t}");
+    assert_eq!(envelope(&t)["result"], rest_retire["result"]);
+    let (ok, t) = action(json!({"decision": "retire"})).await;
+    assert!(!ok && t.contains("invalid_args"), "{t}");
+    let (ok, t) = action(json!({"decision": "retire", "ids": [999]})).await;
+    assert!(!ok && t.contains("unknown_language"), "{t}");
+    let r = http
+        .post(format!("{url}/api/sysop/action/language"))
+        .bearer_auth("adm")
+        .json(&json!({"decision": "bury", "ids": [id]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
 }

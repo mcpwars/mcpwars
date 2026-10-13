@@ -586,6 +586,8 @@ pub fn generate(cfg: &GenesisConfig) -> World {
         rename_required: Default::default(),
         chronicle: Default::default(),
         improve: Default::default(),
+        mentions: Default::default(),
+        next_language: 0,
         treaties: BTreeMap::new(),
         wars: BTreeMap::new(),
         intents: BTreeMap::new(),

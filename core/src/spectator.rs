@@ -143,13 +143,25 @@ fn radio_json(w: &World, m: &RadioMsg) -> Value {
         }
         Channel::Private(to) => ("private", Some(w.player_name(*to)), Some(*to), None, None),
     };
-    json!({
+    let mut v = json!({
         "id": m.id, "tick": m.tick, "at_ms": m.at_ms, "channel": channel, "text": m.text,
         "from": m.from_name, "from_id": m.from, "system": m.from == 0,
         "from_model": sender.and_then(|p| p.model.clone()),
         "from_corp": sender.and_then(|p| p.corp).and_then(|c| w.corps.get(&c)).map(|c| c.name.clone()),
         "to": to, "to_id": to_id, "corp": corp, "corp_id": corp_id,
-    })
+    });
+    // Engine 1.58: who the message mentions and the language it is tagged with.
+    if !m.mentions.is_empty() {
+        v["mentions"] = json!({
+            "captains": m.mentions.captains.iter().map(|c| json!({"id": c, "name": crate::mention::captain_name(w, *c)})).collect::<Vec<_>>(),
+            "corps": m.mentions.corps.iter().map(|c| json!({"id": c.id, "name": crate::mention::corp_name(w, c.id, Some(&c.name))})).collect::<Vec<_>>(),
+        });
+    }
+    if let Some(t) = &m.language {
+        let name = crate::language::by_ref(w, &crate::language::LangRef::Id(t.id)).map(|(_, l)| l.name.clone());
+        v["language"] = json!({"id": t.id, "name": name, "version": t.version});
+    }
+    v
 }
 
 #[cfg(test)]
@@ -168,6 +180,8 @@ mod tests {
             from_name: from_name.into(),
             channel,
             text: format!("m{id}"),
+            mentions: Default::default(),
+            language: None,
         };
         w.radio.push(msg(1, 0, "Federation Relay", Channel::Public));
         w.radio.push(msg(2, 1, "A", Channel::Private(9_999)));
@@ -183,6 +197,22 @@ mod tests {
         assert_eq!(r[1]["to_id"], 9_999);
         assert_eq!(r[2]["system"], true);
         assert_eq!(r[2]["text"], "m1");
+        // Engine 1.58: mentions and the language tag, for the operator.
+        let mut tagged = msg(4, 1, "A", Channel::Public);
+        tagged.mentions = crate::mention::Mentions {
+            captains: vec![9_998],
+            corps: vec![crate::mention::CorpMention {
+                id: 77,
+                name: "Iron Tide".into(),
+            }],
+        };
+        tagged.language = Some(crate::language::LangTag { id: 5, version: 2 });
+        w.radio.push(tagged);
+        let r = state(&w)["radio"][0].clone();
+        assert_eq!(r["mentions"]["captains"], json!([{"id": 9_998, "name": "#9998"}]));
+        assert_eq!(r["mentions"]["corps"], json!([{"id": 77, "name": "Iron Tide"}]));
+        assert_eq!(r["language"], json!({"id": 5, "name": null, "version": 2}));
+        assert!(state(&w)["radio"][1].get("mentions").is_none());
         for i in 0..300 {
             w.radio.push(msg(10 + i, 1, "A", Channel::Public));
         }

@@ -19,12 +19,13 @@
 //! radio; inboxes, notes or owner orders; or individual trades.
 //! Everything else is for the sysop console only (`spectator`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::engine::Event;
+use crate::mention::{self, Place, Target};
 use crate::model::*;
 use crate::query;
 
@@ -292,13 +293,163 @@ fn stars(w: &World) -> Vec<Value> {
 
 fn radio_json(w: &World, m: &RadioMsg) -> Value {
     let sender = w.players.get(&m.from);
-    json!({
+    let mut v = json!({
         // Captains see sector numbers on the radio; spectators never do (bulletins, player chatter).
         "id": m.id, "tick": m.tick, "channel": "public", "text": scrub(&m.text),
         "from": m.from_name, "from_id": m.from, "system": m.from == 0,
         "from_model": sender.and_then(|p| p.model.clone()),
         "from_corp": sender.and_then(|p| p.corp).and_then(|c| w.corps.get(&c)).map(|c| c.name.clone()),
-    })
+    });
+    // Who it mentions (engine 1.58), under current names; removed captains are left out. A
+    // language tag is never public.
+    let names = m.mentions.public_names(w);
+    if !names.is_empty() {
+        v["mentions"] = json!(names.iter().map(|n| scrub(n)).collect::<Vec<_>>());
+    }
+    v
+}
+
+/// A captain the public views name: not a Skarn or Federation ship and not the operator.
+fn public_captain(w: &World, id: PlayerId) -> Option<&Player> {
+    w.players
+        .get(&id)
+        .filter(|p| p.kind != PlayerKind::Npc && p.npc.is_none() && p.id != SYSOP)
+}
+
+/// A scrubbed excerpt of `text` around the first inline mention of `t` (or from its start, for a
+/// structured mention).
+fn mention_excerpt(text: &str, ix: &mention::Index, t: Target) -> String {
+    let text = scrub(text);
+    let off = mention::inline(&text, ix).into_iter().find(|(x, _)| *x == t).map_or(0, |(_, o)| o);
+    mention::excerpt(&text, off)
+}
+
+/// One public place that names `t`, checked now: None when it is gone, struck, private, by a
+/// removed captain, or no longer names `t`.
+fn mentioned_row(w: &World, ix: &mention::Index, t: Target, place: &Place) -> Option<Value> {
+    match place {
+        Place::Radio { id, corp: None } => {
+            let i = w.radio.binary_search_by_key(id, |m| m.id).ok()?;
+            let m = &w.radio[i];
+            if m.channel != Channel::Public || !m.mentions.hits(t) {
+                return None;
+            }
+            let by = public_captain(w, m.from)?;
+            Some(json!({"kind": "radio", "by": scrub(&by.name), "tick": m.tick, "text": mention_excerpt(&m.text, ix, t)}))
+        }
+        Place::Radio { corp: Some(_), .. } => None,
+        Place::Page { page, revision } => {
+            let pg = w.chronicle.pages.get(page).filter(|pg| pg.struck.is_none())?;
+            if !pg.current().mentions.hits(t) {
+                return None;
+            }
+            // By the author of the revision that wrote the mention; once that captain is removed,
+            // the page's creator stands in, and with both gone the page is left out.
+            let r = pg.revisions.iter().find(|r| r.revision == *revision)?;
+            let by = public_captain(w, r.author).or_else(|| public_captain(w, pg.created_by))?;
+            Some(json!({"kind": "page", "by": scrub(&by.name), "tick": r.tick, "title": scrub(&pg.current().title), "page": pg.id}))
+        }
+        Place::Talk { page, comment } => {
+            let pg = w.chronicle.pages.get(page).filter(|pg| pg.struck.is_none())?;
+            let c = pg.talk.iter().find(|c| c.id == *comment && c.mentions.hits(t))?;
+            let by = public_captain(w, c.author)?;
+            Some(json!({"kind": "talk", "by": scrub(&by.name), "tick": c.tick, "text": mention_excerpt(&c.text, ix, t), "page": pg.id}))
+        }
+        Place::Log { owner, n } => {
+            if t == Target::Captain(*owner) {
+                return None;
+            }
+            let e = w.identities.get(owner)?.log.iter().find(|e| e.n == *n)?;
+            if e.private || !e.mentions.hits(t) {
+                return None;
+            }
+            let by = public_captain(w, *owner)?;
+            Some(json!({"kind": "log", "by": scrub(&by.name), "tick": e.tick, "text": mention_excerpt(&e.text, ix, t)}))
+        }
+        Place::Proposal { id } => {
+            let p = w.constitution.proposals.iter().find(|p| p.id == *id)?;
+            // An article strike strikes the text of the proposals that wrote it without setting
+            // `struck`; `struck_original` marks both.
+            if p.struck.is_some() || p.struck_original.is_some() || p.by_operator || !p.mentions.hits(t) {
+                return None;
+            }
+            let text = match &p.change {
+                crate::constitution::ProposalKind::Add { text } | crate::constitution::ProposalKind::Amend { text, .. } => text,
+                _ => return None,
+            };
+            let by = public_captain(w, p.proposer)?;
+            Some(
+                json!({"kind": "proposal", "by": scrub(&by.name), "tick": p.opened_tick, "text": mention_excerpt(text, ix, t), "proposal": p.id}),
+            )
+        }
+    }
+}
+
+/// Public items that name a captain or a corporation (engine 1.58), newest first, one row per
+/// item (a page once, each talk comment once), at most `MENTIONED_IN_MAX`. Read from the bounded per-target index, never a scan; each place
+/// is checked again here, so a struck, deleted or private item drops out.
+pub fn mentioned_in(w: &World, t: Target) -> Vec<Value> {
+    mentioned_in_with(w, &mention::index(w), t)
+}
+
+/// `mentioned_in` with a name index the caller already built.
+pub fn mentioned_in_with(w: &World, ix: &mention::Index, t: Target) -> Vec<Value> {
+    let places = match t {
+        Target::Captain(c) => w.mentions.by_captain.get(&c),
+        Target::Corp(k) => w.mentions.by_corp.get(&k),
+    };
+    let Some(places) = places else {
+        return vec![];
+    };
+    let mut seen = BTreeSet::new();
+    let mut out = vec![];
+    for place in places.iter().rev() {
+        if out.len() >= mention::MENTIONED_IN_MAX {
+            break;
+        }
+        // One row per item: a page once (whichever revisions named it), each talk comment and
+        // log line on its own.
+        let key = match place {
+            Place::Radio { id, .. } => (0, 0, *id, 0),
+            Place::Page { page, .. } => (1, 0, *page, 0),
+            Place::Talk { page, comment } => (2, 0, *page, *comment),
+            Place::Log { owner, n } => (3, u64::from(*owner), u64::from(*n), 0),
+            Place::Proposal { id } => (4, 0, *id, 0),
+        };
+        if seen.contains(&key) {
+            continue;
+        }
+        if let Some(v) = mentioned_row(w, ix, t, place) {
+            seen.insert(key);
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// A corporation's public profile (by name, matched ignoring case and punctuation; the lowest id
+/// wins): its CEO, members, government summary and the public items that name it. No treasury
+/// and no space.
+pub fn corp(w: &World, name: &str) -> Option<Value> {
+    let k = crate::player::name_key(name);
+    if k.is_empty() {
+        return None;
+    }
+    let c = w.corps.values().find(|c| crate::player::name_key(&c.name) == k)?;
+    let members: Vec<String> = c
+        .members
+        .iter()
+        .filter_map(|m| public_captain(w, *m))
+        .map(|p| p.name.clone())
+        .collect();
+    let v = json!({
+        "name": c.name,
+        "ceo": public_captain(w, c.ceo).map(|p| p.name.clone()),
+        "members": members,
+        "government": crate::government::public_summary(w, c),
+        "mentioned_in": mentioned_in(w, Target::Corp(c.id)),
+    });
+    Some(public_registry(v))
 }
 
 fn public_radio(w: &World) -> impl DoubleEndedIterator<Item = &RadioMsg> {
@@ -412,11 +563,30 @@ pub fn player(w: &World, name: &str) -> Option<Value> {
             .map(|m| radio_json(w, m))
             .collect::<Vec<_>>()
     );
+    // Exact attribution (engine 1.58): the longest name at each word, so "Vex" is not credited
+    // with a headline about "Vex Arden". A headline can name the captain only if its word key
+    // holds the key of the call sign or a former one, so that cheap test runs first and the
+    // tokenizer only on the few headlines that pass it. The index is built once for both lists.
+    let ix = mention::index(w);
+    let keys: Vec<String> = std::iter::once(p.name.as_str())
+        .chain(
+            w.identities
+                .get(&p.id)
+                .map(|i| i.former_names.iter().map(String::as_str))
+                .into_iter()
+                .flatten(),
+        )
+        .map(mention::word_key)
+        .filter(|k| !k.is_empty())
+        .collect();
     v["news"] = json!(
         w.news
             .iter()
             .rev()
-            .filter(|n| n.headline.contains(&p.name))
+            .filter(|n| {
+                let hk = mention::word_key(&n.headline);
+                keys.iter().any(|k| hk.contains(k.as_str())) && mention::names_in(&n.headline, &ix).contains(&Target::Captain(p.id))
+            })
             .take(15)
             .map(|n| json!({"tick": n.tick, "headline": scrub(&n.headline)}))
             .collect::<Vec<_>>()
@@ -433,6 +603,7 @@ pub fn player(w: &World, name: &str) -> Option<Value> {
                 .collect::<Vec<_>>())
             .unwrap_or_default()
     );
+    v["mentioned_in"] = json!(mentioned_in_with(w, &ix, Target::Captain(p.id)));
     Some(v)
 }
 
@@ -1130,6 +1301,8 @@ mod tests {
             from_name: "Vex".into(),
             channel: Channel::Private(2),
             text: "secret plan".into(),
+            mentions: Default::default(),
+            language: None,
         });
         // Public radio from a captain and a Federation bulletin, both naming the sector.
         w.radio.push(RadioMsg {
@@ -1140,6 +1313,8 @@ mod tests {
             from_name: "Vex".into(),
             channel: Channel::Public,
             text: "Ore for sale, meet me in sector 123.".into(),
+            mentions: Default::default(),
+            language: None,
         });
         w.radio.push(RadioMsg {
             id: 3,
@@ -1149,6 +1324,8 @@ mod tests {
             from_name: "Federation".into(),
             channel: Channel::Public,
             text: "FEDERATION BULLETIN: Salvage drifts in Sector 123. First to arrive takes it.".into(),
+            mentions: Default::default(),
+            language: None,
         });
         w.news.push(NewsItem {
             tick: 1,
@@ -1222,6 +1399,7 @@ mod tests {
                     body: "It happened in sector 123.".into(),
                     summary: String::new(),
                     citations: vec![],
+                    mentions: Default::default(),
                 }],
                 talk: vec![],
                 endorsements: vec![],
@@ -1237,6 +1415,7 @@ mod tests {
                 }],
                 struck: None,
                 production: None,
+                contributors: None,
             },
         );
         // Feedback to the operator is private: no public projection carries it.
@@ -1301,8 +1480,10 @@ mod tests {
                 yes: 2,
                 no: 0,
                 electorate: 3,
+                struck_original: None,
             }],
             by_operator: false,
+            struck_original: None,
         });
         // The operator's comments, notices and strike reasons are scrubbed the same way.
         w.constitution.notices.push(crate::constitution::OperatorNotice {
@@ -1339,8 +1520,14 @@ mod tests {
                 at_ms: 0,
                 reason: Some("names sector 123".into()),
             }),
+            mentions: Default::default(),
+            // The operator-only original of struck text (engine 1.58) never reaches a public view.
+            struck_original: Some("STRUCK-ORIGINAL".into()),
         });
         assert!(state(&w)["constitution"].to_string().contains("Neutral ground."));
+        for v in [state(&w), crate::constitution::public_view(&w)] {
+            assert!(!v.to_string().contains("STRUCK-ORIGINAL"), "{v}");
+        }
         assert!(state(&w)["constitution"]["open_proposals"][0]["operator_comments"].is_array());
         // Registry entries that name a sector (public in game through `view_registry`).
         w.intents.insert(
@@ -1394,6 +1581,163 @@ mod tests {
             shares: Default::default(),
             toll_price: None,
         });
+        // Mentions (engine 1.58): only public items reach "Mentioned in"; corp, private, struck and
+        // tagged material never leaks. The index is filled by hand with every place, so the
+        // read-time checks are what keep the private ones out.
+        let vex = mention::Mentions {
+            captains: vec![9_001],
+            corps: vec![],
+        };
+        let mut ora = w.players[&9_001].clone();
+        ora.id = 9_002;
+        ora.name = "Ora".into();
+        ora.corp = None;
+        w.players.insert(ora.id, ora);
+        let radio = |id: u64, channel: Channel, text: &str, language: Option<crate::language::LangTag>| RadioMsg {
+            id,
+            tick: 2,
+            at_ms: 0,
+            from: 9_002,
+            from_name: "Ora".into(),
+            channel,
+            text: text.into(),
+            mentions: vex.clone(),
+            language,
+        };
+        w.radio
+            .push(radio(10, Channel::Public, "Fair trade with @Vex near sector 123.", None));
+        w.radio.push(radio(11, Channel::Corp(77), "CORP-ONLY-MENTION @Vex", None));
+        w.radio.push(radio(12, Channel::Private(9_001), "PRIVATE-MENTION @Vex", None));
+        w.radio.push(radio(
+            13,
+            Channel::Public,
+            "Tagged words for @Vex",
+            Some(crate::language::LangTag { id: 4, version: 2 }),
+        ));
+        let line = |n: u32, text: &str, private: bool| crate::identity::LogEntry {
+            n,
+            tick: 3,
+            at_ms: 0,
+            season: 1,
+            epoch: 0,
+            text: text.into(),
+            mood: String::new(),
+            private,
+            about: vec![],
+            citations: vec![],
+            mentions: vex.clone(),
+        };
+        w.identities.insert(
+            9_002,
+            crate::identity::Identity {
+                log: vec![
+                    line(1, "PRIVATE-LOG-MENTION @Vex", true),
+                    line(2, "Shared a drink with @Vex today.", false),
+                ],
+                ..Default::default()
+            },
+        );
+        let rev = |revision: u32, author: PlayerId, body: &str, citations: Vec<crate::chronicle::Citation>| crate::chronicle::Revision {
+            revision,
+            author,
+            author_name: if author == 9_002 { "Ora" } else { "Gone Captain" }.into(),
+            tick: 4,
+            at_ms: 0,
+            season: 1,
+            epoch: 0,
+            title: format!("Page by {author}"),
+            body: body.into(),
+            summary: String::new(),
+            citations,
+            mentions: vex.clone(),
+        };
+        let page = |id: u64, revisions: Vec<crate::chronicle::Revision>, struck: bool| crate::chronicle::Page {
+            id,
+            kind: crate::chronicle::Kind::Story,
+            created_by: 9_002,
+            created_tick: 4,
+            season: 1,
+            epoch: 0,
+            revisions,
+            talk: vec![],
+            endorsements: vec![],
+            canon_tick: None,
+            canon_season: None,
+            reports: vec![],
+            struck: struck.then(|| crate::chronicle::Strike {
+                tick: 5,
+                at_ms: 0,
+                reason: "names sector 123".into(),
+            }),
+            production: None,
+            contributors: None,
+        };
+        // A live page about Vex, revised by a contributor who is then removed (#9003), citing the
+        // struck proposal (its copy replaced, the original kept for the operator only).
+        let cite = crate::chronicle::Citation {
+            record: crate::chronicle::Record::Proposal,
+            id: Some(2),
+            tick: None,
+            note: String::new(),
+            on_record: crate::chronicle::STRUCK.into(),
+            struck_original: Some("STRUCK-CITATION".into()),
+        };
+        w.chronicle.pages.insert(
+            2,
+            page(
+                2,
+                vec![
+                    rev(1, 9_002, "Vex sailed out.", vec![]),
+                    rev(2, 9_003, "Vex sailed out with five more brand new words.", vec![cite]),
+                ],
+                false,
+            ),
+        );
+        w.chronicle
+            .pages
+            .insert(3, page(3, vec![rev(1, 9_002, "STRUCK-PAGE-MENTION", vec![])], true));
+        w.chronicle.next_page = 3;
+        w.constitution.proposals[0].mentions = vex.clone();
+        let places = [
+            Place::Radio { id: 10, corp: None },
+            Place::Radio { id: 11, corp: Some(77) },
+            Place::Radio { id: 12, corp: None },
+            Place::Radio { id: 13, corp: None },
+            Place::Log { owner: 9_002, n: 1 },
+            Place::Log { owner: 9_002, n: 2 },
+            Place::Page { page: 2, revision: 2 },
+            Place::Page { page: 3, revision: 1 },
+            Place::Proposal { id: 2 },
+        ];
+        for pl in &places {
+            mention::index_place(&mut w.mentions, Target::Captain(9_001), pl);
+            mention::index_place(&mut w.mentions, Target::Corp(77), pl);
+        }
+        for (i, r) in w.radio.iter_mut().enumerate() {
+            if i >= 3 {
+                r.mentions.corps.push(mention::CorpMention {
+                    id: 77,
+                    name: "Vex Holdings".into(),
+                });
+            }
+        }
+        let mi = mentioned_in(&w, Target::Captain(9_001));
+        let kinds: Vec<&str> = mi.iter().map(|r| r["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["page", "log", "radio", "radio"], "{mi:?}");
+        // The page's mentioning revision is by a removed captain: the creator stands in.
+        assert_eq!(mi[0]["by"], "Ora");
+        assert_eq!(mi[0]["page"], 2);
+        assert_eq!(mi[1]["text"], "Shared a drink with @Vex today.");
+        assert_eq!(mi[3]["text"], "Fair trade with @Vex.", "excerpts are scrubbed");
+        let corp_mi = mentioned_in(&w, Target::Corp(77));
+        assert_eq!(corp_mi.len(), 2, "{corp_mi:?}");
+        let radio_rows = state(&w)["radio"].clone();
+        let tagged = radio_rows.as_array().unwrap().iter().find(|r| r["id"] == 13).unwrap();
+        assert_eq!(tagged["mentions"], json!(["Vex", "corp:Vex Holdings"]));
+        assert!(
+            radio_rows.as_array().unwrap().iter().all(|r| r.get("language").is_none()),
+            "no language tag in public radio"
+        );
         let reg = state(&w)["registry"].clone();
         assert!(
             reg["reputation"]["captains"]
@@ -1446,6 +1790,11 @@ mod tests {
             ("player", player(&w, "Vex").unwrap()),
             ("chronicle", crate::chronicle::public_view(&w, &Default::default())),
             ("chronicle_page", crate::chronicle::public_page(&w, 1).unwrap()),
+            ("chronicle_page_mentions", crate::chronicle::public_page(&w, 2).unwrap()),
+            ("chronicle_page_struck", crate::chronicle::public_page(&w, 3).unwrap()),
+            ("chronicle_person", crate::chronicle::public_person(&w, "Vex", None).unwrap()),
+            ("corp", corp(&w, "vex holdings").unwrap()),
+            ("constitution", crate::constitution::public_view(&w)),
         ] {
             // The registry is the in-game `view_registry` tool, public by design.
             let mut v = v.clone();
@@ -1464,11 +1813,32 @@ mod tests {
             assert!(!text.contains("SECRET-BACKSTORY"), "{name} leaks a backstory");
             assert!(!text.contains("PRIVATE-REPORT"), "{name} leaks a content report");
             assert!(!text.contains("PRIVATE-IMPROVE"), "{name} leaks the improve board");
-            if name.starts_with("chronicle") {
+            for sentinel in [
+                "CORP-ONLY-MENTION",
+                "PRIVATE-MENTION",
+                "PRIVATE-LOG-MENTION",
+                "STRUCK-PAGE-MENTION",
+                "STRUCK-ORIGINAL",
+                "STRUCK-CITATION",
+                "Tagged words",
+            ] {
+                // Public tagged radio is public; only its tag stays out (checked above).
+                if sentinel == "Tagged words" && (name == "state" || name == "player" || name == "chronicle_person" || name == "corp") {
+                    continue;
+                }
+                assert!(!text.contains(sentinel), "{name} leaks {sentinel}");
+            }
+            assert!(!ks.iter().any(|k| k == "language"), "{name} carries a language tag");
+            if name.starts_with("chronicle") || name == "corp" {
                 assert!(!ks.iter().any(|k| k == "player_id"), "{name} carries player ids");
+                assert!(!ks.iter().any(|k| k == "from_id"), "{name} carries sender ids");
+                assert!(!text.contains("#9003"), "{name} names a removed captain by id");
             }
             if name == "state" || name == "player" {
                 assert!(text.contains("Ore for sale, meet me."), "{name} keeps public radio, scrubbed");
+            }
+            if name == "player" || name == "chronicle_person" {
+                assert!(!v["mentioned_in"].as_array().unwrap().is_empty(), "{name}: Vex is mentioned");
             }
             assert!(!text.to_ascii_lowercase().contains("sector 123"), "{name} leaks a sector number");
         }

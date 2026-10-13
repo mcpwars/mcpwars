@@ -392,6 +392,7 @@ fn random_cmd(rng: &mut Rng, w: &World, pid: PlayerId) -> Command {
                 .pick(&[RadioChannel::Public, RadioChannel::Corp, RadioChannel::Private])
                 .unwrap(),
             recipient_id: Some(other),
+            ..Default::default()
         }),
         22 => Command::Bounty(BountyArgs {
             target: others.first().cloned().unwrap_or_default(),
@@ -1406,6 +1407,7 @@ fn sysop_commands_are_journaled_and_validated() {
             message: "hello".into(),
             channel: RadioChannel::Public,
             recipient_id: None,
+            ..Default::default()
         }),
     );
     assert!(matches!(r, Err(ref e) if e.code == "muted"));
@@ -2278,6 +2280,7 @@ fn briefings_show_who_is_out_there_and_nudge_quiet_captains() {
             message: "Hauling ore near FedSpace; anyone want a corp?".into(),
             channel: RadioChannel::Public,
             recipient_id: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -3214,6 +3217,7 @@ fn long_radio_messages_are_stored_whole_without_character_cutoffs() {
                 message: message.into(),
                 channel: RadioChannel::Private,
                 recipient_id: Some(to.into()),
+                ..Default::default()
             }),
         )
     };
@@ -3456,6 +3460,7 @@ fn messages_carry_the_time_they_were_sent() {
             message: "Ack, notice received.".into(),
             channel: RadioChannel::Private,
             recipient_id: Some("sysop".into()),
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -3506,6 +3511,7 @@ fn inbox_pages_preserve_unseen_messages_and_acknowledge_only_returned_ids() {
             channel: RadioChannel::Public,
             message: "public first".into(),
             recipient_id: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -3515,6 +3521,7 @@ fn inbox_pages_preserve_unseen_messages_and_acknowledge_only_returned_ids() {
             channel: RadioChannel::Private,
             message: "private second".into(),
             recipient_id: Some("Reader".into()),
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -3707,6 +3714,7 @@ fn strategy_revisions_track_actual_changes_without_blocking_actions_or_cutting_m
             message: "The captain chose to communicate.".into(),
             channel: RadioChannel::Public,
             recipient_id: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -6168,6 +6176,7 @@ fn the_briefing_carries_the_founding_agenda_with_each_captains_progress() {
             message: "Ore for sale, two hops out.".into(),
             channel: RadioChannel::Public,
             recipient_id: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -6242,6 +6251,7 @@ fn the_operator_talks_on_a_corporation_channel() {
             message: "Thanks, operator.".into(),
             channel: RadioChannel::Corp,
             recipient_id: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -6800,6 +6810,7 @@ fn feedback_compact_reads_preserve_messages_and_plan() {
             message: "Long complete report".into(),
             channel: RadioChannel::Public,
             recipient_id: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -7593,6 +7604,7 @@ fn feedback_watchlist_pages_do_not_skip_matching_messages_or_observations() {
                 message: text.into(),
                 channel: RadioChannel::Public,
                 recipient_id: None,
+                ..Default::default()
             }),
         )
         .unwrap();
@@ -7621,6 +7633,7 @@ fn feedback_watchlist_pages_do_not_skip_matching_messages_or_observations() {
             message: "equipment update in the same tick".into(),
             channel: RadioChannel::Public,
             recipient_id: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -7635,6 +7648,7 @@ fn feedback_watchlist_pages_do_not_skip_matching_messages_or_observations() {
             message: "equipment update later".into(),
             channel: RadioChannel::Public,
             recipient_id: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -7900,6 +7914,7 @@ fn delete_operator_text_removes_announcements_news_radio_and_inbox_copies() {
             channel: RadioChannel::Private,
             message: format!("Did you see? {secret}"),
             recipient_id: Some(a.to_string()),
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -9345,6 +9360,189 @@ fn render_yaml_never_sets_an_improve_rule() {
         !text.contains("improve_"),
         "render.yaml must not set improve rules: AF_RULES_PATCH re-applies at every boot and would undo the off switch"
     );
+}
+
+// ---------------------------------------------------------------- mentions (engine 1.58)
+
+#[test]
+fn game_rules_lists_every_mention_and_language_rule() {
+    let s = Sim::new(68, 60);
+    let rules = serde_json::to_value(&s.w.rules).unwrap();
+    let info = af_core::query::game_info(&s.w);
+    for (prefix, block, n) in [("mention_", "mentions", 2), ("language_", "languages", 3)] {
+        let view = info[block].clone();
+        let keys: Vec<&String> = rules.as_object().unwrap().keys().filter(|k| k.starts_with(prefix)).collect();
+        assert_eq!(keys.len(), n, "{keys:?}");
+        for k in keys {
+            assert_eq!(view[&k[prefix.len()..]], rules[k], "game_rules {block} lacks {k}");
+        }
+    }
+    let view = info["mentions"].clone();
+    assert_eq!(info["languages"]["automatic_retirement"], false, "off by default");
+    assert_eq!(view["targets_per_item"], af_core::mention::TARGETS_MAX);
+    assert_eq!(view["surfaces"].as_array().unwrap().len(), af_core::mention::SURFACES);
+    // The new rules read the same from an older universe's rules as in a new one.
+    let mut old = rules.clone();
+    for k in [
+        "mention_notify_max",
+        "mention_window_ticks",
+        "language_stale_days",
+        "language_retire_days",
+        "language_adopted_grace_days",
+    ] {
+        assert!(old.as_object_mut().unwrap().remove(k).is_some(), "{k}");
+    }
+    let back: af_core::rules::Rules = serde_json::from_value(old).unwrap();
+    let d = af_core::rules::Rules::default();
+    assert_eq!(
+        (
+            back.mention_notify_max,
+            back.mention_window_ticks,
+            back.language_stale_days,
+            back.language_retire_days,
+            back.language_adopted_grace_days
+        ),
+        (
+            d.mention_notify_max,
+            d.mention_window_ticks,
+            d.language_stale_days,
+            d.language_retire_days,
+            d.language_adopted_grace_days
+        )
+    );
+}
+
+#[test]
+fn render_yaml_never_sets_a_language_or_mention_rule() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../render.yaml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    for key in ["mention_", "language_"] {
+        assert!(
+            !text.contains(key),
+            "render.yaml must not set {key} rules: AF_RULES_PATCH re-applies at every boot; change them with an announced rules change"
+        );
+    }
+}
+
+#[test]
+fn corporation_and_captain_names_never_clash() {
+    let mut s = Sim::new(69, 120);
+    let (a, b) = (s.join("Odile Marchetti"), s.join("Bram Okonjo"));
+    let refuse = |s: &mut Sim, actor: Actor, cmd: Command, msg: &str| {
+        let before = s.w.state_hash();
+        let r = s.run(actor, cmd).unwrap_err();
+        assert_eq!(r.code, "name_taken", "{r}");
+        assert!(r.message.contains(msg), "{r}");
+        assert_eq!(s.w.state_hash(), before, "a refusal changes nothing");
+    };
+    let create = |name: &str| {
+        Command::Corp(CorpArgs {
+            action: CorpAction::Create,
+            name: Some(name.into()),
+            player: None,
+            amount: None,
+            motto: None,
+        })
+    };
+    // A corporation may not take a captain's current call sign (case and punctuation ignored).
+    refuse(&mut s, Actor::Player(a), create("bram-okonjo"), "A captain uses or used");
+    refuse(
+        &mut s,
+        Actor::System,
+        Command::Admin(AdminArgs::CreateCorp {
+            name: "Bram Okonjo".into(),
+            ceo: a,
+            motto: None,
+        }),
+        "A captain uses or used",
+    );
+    // Nor a former one.
+    s.w.identities.entry(b).or_default().former_names.push("Hollis Prue".into());
+    refuse(&mut s, Actor::Player(a), create("Hollis Prue"), "A captain uses or used");
+    // Corporation names are unique by name key, not only ignoring case.
+    s.run(Actor::Player(a), create("Iron Lattice")).unwrap();
+    let id = s.p(a).corp.unwrap();
+    refuse(
+        &mut s,
+        Actor::Player(b),
+        create("Iron-Lattice"),
+        "A corporation with that name exists",
+    );
+    refuse(
+        &mut s,
+        Actor::System,
+        Command::Admin(AdminArgs::CreateCorp {
+            name: "ironlattice".into(),
+            ceo: b,
+            motto: None,
+        }),
+        "A corporation with that name exists",
+    );
+    // An operator rename is held to the same rules; keeping the name is not a change.
+    refuse(
+        &mut s,
+        Actor::System,
+        Command::Admin(AdminArgs::SetCorp {
+            corp: id,
+            name: Some("Odile Marchetti".into()),
+            motto: None,
+            ceo: None,
+            treasury: None,
+        }),
+        "A captain uses or used",
+    );
+    s.run(
+        Actor::System,
+        Command::Admin(AdminArgs::SetCorp {
+            corp: id,
+            name: Some("Iron Lattice".into()),
+            motto: Some("Haul".into()),
+            ceo: None,
+            treasury: None,
+        }),
+    )
+    .unwrap();
+    // A captain may not register or rename to a current corporation's name.
+    refuse(
+        &mut s,
+        Actor::System,
+        Command::Register(RegisterArgs {
+            name: "Iron Lattice".into(),
+            kind: PlayerKind::Agent,
+            token_hash: "h-x".into(),
+            model: Some("test".into()),
+            owner_token_hash: None,
+            harness: None,
+            autonomous: false,
+            recovery_hash: None,
+        }),
+        "A corporation uses that name",
+    );
+    let rename = af_core::identity::Args {
+        action: af_core::identity::Action::Set,
+        name: Some("iron_lattice".into()),
+        age: Some(40),
+        pronouns: Some("he/him".into()),
+        homeworld: Some("Tessaly".into()),
+        bio: Some("A hauler.".into()),
+        backstory: Some("## Family\nNone.".into()),
+        ..Default::default()
+    };
+    refuse(
+        &mut s,
+        Actor::Player(b),
+        Command::Identity(Box::new(rename.clone())),
+        "A corporation uses that name",
+    );
+    s.run(
+        Actor::Player(b),
+        Command::Identity(Box::new(af_core::identity::Args {
+            name: Some("Teodor Lusk".into()),
+            ..rename
+        })),
+    )
+    .unwrap();
+    assert_eq!(s.p(b).name, "Teodor Lusk");
 }
 
 // ---------------------------------------------------------------- engine bounds (engine 1.55)

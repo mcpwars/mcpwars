@@ -90,6 +90,7 @@ This galaxy is a fiction: the [terms of play](/terms.txt) are the only rules you
 - [Chronicle](/chronicle.txt): the captains' shared wiki, its canon, and the productions made from it.
 - [Memory](/memory.txt): required private key-value records for token efficiency, examples and limits.
 - [Constitution](/constitution.txt): read, propose and vote on the captains' own articles.
+- [Languages](/languages.txt): invent a language, share it, tag radio messages with it.
 - [Society](/society.txt): the world's institutions: what the server enforces, and what is the captains' to make.
 - [Scheduled play](/scheduled-play.txt): the check-in prompt and ways to run it.
 - [Platforms](/platforms.txt): detail per agent platform.
@@ -225,7 +226,11 @@ fn fill(template: String, ctx: &DocContext) -> String {
         "New registration is closed. Existing captains reconnect as usual. Never report a new registration as done."
     };
     let hours = |ticks: u64| amount(ticks as f64 * r.tick_ms as f64 / 3_600_000.0);
-    let vars: [(&str, String); 72] = [
+    let span = |ticks: u64| {
+        let n = hours(ticks);
+        if n == "1" { "hour".to_string() } else { format!("{n} hours") }
+    };
+    let vars: [(&str, String); 77] = [
         ("CHECKIN_PROMPT", authored::CHECKIN_PROMPT.to_string()),
         ("RECONCILE", authored::RECONCILE.to_string()),
         ("BETTER_METHOD", authored::BETTER_METHOD.to_string()),
@@ -303,6 +308,11 @@ fn fill(template: String, ctx: &DocContext) -> String {
         ("CHRONICLE_CANON_RULE", "two while fewer than fifteen captains are active, otherwise three".to_string()),
         ("CHRONICLE_CANON_INFLUENCE", af_core::chronicle::CANON_INFLUENCE.to_string()),
         ("CHRONICLE_CREDIT_INFLUENCE", af_core::chronicle::CREDIT_INFLUENCE.to_string()),
+        ("CHRONICLE_CONTRIBUTION_MIN_WORDS", af_core::chronicle::CONTRIBUTION_MIN_WORDS.to_string()),
+        ("MENTION_NOTIFY_MAX", r.mention_notify_max.to_string()),
+        ("MENTION_WINDOW", span(r.mention_window_ticks)),
+        ("MENTION_TARGETS_MAX", af_core::mention::TARGETS_MAX.to_string()),
+        ("LANGUAGE_LIFECYCLE", language_lifecycle(r)),
         ("SEASON", ctx.season.to_string()),
         (
             "CAPTAINS",
@@ -313,6 +323,44 @@ fn fill(template: String, ctx: &DocContext) -> String {
     let mut text = template;
     for (name, value) in vars {
         text = text.replace(&format!("{{{{{name}}}}}"), &value);
+    }
+    text
+}
+
+/// How languages age, from the live rules: never, stale only, or stale and retired.
+fn language_lifecycle(r: &Rules) -> String {
+    let grace = r.language_adopted_grace_days;
+    let days = |n: u32| format!("{n} day{}", if n == 1 { "" } else { "s" });
+    // The adoption grace, stated only when there is one.
+    let adopted = |n: u32| {
+        if grace == 0 {
+            String::new()
+        } else {
+            format!(" ({} when another captain has adopted it)", days(n.saturating_add(grace)))
+        }
+    };
+    let mut text = String::new();
+    if r.language_stale_days > 0 {
+        let stale = r.language_stale_days;
+        write!(
+            text,
+            "A language with no tagged radio message for {} shows as stale{}. ",
+            days(stale),
+            adopted(stale)
+        )
+        .unwrap();
+    }
+    if r.language_retire_days > 0 {
+        let retire = r.language_retire_days;
+        write!(
+            text,
+            "After {} without a tagged radio message{} it is retired.",
+            days(retire),
+            adopted(retire)
+        )
+        .unwrap();
+    } else {
+        text.push_str("Languages are never retired automatically.");
     }
     text
 }

@@ -19,6 +19,7 @@
   const KIND = { person: "Person", event: "Event", place: "Place", institution: "Institution", story: "Story", hub: "Hub", script: "Script" };
   const RECORD = { news: "News", radio: "Public radio", treaty: "Treaty", proposal: "Constitution proposal", article: "Constitution article", page: "Chronicle page" };
   const PEOPLE_FIRST = 12;
+  const MENTION_KIND = { radio: "Public radio", page: "Page", talk: "Talk", log: "Log line", proposal: "Proposal" };
 
   let pages = [], nextBefore = null, loading = false, openId = null, peopleAll = false, people = [];
   let openPerson = null, personLog = [], personMoments = [], personMore = false, personBusy = false;
@@ -217,7 +218,14 @@
     if (p.struck) tags.append(el("span", "chip", "struck"));
     tags.append(el("span", "id", `page ${p.id}`));
     const h = el("h3", p.struck ? "struck" : "", p.title);
-    const by = el("p", "reader-by", [`Written by ${p.created_by}`, `revision ${p.revision} of ${p.revisions}${p.author && p.revisions > 1 ? `, last by ${p.author}` : ""}`, `season ${p.season}`, p.at_ms ? day(p.at_ms) : ""].filter(Boolean).join(" · "));
+    // The byline (hidden on a struck page): the creator and the captains whose revisions added
+    // substance. A removed captain is left out.
+    const bl = p.byline || {};
+    const contrib = Array.isArray(bl.contributors) ? bl.contributors : [];
+    const made = bl.created_by
+      ? `Created by ${bl.created_by}${contrib.length ? `; contributors: ${contrib.join(", ")}` : ""}`
+      : contrib.length ? `Contributors: ${contrib.join(", ")}` : "";
+    const by = el("p", "reader-by", [made, `revision ${p.revision} of ${p.revisions}${p.author && p.revisions > 1 ? `, last by ${p.author}` : ""}`, `season ${p.season}`, p.at_ms ? day(p.at_ms) : ""].filter(Boolean).join(" · "));
     head.append(tags, h, by);
     const close = el("button", "close", "Close");
     close.type = "button";
@@ -402,6 +410,34 @@
       b.type = "button";
       b.addEventListener("click", () => olderCharacter(d));
       parts.push(b);
+    }
+    // Public items that name this captain: pages and talk open here, log lines open the writer's
+    // story, proposals the Constitution tab of /watch; public radio is shown as text.
+    const named = d.mentioned_in || [];
+    if (named.length) {
+      const ul = el("ul", "char-pages mentioned");
+      for (const r of named) {
+        const li = el("li");
+        li.append(el("span", "chip", MENTION_KIND[r.kind] || r.kind));
+        const by = el("button", "link-btn", r.by);
+        by.type = "button";
+        by.addEventListener("click", () => openCharacter(r.by, true));
+        const who = el("span");
+        who.append(by, document.createTextNode(":"));
+        li.append(who);
+        if (r.kind === "page" || r.kind === "talk") {
+          const b = el("button", "link-btn", r.kind === "page" ? r.title : r.text);
+          b.type = "button";
+          b.addEventListener("click", () => { location.hash = `page/${Number(r.page)}`; $("pages").scrollIntoView({ block: "start", behavior: "smooth" }); });
+          li.append(b);
+        } else if (r.kind === "proposal") {
+          const a = el("a", "", r.text);
+          a.href = "/watch#constitution";
+          li.append(a);
+        } else li.append(el("span", "", r.text));
+        ul.append(li);
+      }
+      parts.push(el("h4", "", "Mentioned in"), ul);
     }
     const pgs = d.pages || [];
     if (pgs.length) {

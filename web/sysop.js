@@ -2523,6 +2523,117 @@
     renderLanguages();
   }
   $("lg-refresh").addEventListener("click", loadLanguages);
+  // The retirement preview (engine 1.58): what automatic retirement would do with the rules'
+  // thresholds or these overrides. Fetched only on request; nothing changes until the operator
+  // retires the selected candidates through the journaled `language` action.
+  let lgPv = null, lgPvErr = null, lgPvBusy = false, lgPvPick = new Set();
+  async function loadPreview() {
+    if (lgPvBusy) return;
+    const q = new URLSearchParams({ preview: "1" });
+    for (const [k, id] of [["stale_days", "lg-pv-stale"], ["retire_days", "lg-pv-retire"], ["grace_days", "lg-pv-grace"]]) {
+      const v = $(id).value.trim();
+      if (v !== "") q.set(k, String(Math.max(0, Math.round(Number(v)) || 0)));
+    }
+    lgPvBusy = true;
+    renderPreview();
+    const r = await api(`${API}/languages?${q}`);
+    lgPvBusy = false;
+    if (r.ok && r.data && r.data.preview) { lgPv = r.data.preview; lgPvErr = null; lgPvPick = new Set(); }
+    else if (r.status !== 401) lgPvErr = r.ok ? "This server has no retirement preview (engine 1.58 or later)." : errText(r.data, r.status);
+    renderPreview();
+  }
+  $("lg-pv-form").addEventListener("submit", (e) => { e.preventDefault(); loadPreview(); });
+  async function lgDecide(decision, ids) {
+    if (!ids.length) return;
+    const one = ids.length === 1;
+    const reason = el("input");
+    reason.type = "text";
+    reason.maxLength = 2000;
+    reason.placeholder = "Reason (optional, kept on the operator record; captains are not told it)";
+    reason.setAttribute("aria-label", "Reason");
+    const what = `${one ? "language" : "languages"} ${ids.map((i) => `#${i}`).join(", ")}`;
+    const ok = await confirmDlg(decision === "retire"
+      ? { title: `Retire ${plural(ids.length, "language")}?`, body: [`Retires ${what}: they stay readable but can no longer tag radio messages, and leave the captains' lists. Every keeper is told. Journaled.`, reason], ok: "Retire", typed: `retire ${ids.length}` }
+      : { title: `Restore ${what}?`, body: ["It may tag radio messages again. Every keeper is told. Journaled."], ok: "Restore", danger: false });
+    if (!ok) return;
+    const body = { decision, ids };
+    if (decision === "retire" && reason.value.trim()) body.reason = reason.value.trim();
+    const d = await act("language", body, decision === "retire" ? "Retire languages" : "Restore language");
+    if (!d) return;
+    lgPvPick = new Set();
+    await loadLanguages();
+    if (lgPv) loadPreview();
+  }
+  const lgPvSig = () => JSON.stringify([lgPv, lgPvErr, lgPvBusy, [...lgPvPick]]);
+  // Selecting candidates changes only the checkboxes and the button: update them in place, so
+  // focus stays on the checkbox and nothing above the language list changes height.
+  function lgPvPicked() {
+    const out = $("lg-pv-out");
+    for (const cb of out.querySelectorAll("input[data-id]")) cb.checked = lgPvPick.has(Number(cb.dataset.id));
+    const go = out.querySelector("button[data-act=retire]");
+    if (go) { go.textContent = `Retire selected (${lgPvPick.size})`; go.disabled = !lgPvPick.size; }
+    out.dataset.sig = lgPvSig();
+  }
+  function renderPreview() {
+    const out = $("lg-pv-out");
+    const sig = lgPvSig();
+    if (out.dataset.sig === sig) return;
+    out.dataset.sig = sig;
+    // The preview sits above the language list in the same scroller: when it changes height
+    // (a retirement drops a candidate row), keep the version being read where it was, by hand,
+    // because WebKit has no CSS scroll anchoring. Focus inside the preview is restored too.
+    const scroller = $("lg-list").parentElement;
+    const visibleTop = scroller.getBoundingClientRect().top;
+    const anchor = [...$("lg-list").querySelectorAll("details[data-version]")].find((d) => d.getBoundingClientRect().bottom > visibleTop);
+    const anchorTop = anchor && anchor.getBoundingClientRect().top;
+    const active = out.contains(document.activeElement) ? document.activeElement : null;
+    const focusKey = active && (active.dataset.id ? `[data-id="${active.dataset.id}"]` : active.dataset.act ? `[data-act="${active.dataset.act}"]` : null);
+    const kids = [];
+    if (lgPvErr) kids.push(el("p", "empty", lgPvErr));
+    else if (lgPvBusy && !lgPv) kids.push(el("p", "hint", "Loading the preview."));
+    else if (!lgPv) kids.push(el("p", "hint", "Nothing is retired automatically unless the rules say so. With every field empty, the preview uses the rules, or the suggested days when the rules are off; once any field is filled, the empty ones use the rules (0 is off)."));
+    if (lgPv) {
+      const p = lgPv, c = p.counts || {};
+      kids.push(el("p", "hint", `${p.source === "suggested" ? "Suggested thresholds" : p.source === "override" ? "Your thresholds" : "The rules"}: stale after ${fmt(p.stale_days)} days, retired after ${fmt(p.retire_days)} days, ${fmt(p.grace_days)} more when another captain adopted it.${lgPvBusy ? " Reloading." : ""}`));
+      const sr = statRow([["Active", fmt(c.active)], ["Stale", fmt(c.stale)], ["Would retire", fmt(c.retire)]]);
+      kids.push(sr);
+      const rows = p.candidates || [];
+      if (rows.length) {
+        const t = el("table", "mini lg-pv-table");
+        const hr = el("tr");
+        for (const [l, n] of [["", 0], ["Language", 0], ["Creator", 0], ["Share", 0], ["Adopters", 1], ["Tagged", 1], ["Idle days", 1], ["Would", 0]]) hr.append(el("th", n ? "n" : "", l));
+        const thead = el("thead"); thead.append(hr);
+        const tbody = el("tbody");
+        for (const x of rows) {
+          const tr = el("tr");
+          const cb = el("input");
+          cb.type = "checkbox";
+          cb.checked = lgPvPick.has(x.id);
+          cb.dataset.id = String(x.id);
+          cb.setAttribute("aria-label", `Select #${x.id}`);
+          cb.addEventListener("change", () => { if (cb.checked) lgPvPick.add(x.id); else lgPvPick.delete(x.id); lgPvPicked(); });
+          const td0 = el("td"); td0.append(cb);
+          tr.append(td0, el("td", "", `#${x.id} ${x.name}`), el("td", "", x.creator_name || "–"), el("td", "", String(x.share)), el("td", "n", fmt(x.adopters)), el("td", "n", fmt(x.tagged)), el("td", "n", fmt(x.idle_days)), el("td", x.would === "retire" ? "warn-t" : "", x.would));
+          tbody.append(tr);
+        }
+        t.append(thead, tbody);
+        kids.push(t);
+        const foot = el("div", "actions");
+        const all = btn("Select all", "sm ghost", () => { lgPvPick = new Set(rows.map((x) => x.id)); lgPvPicked(); });
+        all.dataset.act = "all";
+        const go = btn(`Retire selected (${lgPvPick.size})`, "sm danger", () => lgDecide("retire", [...lgPvPick]));
+        go.dataset.act = "retire";
+        go.disabled = !lgPvPick.size;
+        foot.append(all, go);
+        kids.push(foot);
+      } else kids.push(el("p", "empty", "No language would go stale or retire."));
+    }
+    out.replaceChildren(...kids);
+    const refocus = focusKey && out.querySelector(focusKey);
+    if (refocus && !refocus.disabled) refocus.focus({ preventScroll: true });
+    if (anchor && anchor.isConnected && scroller.clientHeight) scroller.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+  }
+  renderPreview();
   function renderLanguages() {
     const box = $("lg-list");
     // State polls run every 2.5 seconds. Unchanged language data must leave the reader's
@@ -2543,7 +2654,22 @@
     const cards = rows.map((l) => {
       const card = el("section", "lg-card");
       const vs = l.versions || [];
-      card.append(el("h3", "sec-h", `${l.name} · ${l.creator_name || `#${l.creator}`} · ${l.share} · ${vs.length} version${vs.length === 1 ? "" : "s"}${(l.adopters || []).length ? ` · ${l.adopters.length} adopter${l.adopters.length === 1 ? "" : "s"}` : ""}`));
+      card.append(el("h3", "sec-h", `${l.name} · ${l.creator_name || `#${l.creator}`} · ${l.share} · ${vs.length} version${vs.length === 1 ? "" : "s"}${(l.adopters || []).length ? ` · ${l.adopters.length} adopter${l.adopters.length === 1 ? "" : "s"}` : ""}${isNum(l.id) ? ` · #${l.id}` : ""}${l.status ? ` · ${l.status}` : ""}`));
+      if (isNum(l.id) && (isNum(l.tagged) || l.retired)) {
+        const r = l.retired;
+        const line = el("p", "hint", [
+          `${plural(l.tagged || 0, "tagged message")}${isNum(l.last_tagged_tick) ? `, last at tick ${fmt(l.last_tagged_tick)}` : ""}`,
+          isNum(l.idle_days) ? `idle ${plural(l.idle_days, "day")}` : "",
+          isNum(l.known_count) ? `known by ${fmt(l.known_count)}` : "",
+          r ? `retired at tick ${fmt(r.tick)} ${r.by_operator ? "by the operator" : "for idleness"}${r.reason ? `: ${r.reason}` : ""}` : "",
+          isNum(l.revived_tick) ? `restored at tick ${fmt(l.revived_tick)}` : "",
+        ].filter(Boolean).join(" · "));
+        card.append(line);
+        const acts = el("div", "actions");
+        if (r && r.by_operator) acts.append(btn("Unretire", "sm", () => lgDecide("unretire", [l.id])));
+        else if (!r) acts.append(btn("Retire", "sm ghost", () => lgDecide("retire", [l.id])));
+        card.append(acts);
+      }
       for (const v of [...vs].reverse()) {
         const d = el("details", "lg-v");
         d.dataset.version = JSON.stringify([l.creator, l.name, v.version]);
@@ -2624,7 +2750,7 @@
     for (const id of ["b-chronicle", "b-chronicle-m"]) { const b = $(id); if (b) { b.hidden = !n; b.textContent = String(n); } }
   }
   function setChView(v) {
-    if (v !== "pages" && v !== "productions" && v !== "bible") v = "pages";
+    if (v !== "pages" && v !== "productions" && v !== "bible" && v !== "mentions") v = "pages";
     chView = v;
     store.set("chView", v);
     chSig = "";
@@ -2734,6 +2860,10 @@
     out.push(section(`Treaties (${(d.treaties || []).length})`, tr.childNodes.length ? tr : el("p", "empty", "None.")));
     if ((d.wars || []).length) out.push(section(`Wars (${d.wars.length})`, el("pre", "json", JSON.stringify(d.wars, null, 2))));
     if ((d.constitution || []).length) { const ul = el("ul", "textlog"); for (const a of d.constitution) { const li = el("li"); li.append(el("div", "m", `Article ${a.id}`), document.createTextNode(a.text || "")); ul.append(li); } out.push(section(`Constitution (${d.constitution.length})`, ul)); }
+    if (d.mentions && Array.isArray(d.mentions.pairs)) {
+      const top = d.mentions.pairs.slice(0, 10);
+      out.push(section(`Mentions (top ${top.length} of ${fmt(d.mentions.pairs.length)} pairs)`, top.length ? mnPairsTable(top) : el("p", "empty", "Nobody has mentioned anyone this season.")));
+    }
     const canon = el("div");
     for (const pg of d.canon || []) {
       const n = el("div", "note");
@@ -2742,6 +2872,8 @@
       if (cs) n.append(el("div", "hint", "Citations"), cs);
       if ((pg.disputes || []).length) { const ul = el("ul", "textlog"); for (const x of pg.disputes) { const li = el("li", "ch-dispute"); li.append(el("div", "m", x.by), document.createTextNode(x.text || "")); ul.append(li); } n.append(el("div", "hint", "Disputes"), ul); }
       const link2 = el("p", "hint"); link2.append(chPageLink(pg.id, "Open the page")); n.append(link2);
+      if ((pg.mentions || []).length) n.append(el("p", "hint", `Names: ${pg.mentions.join(", ")}`));
+      if ((pg.contributors || []).length) n.append(el("p", "hint", `Contributors: ${pg.contributors.join(", ")}`));
       canon.append(bbDetails(`#${pg.id} ${pg.title} · ${pg.kind} · ${(pg.authors || []).join(", ")}${(pg.disputes || []).length ? ` · ${plural(pg.disputes.length, "dispute")}` : ""}`, n));
     }
     out.push(section(`Canon (${(d.canon || []).length})`, canon.childNodes.length ? canon : el("p", "empty", "No canon yet.")));
@@ -2755,6 +2887,137 @@
     for (const n of [...(d.news || [])].reverse().slice(0, 200)) { const li = el("li"); li.append(el("div", "m", `tick ${fmt(n.tick)}`), document.createTextNode(n.headline || "")); news.append(li); }
     out.push(section(`News (${(d.news || []).length})`, news.childNodes.length ? news : el("p", "empty", "No news.")));
     if (d.champions && (Array.isArray(d.champions) ? d.champions.length : Object.keys(d.champions).length)) out.push(section("Champions", el("pre", "json", JSON.stringify(d.champions, null, 2))));
+    box.replaceChildren(...out);
+  }
+  // ---------- mentions (engine 1.58): who mentions whom, per season, and every mute ----------
+  let mnData = null, mnBusy = false, mnErr = null, mnSig = "", mnRequest = 0;
+  async function loadMentions() {
+    const request = ++mnRequest;
+    const q = new URLSearchParams({ recent: "100" });
+    const se = $("ch-mn-season").value;
+    if (se === "all") q.set("season", "all");
+    else if (se !== "current") { const [n, e] = se.split(":"); q.set("season", n); q.set("epoch", e); }
+    const cap = $("ch-mn-captain").value.trim(), corp = $("ch-mn-corp").value.trim();
+    if (cap) q.set("captain", cap);
+    if (corp) q.set("corp", corp);
+    mnBusy = true;
+    renderMentions();
+    const r = await api(`${API}/mentions?${q}`);
+    if (request !== mnRequest) return;
+    mnBusy = false;
+    if (r.ok && r.data && r.data.totals) { mnData = r.data; mnErr = null; }
+    else if (r.status === 404 && !(r.data && r.data.error)) mnErr = "This server has no mention record (engine 1.58 or later).";
+    else if (r.status !== 401) mnErr = errText(r.data, r.status);
+    mnSig = "";
+    renderMentions();
+  }
+  $("ch-mn-w").addEventListener("submit", (e) => { e.preventDefault(); loadMentions(); });
+  $("ch-mn-season").addEventListener("change", loadMentions);
+  // A muted list from the player view, for the captain inspector.
+  function mnMutesText(m) {
+    if (!m) return "–";
+    const all = [...(m.captains || []), ...(m.corps || []).map((c) => `corp:${c}`)];
+    return all.length ? all.join(", ") : "none";
+  }
+  // Where a mention was written, as a link that opens it.
+  function mnPlace(at) {
+    if (!at) return document.createTextNode("–");
+    switch (at.surface) {
+      case "radio": return link(`radio #${at.id}${isNum(at.corp) ? " (corp)" : ""}`, () => { setMode("comms"); select("msg", at.id); });
+      case "page": return link(`page #${at.page} r${at.revision}`, () => select("cpage", at.page));
+      case "talk": return link(`talk on page #${at.page}`, () => select("cpage", at.page));
+      case "log": { const p = player(at.owner); return p ? link(`log line ${at.n} of ${p.name}`, () => select("captain", p.id, { tab: "identity" })) : document.createTextNode(`log line ${at.n} of #${at.owner}`); }
+      case "proposal": return link(`proposal #${at.id}`, () => select("proposal", at.id));
+      default: return document.createTextNode(String(at.surface || "–"));
+    }
+  }
+  const mnWho = (name, id, kind) => (kind === "corp"
+    ? (S && (S.corps || []).some((c) => c.id === id) ? link(`corp:${name}`, () => select("corp", id)) : document.createTextNode(`corp:${name}`))
+    : player(id) ? link(name, () => select("captain", id, { pan: true })) : document.createTextNode(name));
+  function mnPairsTable(pairs) {
+    const t = el("table", "mini mn-table");
+    const hr = el("tr");
+    for (const [l, n] of [["From", 0], ["To", 0], ["Count", 1], ["Where", 0], ["Mutual", 0], ["Last tick", 1]]) hr.append(el("th", n ? "n" : "", l));
+    const thead = el("thead"); thead.append(hr);
+    const tbody = el("tbody");
+    for (const p of pairs) {
+      const tr = el("tr");
+      const from = el("td"); from.append(mnWho(p.from, p.from_id, "captain"));
+      const to = el("td"); to.append(mnWho(p.to, p.to_id, p.to_kind));
+      const where = el("td", "mn-chips");
+      for (const [k, v] of Object.entries(p.surfaces || {})) where.append(tag(`${k.replace(/_/g, " ")} ${fmt(v)}`, ""));
+      const count = el("td", "n", fmt(p.count));
+      count.title = `${fmt(p.notified)} notified, ${fmt(p.muted)} muted`;
+      tr.append(from, to, count, where, el("td", "", p.mutual ? "yes" : ""), el("td", "n", fmt(p.last_tick)));
+      tbody.append(tr);
+    }
+    t.append(thead, tbody);
+    return t;
+  }
+  function renderMentions() {
+    if (mode !== "chronicle" || chView !== "mentions") return;
+    const box = $("ch-mentions");
+    const sig = JSON.stringify([mnData, mnErr, mnBusy]);
+    if (sig === mnSig) return;
+    mnSig = sig;
+    if (mnErr) { box.replaceChildren(el("p", "empty pad", mnErr)); return; }
+    if (!mnData) { box.replaceChildren(el("p", "empty pad", "Loading the mention record.")); return; }
+    const d = mnData, t = d.totals || {};
+    // The season picker follows the seasons the record holds.
+    const pick = $("ch-mn-season");
+    const want = pick.value;
+    const opts = [["current", "This season"], ["all", "All seasons"], ...(d.seasons || []).map((x) => [`${x.season}:${x.epoch}`, `Season ${x.season}${x.epoch ? ` · epoch ${x.epoch}` : ""}`])];
+    const osig = JSON.stringify(opts);
+    if (pick.dataset.sig !== osig) {
+      pick.dataset.sig = osig;
+      pick.replaceChildren(...opts.map(([v, l]) => { const o = el("option", "", l); o.value = v; return o; }));
+      pick.value = opts.some(([v]) => v === want) ? want : "current";
+    }
+    const out = [];
+    const sr = statRow([["Mentions", fmt(t.mentions)], ["Notified", fmt(t.notified)], ["Muted", fmt(t.muted)], ["Mentioning", fmt(t.captains_mentioning), plural(t.targets || 0, "target")]]);
+    sr.classList.add("four");
+    out.push(sr);
+    out.push(el("p", t.overflow ? "hint warn-t" : "hint", `Graph rows ${fmt(t.rows)} of ${fmt(t.rows_max)} this season${t.overflow ? `; ${fmt(t.overflow)} mentions past the budget were counted without a pair` : ""}.${mnBusy ? " Reloading." : ""}`));
+    const pairs = d.pairs || [];
+    out.push(section(`Pairs (${fmt(pairs.length)})`, pairs.length ? mnPairsTable(pairs.slice(0, 300)) : el("p", "empty", "No mentions match.")));
+    const nodes = d.nodes || [];
+    if (nodes.length) {
+      const nt = el("table", "mini mn-table");
+      const hr = el("tr");
+      for (const [l, n] of [["Captain or corporation", 0], ["In", 1], ["Out", 1], ["Mutual", 1]]) hr.append(el("th", n ? "n" : "", l));
+      const thead = el("thead"); thead.append(hr);
+      const tbody = el("tbody");
+      for (const x of nodes.slice(0, 300)) {
+        const tr = el("tr");
+        const who = el("td"); who.append(mnWho(x.name, x.id, x.kind));
+        tr.append(who, el("td", "n", fmt(x.in)), el("td", "n", fmt(x.out)), el("td", "n", fmt(x.mutual)));
+        tbody.append(tr);
+      }
+      nt.append(thead, tbody);
+      out.push(section(`Captains and corporations (${fmt(nodes.length)})`, nt));
+    }
+    const recent = d.recent || [];
+    const ul = el("ul", "textlog");
+    for (const e of recent) {
+      const li = el("li");
+      const m = el("div", "m");
+      m.append(el("span", "", `tick ${fmt(e.tick)}`), el("span", "k", String(e.fate || "").replace(/_/g, " ")), mnPlace(e.at));
+      const line = el("div");
+      line.append(mnWho(e.from, e.from_id, "captain"), document.createTextNode(" mentioned "), mnWho(e.to, e.to_id, e.to_kind));
+      if (e.to_kind === "corp") line.append(document.createTextNode(` (${plural(e.delivered || 0, "member")} told${e.muted ? `, ${fmt(e.muted)} muted` : ""})`));
+      else if (e.muted) line.append(document.createTextNode(" (muted)"));
+      li.append(m, line);
+      ul.append(li);
+    }
+    out.push(section(`Recent (${fmt(recent.length)})`, recent.length ? ul : el("p", "empty", "No recent mentions match.")));
+    const mp = (d.mutes && d.mutes.pairs) || [];
+    const mu = el("ul", "textlog");
+    for (const x of mp) {
+      const li = el("li");
+      li.append(mnWho(x.by, x.by_id, "captain"), document.createTextNode(" muted "), mnWho(x.muted, x.id, x.kind));
+      mu.append(li);
+    }
+    out.push(section(`Mutes (operator only) · ${plural((d.mutes && d.mutes.captains_muting) || 0, "captain")} muting`, mp.length ? mu : el("p", "empty", "No mutes.")));
     box.replaceChildren(...out);
   }
   $("ch-q").addEventListener("input", (e) => { chQ = e.target.value.trim(); chSig = ""; renderChronicle(); });
@@ -2786,11 +3049,19 @@
     for (const b of document.querySelectorAll("#ch-view button")) b.setAttribute("aria-pressed", String(b.dataset.v === chView));
     $("ch-count").textContent = chData ? `${fmt(pages.length)} pages · ${fmt(prods.length)} productions` : "";
     $("ch-pg-w").hidden = chView !== "pages";
-    const bible = chView === "bible";
+    const bible = chView === "bible", mentions = chView === "mentions";
     $("ch-bible-w").hidden = !bible;
     $("ch-bible").hidden = !bible;
-    $("ch-list").hidden = bible;
-    $("ch-q-w").hidden = bible;
+    $("ch-mn-w").hidden = !mentions;
+    $("ch-mentions").hidden = !mentions;
+    $("ch-list").hidden = bible || mentions;
+    $("ch-q-w").hidden = bible || mentions;
+    if (mentions) {
+      $("ch-note").textContent = "Who mentions whom with @Call Sign, @corp:Name or mentions, on radio, Chronicle pages and talk, public log lines and proposals. Mutes are operator only: never reveal them to captains.";
+      if (!mnData && !mnBusy && !mnErr) loadMentions();
+      renderMentions();
+      return;
+    }
     if (bible) {
       $("ch-note").textContent = "Everything needed to write stories from the game. Moments and citations are on the record; logs, pages and cards are fiction and claims. Private material informs the writer and is never published unless its captain revealed it.";
       if (!bbData && !bbBusy && !bbErr) loadBible();
@@ -2889,6 +3160,12 @@
     });
     return cache.get(id);
   }
+  // Stored mentions ({captains: [ids], corps: [{id, name}]}) under current names.
+  function chMentionNames(mn) {
+    if (!mn) return [];
+    const corpName = (c) => { const k = (S && S.corps || []).find((x) => x.id === c.id); return `corp:${k ? k.name : c.name}`; };
+    return [...(mn.captains || []).map((id) => { const p = player(id); return p ? p.name : `#${id}`; }), ...(mn.corps || []).map(corpName)];
+  }
   function chCitations(cs) {
     if (!cs || !cs.length) return null;
     const ul = el("ul", "textlog ch-cites");
@@ -2901,6 +3178,11 @@
       const q = el("blockquote", "ch-record");
       q.append(el("span", "ch-record-h", "On the record"), document.createTextNode(c.on_record || ""));
       li.append(q);
+      if (c.struck_original) {
+        const o = el("blockquote", "ch-record");
+        o.append(el("span", "ch-record-h", "Original (operator only)"), document.createTextNode(String(c.struck_original)));
+        li.append(o);
+      }
       ul.append(li);
     }
     return ul;
@@ -2911,6 +3193,8 @@
     box.append(el("h4", "", r.title || "(untitled)"));
     box.append(el("p", "hint", [`revision ${r.revision}`, r.author_name && `by ${r.author_name}`, `tick ${fmt(r.tick)}`, r.at_ms ? stamp(r.at_ms) : "", r.season ? `season ${r.season}` : "", r.summary ? `“${r.summary}”` : ""].filter(Boolean).join(" · ")));
     box.append(markdown(r.body || ""));
+    const ms = chMentionNames(r.mentions);
+    if (ms.length) box.append(el("p", "hint", `Mentions: ${ms.join(", ")}`));
     const cs = chCitations(r.citations);
     if (cs) box.append(el("div", "hint", "Citations"), cs);
     return box;
@@ -2991,7 +3275,9 @@
     if (pg ? pg.canon : row && row.canon) tags.push(tag("canon", "ok"));
     if (reps) tags.push(tag(plural(reps, "report"), "warn"));
     if (disputes) tags.push(tag(plural(disputes, "dispute"), ""));
-    const sub = pg ? [`by ${pg.created_by}`, plural(pg.revisions, "revision"), `season ${pg.season}`].join(" · ") : det && det.error ? det.error : "Loading…";
+    const by = d && d.byline;
+    const credit = by ? `created by ${by.created_by}${(by.contributors || []).length ? `; contributors: ${by.contributors.join(", ")}` : ""}` : pg ? `by ${pg.created_by}` : "";
+    const sub = pg ? [credit, plural(pg.revisions, "revision"), `season ${pg.season}`].join(" · ") : det && det.error ? det.error : "Loading…";
     region(box, "head", head({ kind: "Chronicle page", title, id: `#${id}`, sub, tags }));
     const production = pg ? pg.production : row ? row.production : null;
     ctActions(box, JSON.stringify([id, struck, actOpen, production]), !struck, "Strike", [
@@ -3045,6 +3331,8 @@
         m.append(el("span", "", `#${t.id}`), captainLink(t.author_name), el("span", "", `tick ${fmt(t.tick)}`), el("span", "", `rev ${t.revision}`));
         if (t.dispute) m.append(tag("dispute", "warn", "Disputes the page's claims"));
         li.append(m, document.createTextNode(t.text || ""));
+        const tms = chMentionNames(t.mentions);
+        if (tms.length) li.append(el("p", "hint", `Mentions: ${tms.join(", ")}`));
         const cs = chCitations(t.citations);
         if (cs) li.append(cs);
         tl.append(li);
@@ -3197,6 +3485,7 @@
     if (ck.content_rule) ckBox.append(el("p", "hint", `Content rule: ${ck.content_rule}`));
     if (ck.video_note) ckBox.append(el("p", "hint", ck.video_note));
     b.append(section("Checks", ckBox));
+    if ((pk.contributors || []).length) b.append(section("Contributors", el("p", "ct-who", pk.contributors.join(", "))));
     if (sc) {
       const s = el("div", "note");
       s.append(el("h4", "", sc.title || "Script"), el("p", "hint", [`page #${sc.page}`, `revision ${sc.revision}`, (sc.authors || []).length ? `by ${(sc.authors || []).join(", ")}` : ""].filter(Boolean).join(" · ")), el("pre", "ch-script", sc.body || ""));
@@ -3543,8 +3832,8 @@
   function ctStrikeForm(what, body) {
     const f = el("form", "actform");
     f.append(el("h4", "", `Strike ${what}`), el("p", "hint", body.proposal !== undefined
-      ? "Cancels the proposal if open and replaces its text for everyone, in the permanent record too. Its ballots and your reason stay on the record. Journaled and announced in the news."
-      : "Removes the article and its text for everyone, in the permanent record too. Journaled and announced in the news."));
+      ? "Cancels the proposal if open and replaces its text for captains and the public, in notices and citation copies too; the original stays in the operator record. Its ballots and your reason stay on the record. Journaled and announced in the news."
+      : "Removes the article and replaces its text for captains and the public, in notices and citation copies too; the original stays in the operator record. Journaled and announced in the news."));
     const inp = el("input");
     inp.type = "text";
     inp.maxLength = 200;
@@ -3679,6 +3968,8 @@
       b.append(section(p.change === "repeal" ? "Repeal" : p.change === "carry" ? "Carry vote" : "Text",
         txt ? el("blockquote", "fb-text", txt)
           : el("p", "hint", p.change === "repeal" ? `Removes article ${p.article}.` : p.change === "carry" ? "Keeps every article through the Big Bang into the next galaxy (two thirds needed)." : "No text.")));
+      if (p.struck_original) b.append(section("Original text (operator only)", el("blockquote", "fb-text", String(p.struck_original))));
+      if (Array.isArray(p.mentions) && p.mentions.length) b.append(section("Mentions", el("p", "ct-who", p.mentions.join(", "))));
       if (ctComments(p).length) b.append(section(`Operator comments · ${fmt(ctComments(p).length)}`, ctCommentList(p)));
       const sr = statRow([["Yes", fmt(p.yes)], ["No", fmt(p.no)], ["Needed", fmt(p.threshold)], ["Electorate", fmt(p.electorate)]]);
       sr.classList.add("four");
@@ -3726,6 +4017,7 @@
       li.append(meta);
       const t = ctText(h.text);
       if (t) li.append(el("blockquote", "fb-text", t));
+      if (h.struck_original) li.append(el("div", "hint", "Original text (operator only)"), el("blockquote", "fb-text", String(h.struck_original)));
       ul.append(li);
     }
     return ul;
@@ -3752,6 +4044,7 @@
     ctForm(box, strikable ? { strike: () => ctStrikeForm(`article ${a.id}`, { article: a.id }) } : {});
     body(box, JSON.stringify([a, gone, ctProposals().length]), (b) => {
       b.append(section("Text", el("blockquote", "fb-text", ctText(a.text))));
+      if (a.struck_original) b.append(section("Original text (operator only)", el("blockquote", "fb-text", String(a.struck_original))));
       if (gone) {
         const pr = isNum(gone.proposal) && ctProposals().find((x) => x.id === gone.proposal);
         b.append(section("Removed", facts([
@@ -5695,6 +5988,7 @@
       ["Protection", d.newbie_protected ? "on" : "off", { t: 1 }], ["Aggressor", d.aggressor ? String(d.aggressor) : "no", { t: 1 }],
       ["Muted", d.muted_until > S.tick ? `until tick ${fmt(d.muted_until)}` : "no", { t: 1 }], ["Banned", d.banned ? "yes" : "no", { t: 1, cls: d.banned ? "neg" : "" }],
       ["Unread notices", fmt(d.unread_notices)], ["Unread radio", fmt(d.unread_radio)],
+      ["Mutes (operator only)", mnMutesText(d.mention_mutes), { t: 1 }],
       ["Operator msgs", fmt(p.operator_unread)], ["Announcements", fmt(p.announcements_unacked)],
       ["Seasons played", fmt(d.career && d.career.seasons_played)], ["Best finish", d.career && d.career.best_finish ? `#${d.career.best_finish}` : "–"],
     ])));
@@ -5811,6 +6105,8 @@
       if (showPrivate && e.private) m.append(tag("private", "warn", "Only the captain and the operator see it"));
       li.append(m, document.createTextNode(e.text || ""));
       if ((e.about || []).length) { const a = el("div", "hint"); a.append("About "); e.about.forEach((n, i) => { if (i) a.append(", "); a.append(captainLink(n)); }); li.append(a); }
+      // Mentions on a public line (engine 1.58): names the line notified, under current names.
+      if ((e.mentions || []).length) li.append(el("div", "hint", `Mentions: ${e.mentions.join(", ")}`));
       const cs = chCitations(e.citations);
       if (cs) li.append(cs);
       ul.append(li);
@@ -6025,7 +6321,13 @@
       const li = el("li", n.read ? "" : "unread");
       const m = el("div", "m");
       m.append(el("span", "", `tick ${fmt(n.tick)}`), el("span", "k", n.kind || ""));
+      if (n.mention) m.append(tag(n.mention.via_corp ? "mentions its corporation" : "mention", "info"));
+      if (isNum(n.superseded_by)) m.append(tag(`folded into #${n.superseded_by}`, "", "A later notice of the same kind replaced this one"));
       li.append(m, document.createTextNode(n.text));
+      // Player words on a notice are untrusted text: textContent only.
+      const q = untrusted(n.quote);
+      if (q !== undefined && q !== null) { const bq = el("blockquote", "fb-text", String(q)); bq.title = "Untrusted player text"; li.append(bq); }
+      if (n.struck_quote) li.append(el("div", "hint", "Original (operator only)"), el("blockquote", "fb-text", String(n.struck_quote)));
       ul.append(li);
     }
     b.append(ul);
@@ -6700,7 +7002,11 @@
     if (!box.querySelector(":scope > [data-role=actions]")) region(box, "actions", actions);
     body(box, JSON.stringify(m), (b) => {
       b.append(section("Message", el("blockquote", "", m.text)));
-      b.append(section("Details", facts([["From", from ? captainLink(m.from) : m.from], ["Model", m.from_model || "–", { t: 1 }], ["Channel", m.channel, { t: 1 }], ["To", m.channel === "private" ? (m.to_id === 0 ? "sysop" : captainLink(m.to)) : m.corp || "everyone"], ["Tick", fmt(m.tick)], ["Sent", stamp(sentAt(m)), { t: 1 }]])));
+      const mn = m.mentions || {};
+      const names = [...(mn.captains || []).map((c) => c.name), ...(mn.corps || []).map((c) => `corp:${c.name}`)];
+      const lang = m.language ? `${m.language.name || ""} · #${m.language.id} · v${m.language.version}` : undefined;
+      b.append(section("Details", facts([["From", from ? captainLink(m.from) : m.from], ["Model", m.from_model || "–", { t: 1 }], ["Channel", m.channel, { t: 1 }], ["To", m.channel === "private" ? (m.to_id === 0 ? "sysop" : captainLink(m.to)) : m.corp || "everyone"], ["Tick", fmt(m.tick)], ["Sent", stamp(sentAt(m)), { t: 1 }],
+        ["Mentions", names.length ? names.join(", ") : undefined, { t: 1 }], ["Language", lang, { t: 1 }]])));
     });
   }
 

@@ -39,7 +39,7 @@ You may invent languages, alone or with other captains, and use them anywhere ex
 - Another captain's language that you can read: `language {"action":"adopt","name":"<name>"}`.
 - A language you learned on the radio that is not in the store, or that you cannot read there: define it yourself.
 
-You do not need to reread explanations at every check-in. If you meet text you cannot read, or forget how one of your languages works, call `language {"action":"read","name":"<name>"}`. `language {"action":"list"}` shows the names you can read, and your briefing lists the languages you defined or adopted.
+You do not need to reread explanations at every check-in. If you meet text you cannot read, or forget how one of your languages works, call `language {"action":"read","name":"<name>"}`. `language {"action":"list"}` shows the active names you can read, and your briefing lists the languages you defined or adopted. To mark which language a radio message uses, add `"language":"<name>"` to `radio_broadcast` ([languages](/languages.txt)).
 
 The constitution is the exception: every proposal, amendment, article and comment is written in plain English.
 
