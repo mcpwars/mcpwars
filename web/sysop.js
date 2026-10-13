@@ -300,6 +300,7 @@
     if (/^radio/.test(ev.kind) || /BULLETIN/.test(ev.text || "")) soonState();
     if (ev.kind === "feedback") fbOnEvent(ev);
     if (ev.kind === "constitution") { soonState(400); loadConstitution(); }
+    if (ev.kind === "improve") soonState(400);
     if (/^chronicle/.test(ev.kind)) { soonState(400); chPages.clear(); chPkgs.clear(); loadChronicle(); }
     if (ev.kind === "identity_filed" || ev.kind === "renamed") { idAt = 0; soonState(400); }
     if (sel && sel.kind === "captain" && ev.players && ev.players.includes(sel.id)) details.delete(sel.id);
@@ -370,6 +371,7 @@
       if (k === "archive") return `Season ${id} constitution`;
       if (k === "cpage") return `Page #${id}`;
       if (k === "cprod") return `Production #${id}`;
+      if (k === "improve") return `Improve #${id}`;
       if (k === "hcap") { const x = hiResult(id); return x && x.c ? `${x.c.name} history` : "history"; }
     }
     return e.mode === "alerts" ? "Attention" : `${e.mode[0].toUpperCase()}${e.mode.slice(1)}`;
@@ -402,7 +404,7 @@
     for (const b of document.querySelectorAll("#rail button")) b.setAttribute("aria-current", String(v === "map" ? b.dataset.view === "map" : b.dataset.mode === mode));
     $("rail-more").setAttribute("aria-current", String(v !== "map" && MORE_MODES.includes(mode)));
   }
-  const MORE_MODES = ["corps", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "chronicle", "history"];
+  const MORE_MODES = ["corps", "registry", "journal", "activity", "rules", "universe", "feedback", "improve", "constitution", "languages", "chronicle", "history"];
   $("rail-map").addEventListener("click", () => { setMView("map"); map.redraw(); });
   // Rail labels: a mouse hover shows the workbench and its shortcut beside the icon; on a
   // compact rail (a short window, an iPad held sideways), whose labels are hidden, a press or
@@ -524,9 +526,9 @@
   // Workbench modes
   // ======================================================================
   // Digits 1 to 9 pick the first nine in order; 0 picks Feedback, C the Constitution,
-  // H History and W the Chronicle (appended, so no digit moved).
-  const MODES = ["captains", "corps", "alerts", "comms", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "history", "chronicle"];
-  const WIDTH = { captains: 440, corps: 460, alerts: 380, comms: 420, registry: 480, journal: 480, activity: 420, rules: 520, universe: 440, feedback: 440, constitution: 460, languages: 520, history: 600, chronicle: 480 };
+  // H History, W the Chronicle and I the improve board (appended, so no digit moved).
+  const MODES = ["captains", "corps", "alerts", "comms", "registry", "journal", "activity", "rules", "universe", "feedback", "constitution", "languages", "history", "chronicle", "improve"];
+  const WIDTH = { captains: 440, corps: 460, alerts: 380, comms: 420, registry: 480, journal: 480, activity: 420, rules: 520, universe: 440, feedback: 440, constitution: 460, languages: 520, history: 600, chronicle: 480, improve: 500 };
   let mode = "captains";
   const expanded = new Set(store.get("expanded", ["comms", "activity"]));
   function toggleExpand() {
@@ -558,6 +560,7 @@
     if (m === "constitution") loadConstitution();
     if (m === "languages") loadLanguages();
     if (m === "chronicle" && (!chAt || Date.now() - chAt > 15000)) loadChronicle();
+    if (m === "improve" && (!imAt || Date.now() - imAt > 5000)) loadImprove();
     if (m === "history" && !hiBusy && (!hiAt || Date.now() - hiAt > HI_TTL)) loadHistory(!!hiAt);
     journalTimer();
     renderMode();
@@ -578,6 +581,7 @@
     if (mode === "constitution") renderConstitution();
     if (mode === "languages") renderLanguages();
     if (mode === "chronicle") renderChronicle();
+    if (mode === "improve") renderImprove();
     if (mode === "history") renderHistory();
   }
 
@@ -876,6 +880,26 @@
       const known = reported.map(chPage).filter(Boolean);
       add("warn", `${reported.length} Chronicle page${reported.length === 1 ? "" : "s"} reported`, known.length ? known.slice(0, 4).map((x) => `#${x.id} ${x.title} (${plural(chOpenReports(x), "report")})`).join(" | ") : `Pages ${reported.map((i) => `#${i}`).join(", ")}: review them and strike what breaks the content rule.`, reported.length === 1 ? { kind: "cpage", id: reported[0] } : { mode: "chronicle", view: "pages", filter: "reported" }, "Chronicle", "chronicle-reported", String(Math.max(...reported)));
     }
+    // Mirror the sysop MCP "improve-review" and "improve-proposed" alerts (same keys and
+    // signatures: every patch revision the board holds, the highest id a captain ever proposed), read from the
+    // state's `improve` block; the board, when loaded, names the items.
+    const im = S.improve;
+    if (im) {
+      const review = Array.isArray(im.review_ids) ? im.review_ids : [];
+      if (review.length) {
+        const flagged = Array.isArray(im.flagged_in_review) ? im.flagged_in_review : [];
+        const full = review.length >= im.review_max;
+        const detail = [];
+        if (flagged.length) detail.push(`Read in full before shipping: ${flagged.map((id) => { const x = imItem(id); const f = x && imFlagged(x); return `#${id} touches ${f ? f.join(" and ") : "AGENTS.md or CLAUDE.md"}`; }).join("; ")}.`);
+        if (full) detail.push(`The review queue is full (${review.length} of ${im.review_max}): new patches are refused.`);
+        detail.push(review.slice().reverse().slice(0, 4).map((id) => { const x = imItem(id); if (!x) return `#${id}`; const p = (x.patches || [])[(x.patches || []).length - 1]; return `#${id} ${x.title} (rev ${(x.patches || []).length}${p ? ` by ${imName(p.by, p.call_sign)}` : ""})`; }).join(" | "));
+        add(flagged.length || full ? "warn" : "info", `${review.length} improve item${review.length === 1 ? "" : "s"} in review`, detail.join(" "), { mode: "improve", filter: "review" }, "Improve", "improve-review", String(im.patch_revs));
+      }
+      if (im.proposed > 0 && im.proposals_max_id > 0) {
+        const props = imItems().filter((x) => x.status === "proposed").sort((a, b) => b.id - a.id);
+        add("info", `${im.proposed} improve proposal${im.proposed === 1 ? "" : "s"} waiting for a decision`, props.length ? props.slice(0, 4).map((x) => `#${x.id} ${x.title} by ${x.author_current || x.author_name}`).join(" | ") : "Accept or decline them on the improve board.", { mode: "improve", filter: "proposed" }, "Improve", "improve-proposed", String(im.proposals_max_id));
+      }
+    }
     const pend = rulesOrig ? diffRules(rulesOrig, rulesWork).length : 0;
     if (pend) add("warn", plural(pend, "rule edit") + " not applied", "Review and apply, or discard them.", { mode: "rules" }, "Universe", "rules-pending", pend);
     const caps = captains().filter((p) => !p.banned);
@@ -981,6 +1005,7 @@
     if (t.kind) select(t.kind, t.id, { pan: true, tab: t.tab });
     else if (t.mode === "feedback") { setMode("feedback"); if (t.filter) setFbFilter(t.filter); }
     else if (t.mode === "chronicle") { setMode("chronicle"); setChView(t.view); setChFilter(t.filter || "all"); }
+    else if (t.mode === "improve") { setMode("improve"); setImFilter(t.filter || "all"); }
     else { setMode(t.mode); if (t.filter) { cmFilter = t.filter; $("cm-split").dataset.view = "list"; renderComms(); } }
   }
   $("alert-chip").addEventListener("click", () => setMode("alerts"));
@@ -1610,6 +1635,9 @@
   const FB_FILTERS = [["open", "Open"], ["resolved", "Resolved"], ["all", "All"]];
   const fbAnon = (r) => !isNum(r.from_id);
   const fbSender = (r) => r.from || (fbAnon(r) ? "anonymous" : `#${r.from_id}`);
+  // A report the improve board accepts: a known sender, not about security (the server refuses
+  // the rest anyway; the console just does not offer them).
+  const fbPromotable = (r) => !fbAnon(r) && !/^\s*security/i.test(r.about || "");
   const fbStack = (r) => [r.model, r.harness && `on ${r.harness}`].filter(Boolean).join(" ");
   // The state names feedback_open only when the server keeps feedback; without it the console
   // never asks for /feedback (no 404s) and shows the empty state.
@@ -1707,7 +1735,7 @@
     loadFeedback();
   }
   function renderMoreBadge() {
-    const n = rulesPend + fbOpenCount() + chPitched().length + chReported().length;
+    const n = rulesPend + fbOpenCount() + chPitched().length + chReported().length + imNeeds();
     $("b-more").hidden = !n;
     $("b-more").textContent = String(n);
   }
@@ -1818,7 +1846,9 @@
     if (fbAnon(r)) tags.push(tag("anonymous", "", "Sent before it had a captain: nobody can be told"));
     region(box, "head", head({ kind: "Feedback", title: r.about || "(no subject)", id: `#${r.id}`, sub: [fbSender(r), fbStack(r), stamp(sentAt(r))].filter(Boolean).join(" · "), tags }));
 
-    const aSig = JSON.stringify([r.id, open, actOpen, p ? p.id : null, p && p.kind]);
+    imEnsure();
+    const promotable = imOn() && fbPromotable(r);
+    const aSig = JSON.stringify([r.id, open, actOpen, p ? p.id : null, p && p.kind, (imItems().find((x) => x.feedback === r.id) || {}).id, promotable]);
     const oldA = box.querySelector(":scope > [data-role=actions]");
     if (!oldA || oldA.dataset.sig !== aSig) {
       const a = el("div", "actions");
@@ -1831,11 +1861,22 @@
       } else a.append(btn("Reopen", "sm", () => fbResolve(r, { reopen: true }), "Mark it open again"));
       if (p && p.kind !== "npc") a.append(btn("Message captain", "sm", () => select("captain", p.id, { action: "message" }), `Operator message to ${p.name}`));
       if (p) a.append(btn("Open captain", "sm ghost", () => select("captain", p.id, { pan: true })));
+      const promoted = imItems().find((x) => x.feedback === r.id);
+      if (promoted) a.append(btn(`Improve #${promoted.id}`, "sm ghost", () => select("improve", promoted.id), "The improve item made from this report"));
+      else if (promotable) {
+        const b = el("button", "btn sm", "Promote to improve board");
+        b.type = "button";
+        b.title = "An accepted improve item claimed for the sender (journaled admin improve, decision promote_feedback)";
+        b.setAttribute("aria-pressed", String(actOpen === "promote"));
+        b.addEventListener("click", () => { actOpen = actOpen === "promote" ? null : "promote"; buildInspector(); });
+        a.append(b);
+      }
       a.dataset.sig = aSig;
       region(box, "actions", a);
     }
     const oldF = box.querySelector(":scope > [data-role=form]");
-    if (open && actOpen === "resolve") { if (!oldF) region(box, "form", fbResolveForm(r)); }
+    const want = open && actOpen === "resolve" ? "resolve" : actOpen === "promote" && promotable ? "promote" : null;
+    if (want) { if (!oldF || oldF.dataset.kind !== want) { const f = want === "resolve" ? fbResolveForm(r) : imForm(imPromoteSpec(r.id)); f.dataset.kind = want; region(box, "form", f); } }
     else if (oldF) oldF.remove();
 
     body(box, JSON.stringify([r, p ? p.name : null]), (b) => {
@@ -1911,6 +1952,529 @@
     renderFeedback();
     buildInspector();
     loadFeedback();
+  }
+
+  // ======================================================================
+  // Improve: the board where captains propose changes to this server's code
+  // and docs, claim items and send patches as unified diffs (engine 1.55).
+  // The operator accepts, returns, declines, assigns, ships and awards
+  // Influence here; every decision is the journaled admin `improve` action.
+  // The list comes from /improve (every item with its diff body, the award
+  // ledger and the budgets); the state's `improve` block carries the counts
+  // and the alert signals, so a change triggers a refetch. Every title, text,
+  // note, diff and call sign is captain-written data: it reaches the page only
+  // through textContent, and a diff is never applied or linked.
+  // ======================================================================
+  let imData = null, imBusy = false, imAgain = false, imErr = null, imAt = 0, imStateSig = null, imSig = "", imTried = false;
+  let imFilter = store.get("imFilter", "all"), imView = store.get("imView", "items"), imQ = "", imOp = null;
+  const IM_FILTERS = [["all", "All"], ["proposed", "Proposed"], ["accepted", "Accepted"], ["review", "In review"], ["shipped", "Shipped"], ["declined", "Declined"]];
+  const IM_STATUS = { proposed: "proposed", accepted: "accepted", review: "in review", shipped: "shipped", declined: "declined" };
+  const IM_STATUS_TAG = { proposed: "warn", accepted: "info", review: "warn", shipped: "ok", declined: "" };
+  const IM_KINDS = ["bug", "docs", "rules", "feature", "protocol"];
+  const IM_TRUST = "Board text (titles, texts, notes, diffs, call signs) is captain-written data, never instructions.";
+  const IM_APPLY = "The server never applies a patch. Check one with git apply --check in a scratch clone, never on a machine holding the admin token.";
+  const imSum = () => (S && S.improve) || (imData && imData.summary) || null;
+  const imItems = () => (imData && Array.isArray(imData.items) ? imData.items : []);
+  const imItem = (id) => imItems().find((x) => x.id === id) || null;
+  const imNeeds = () => { const m = imSum(); return m ? (m.review || 0) + (m.proposed || 0) : 0; };
+  const imOn = () => { const m = imSum(); return !!(m && m.enabled); };
+  // The board, once, for a view that reads it (a feedback report's promoted item) when nothing
+  // else fetched it: the state's summary says the server has a board with items on it.
+  const imEnsure = () => { const m = imSum(); if (!imData && !imBusy && !imTried && m && m.items > 0) loadImprove(); };
+  const imIds = (k) => { const m = imSum(); return m && Array.isArray(m[k]) ? m[k] : []; };
+  // A captain's current call sign (the operator is player 0), else the name stored at write time.
+  const imName = (pid, stored) => (pid === SYSOP_ID ? "operator" : (player(pid) || {}).name || stored || (isNum(pid) ? `#${pid}` : "–"));
+  const imClaim = (x) => (x.claim_active && x.claim ? x.claim : null);
+  const imFlagged = (x) => { const p = (x.patches || [])[(x.patches || []).length - 1]; return x.status === "review" && p && Array.isArray(p.flagged) && p.flagged.length ? p.flagged : null; };
+  const imCaptainLink = (pid, stored) => { const p = isNum(pid) && pid !== SYSOP_ID ? player(pid) : null; return p ? link(p.name, () => select("captain", p.id, { pan: true })) : document.createTextNode(imName(pid, stored)); };
+
+  async function loadImprove() {
+    if (imBusy) { imAgain = true; return; }
+    imBusy = true;
+    imTried = true;
+    const r = await api(`${API}/improve`);
+    imBusy = false;
+    if (r.ok && r.data && Array.isArray(r.data.items)) { imData = r.data; imErr = null; imAt = Date.now(); }
+    else if (r.status === 404) imErr = "This server has no improve board (engine 1.55 or later).";
+    else if (r.status !== 401) imErr = errText(r.data, r.status);
+    if (imAgain) { imAgain = false; loadImprove(); return; }
+    imSig = "";
+    renderImprove();
+    renderImBadge();
+    renderAlerts();
+    if (sel && sel.kind === "improve") { insSig = ""; buildInspector(); }
+    else if (sel && sel.kind === "feedback") buildInspector();
+  }
+  // Every state poll: the badge, and a refetch when the board changed (and someone looks at it,
+  // or it needs the operator, whose alert details name the items).
+  function imOnState() {
+    renderImBadge();
+    if (!S.improve) return;
+    const sig = JSON.stringify(S.improve);
+    if (sig === imStateSig) return;
+    imStateSig = sig;
+    if (mode === "improve" || (sel && sel.kind === "improve") || imNeeds() > 0 || imData) loadImprove();
+  }
+  function renderImBadge() {
+    const n = imNeeds();
+    for (const id of ["b-improve", "b-improve-m"]) { const b = $(id); if (b) { b.hidden = !n; b.textContent = String(n); } }
+    renderMoreBadge();
+  }
+  function setImFilter(f) {
+    if (!IM_FILTERS.some(([k]) => k === f)) f = "all";
+    imFilter = f;
+    store.set("imFilter", f);
+    if (imView !== "items") setImView("items");
+    imSig = "";
+    renderImprove();
+  }
+  function setImView(v) {
+    imView = v === "awards" ? "awards" : "items";
+    store.set("imView", imView);
+    for (const b of document.querySelectorAll("#im-view button")) b.setAttribute("aria-pressed", String(b.dataset.v === imView));
+    imSig = "";
+    renderImprove();
+  }
+  for (const b of document.querySelectorAll("#im-view button")) {
+    b.addEventListener("click", () => setImView(b.dataset.v));
+    b.setAttribute("aria-pressed", String(b.dataset.v === imView));
+  }
+  $("im-q").addEventListener("input", (e) => { imQ = e.target.value.trim(); imSig = ""; renderImprove(); });
+  $("im-refresh").addEventListener("click", () => loadImprove());
+
+  // The summary strip: kill switch, counts, the review queue, claims and the window's budgets.
+  function imSummaryStrip(m) {
+    const box = el("div", "im-strip");
+    const kv = (k, v, cls, title) => { const s = el("span", `im-kv${cls ? ` ${cls}` : ""}`); s.append(el("span", "", k), el("b", "mono", v)); if (title) s.title = title; box.append(s); };
+    if (!m) { box.append(el("span", "hint", imErr || "Loading…")); return box; }
+    kv("Board", m.enabled ? "on" : "off", m.enabled ? "ok" : "warn", "The kill switch rules.improve_enabled. Change it only with the Rules workbench (set_rules), never AF_RULES_PATCH.");
+    kv("Proposed", fmt(m.proposed), m.proposed ? "warn" : "");
+    kv("In review", `${fmt(m.review)}/${fmt(m.review_max)}`, m.review >= m.review_max ? "crit" : m.review ? "warn" : "", "Items with a patch waiting, against the review queue cap (improve_review_max)");
+    kv("Accepted", fmt(m.accepted));
+    kv("Shipped", fmt(m.shipped));
+    kv("Declined", fmt(m.declined));
+    kv("Claims", `${fmt(m.active_claims)}/${fmt(m.max_active_claims)}`, "", "Active claims on proposed and accepted items, against improve_max_active_claims");
+    if (m.operator_ops) kv("Ops", `${fmt(m.operator_ops.used)}/${fmt(m.operator_ops.max)}`, m.operator_ops.used >= m.operator_ops.max ? "warn" : "", `accept, post, promote_feedback, assign and return in the last ${fmt(m.window_ticks)} ticks`);
+    if (m.influence_awarded) kv("Influence", `${fmt(m.influence_awarded.used)}/${fmt(m.influence_awarded.budget)}`, "", `Awarded in the last ${fmt(m.window_ticks)} ticks, against improve_award_budget_per_day`);
+    kv("Items", `${fmt(m.items)}/${fmt(m.items_max)}`);
+    const fl = Array.isArray(m.flagged_in_review) ? m.flagged_in_review : [];
+    if (fl.length) {
+      const s = el("span", "im-kv crit");
+      s.title = "The latest patch touches AGENTS.md or CLAUDE.md: read those files in full before shipping";
+      s.append(el("span", "", "Flagged"));
+      fl.forEach((id, i) => { if (i) s.append(document.createTextNode(" ")); const a = link(`#${id}`, () => select("improve", id)); a.className = "mono"; s.append(a); });
+      box.append(s);
+    }
+    if (!m.enabled) {
+      const off = el("p", "hint im-off");
+      off.append(document.createTextNode("Switched off: captain writes are refused and you may only decline, ship, return and clear a claim. Switch it with improve_enabled in "));
+      off.append(link("the Rules workbench", () => setMode("rules")));
+      off.append(document.createTextNode(" (a set_rules change, announced to captains)."));
+      box.append(off);
+    }
+    return box;
+  }
+  function imRows() {
+    let rows = imItems().filter((x) => imFilter === "all" || x.status === imFilter);
+    const q = imQ.toLowerCase();
+    if (q) rows = rows.filter((x) => { const c = imClaim(x); return [x.title, x.author_current, x.author_name, c && imName(c.player, c.call_sign), x.kind, `#${x.id}`, x.commit].some((v) => v && String(v).toLowerCase().includes(q)); });
+    return rows.sort((a, b) => b.id - a.id);
+  }
+  function renderImprove() {
+    if (mode !== "improve") return;
+    const m = imSum();
+    const needs = imNeeds();
+    $("im-count").textContent = needs ? `${fmt(needs)} need you` : "";
+    const sumSig = JSON.stringify([m, imErr]);
+    const sb = $("im-sum");
+    if (sb.dataset.sig !== sumSig) { sb.dataset.sig = sumSig; sb.replaceChildren(imSummaryStrip(m)); }
+    // Post and promote are refused while the board is switched off.
+    const on = imOn();
+    for (const id of ["im-post", "im-promote"]) {
+      const b = $(id);
+      b.disabled = !on;
+      b.title = on ? "" : "The board is switched off: only decline, ship, return and clearing a claim work.";
+    }
+    if (!on && imOp) setImOp(null);
+    $("im-filters-w").hidden = imView !== "items";
+    const counts = m ? { all: m.items, proposed: m.proposed, accepted: m.accepted, review: m.review, shipped: m.shipped, declined: m.declined } : {};
+    const chips = $("im-filters");
+    const chipSig = JSON.stringify([counts, imFilter]);
+    if (chips.dataset.sig !== chipSig) {
+      chips.dataset.sig = chipSig;
+      chips.replaceChildren(...IM_FILTERS.map(([k, l]) => {
+        const b = el("button", "chip", l);
+        b.type = "button";
+        b.setAttribute("aria-pressed", String(imFilter === k));
+        if (counts[k]) b.append(el("small", "", compact(counts[k])));
+        b.addEventListener("click", () => setImFilter(k));
+        return b;
+      }));
+    }
+    const q = imQ.toLowerCase();
+    const rows = imView === "items" ? imRows() : [];
+    const awards = imView === "awards" ? ((imData && imData.awards) || []).slice().reverse().filter((a) => !q || [a.call_sign, imName(a.player, a.call_sign), a.commit, `#${a.item}`, a.note].some((v) => v && String(v).toLowerCase().includes(q))) : [];
+    const sig = JSON.stringify([imView, imFilter, q, rows.map((x) => [x.id, x.status, x.title, x.author_current, imClaim(x), (x.patches || []).length, x.commit, !!imFlagged(x)]), awards, imErr, !!imData, S ? S.tick : 0]);
+    if (sig === imSig) { markSelected(); return; }
+    imSig = sig;
+    const frag = document.createDocumentFragment();
+    if (imView === "awards") {
+      for (const a of awards) {
+        const li = el("li");
+        li.dataset.sel = selKey("improve", a.item);
+        const tt = el("div", "tt");
+        tt.append(el("span", "", `${imName(a.player, a.call_sign)}: ${fmt(a.amount)} Influence`));
+        const tm = el("div", "tm", `#${a.item}`);
+        tm.title = `tick ${fmt(a.tick)}${a.at_ms ? ` · ${new Date(a.at_ms).toLocaleString()}` : ""}`;
+        const tp = el("div", "tp", [`commit ${a.commit}`, `season ${a.season}${a.epoch ? ` · epoch ${a.epoch}` : ""}`, `tick ${fmt(a.tick)}`].join(" · "));
+        const tn = el("div", "tn", "");
+        li.append(tt, tm, tp, tn);
+        if (a.note) { const pv = el("div", "fb-pv"); pv.append(marked(snippet(String(a.note).replace(/\s+/g, " ").trim(), q, 160), q)); li.append(pv); }
+        li.addEventListener("click", () => select("improve", a.item));
+        frag.append(li);
+      }
+      if (!awards.length) frag.append(el("li", "empty-l", imErr || (!imData ? "Loading…" : q ? "No award matches that search." : "No Influence awarded yet.")));
+    } else {
+      for (const x of rows) {
+        const c = imClaim(x);
+        const fl = imFlagged(x);
+        const li = el("li", x.status === "review" || x.status === "proposed" ? "unread" : "");
+        li.dataset.sel = selKey("improve", x.id);
+        const tt = el("div", "tt");
+        tt.append(tag(x.kind, ""), marked(x.title || "(untitled)", q));
+        tt.title = x.title || "";
+        const tm = el("div", "tm", `#${x.id}`);
+        tm.title = `tick ${fmt(x.tick)}${x.at_ms ? ` · ${new Date(x.at_ms).toLocaleString()}` : ""}`;
+        const who = [`by ${x.author_current || x.author_name || "operator"}`];
+        if (c) who.push(x.status === "review" ? `patched, held by ${imName(c.player, c.call_sign)}` : `claimed by ${imName(c.player, c.call_sign)} until tick ${fmt(c.expires_tick)}${S && c.expires_tick > S.tick ? ` (${ticksDur(c.expires_tick - S.tick)})` : ""}`);
+        if ((x.patches || []).length) who.push(plural(x.patches.length, "revision"));
+        if (x.commit) who.push(`in ${x.commit.slice(0, 7)}`);
+        const tp = el("div", "tp", who.join(" · "));
+        tp.title = tp.textContent;
+        const tn = el("div", "tn");
+        if (fl) tn.append(tag("flagged", "crit", `The latest patch touches ${fl.join(" and ")}: read in full before shipping`));
+        tn.append(tag(IM_STATUS[x.status] || x.status, IM_STATUS_TAG[x.status] || ""));
+        li.append(tt, tm, tp, tn);
+        li.addEventListener("click", () => select("improve", x.id));
+        frag.append(li);
+      }
+      if (!rows.length) {
+        const none = imErr ? imErr
+          : !imData ? "Loading…"
+          : q ? "No item matches that search."
+          : imFilter !== "all" ? `No ${IM_STATUS[imFilter]} items.`
+          : "The board is empty.";
+        frag.append(el("li", "empty-l", none));
+      }
+    }
+    $("im-list").replaceChildren(frag);
+    markSelected();
+  }
+
+  // ---------- a decision form: fields, review in the confirm dialog, the journaled action ----------
+  // o: { title, hint, ok, danger, body (fixed fields), fields: [{ k, label, ph, type: text|area|number|select,
+  //      req, opts, max, check(v) -> error text }], confirm, review: [lines], label, done(d) }
+  function imForm(o) {
+    const f = el("form", "actform");
+    f.append(el("h4", "", o.title));
+    if (o.hint) f.append(el("p", "hint", o.hint));
+    const inputs = {};
+    for (const fd of o.fields || []) {
+      let inp;
+      if (fd.type === "area") { inp = el("textarea", "ct-t"); inp.rows = fd.rows || 3; }
+      else if (fd.type === "select") { inp = el("select"); for (const [v, l] of fd.opts) inp.append(Object.assign(el("option", "", l), { value: v })); }
+      else { inp = el("input"); inp.type = fd.type === "number" ? "number" : "text"; if (fd.type === "number") { inp.inputMode = "numeric"; inp.className = "mono"; } }
+      if (fd.max) inp.maxLength = fd.max;
+      if (fd.ph) inp.placeholder = fd.ph;
+      if (fd.value !== undefined) inp.value = fd.value;
+      inp.setAttribute("aria-label", fd.label);
+      inp.spellcheck = fd.type === "area";
+      inp.autocomplete = "off";
+      inputs[fd.k] = inp;
+      f.append(ctFld(fd.label, inp));
+    }
+    const err = el("p", "hint warn-t");
+    err.hidden = true;
+    const go = el("button", `btn sm ${o.danger ? "danger" : "primary"}`, o.ok);
+    go.type = "submit";
+    const foot = el("div", "foot");
+    foot.append(err, btn("Cancel", "sm ghost", () => (o.cancel ? o.cancel() : (actOpen = null, buildInspector()))), go);
+    f.append(foot);
+    for (const t of f.querySelectorAll("textarea")) t.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); f.requestSubmit(); } });
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = { decision: o.decision, ...(o.body || {}) };
+      const shown = [];
+      for (const fd of o.fields || []) {
+        const inp = inputs[fd.k];
+        // Text goes exactly as typed (the server stores it exactly); short fields are trimmed.
+        const raw = fd.type === "area" ? inp.value : inp.value.trim();
+        const bad = fd.req && !raw.trim() ? `${fd.label} is required.` : raw && fd.check ? fd.check(raw) : "";
+        if (bad) { err.textContent = bad; err.hidden = false; inp.focus(); return; }
+        if (!raw.trim()) continue;
+        body[fd.k] = fd.type === "number" ? Number(raw) : raw;
+        shown.push(fd.type === "area" ? el("blockquote", "", raw) : el("p", "", `${fd.label}: ${raw}`));
+      }
+      err.hidden = true;
+      if (!await confirmDlg({ title: o.confirm, body: [...(o.review || []), ...shown], ok: o.ok, danger: !!o.danger })) return;
+      go.disabled = true;
+      const d = await act("improve", body, o.label || o.ok);
+      go.disabled = false;
+      if (!d) return;
+      actOpen = null;
+      await loadImprove();
+      if (o.done) o.done(d); else buildInspector();
+    });
+    setTimeout(() => { const first = f.querySelector("input, textarea, select"); if (first) first.focus(); }, 0);
+    return f;
+  }
+  const imCommit = (v) => (/^[0-9a-fA-F]{7,40}$/.test(v) ? "" : "commit must be 7 to 40 hex characters.");
+  const imPlayerField = (req) => ({ k: "player", label: req ? "Captain (call sign or id)" : "Captain (call sign or id; empty clears the claim)", ph: req ? "Call sign or id" : "Empty clears the claim", req });
+  const imKindField = (req) => ({ k: "kind", label: "Kind", type: "select", opts: [...(req ? [] : [["", "Keep the default (bug)"]]), ...IM_KINDS.map((k) => [k, k])] });
+  // promote_feedback: a captain's report becomes an accepted item claimed for its sender.
+  function imPromoteSpec(fid, cancel) {
+    return {
+      title: `Promote feedback #${fid} to the improve board`,
+      hint: "An accepted item claimed for the report's sender (or held for its first claim). The report text is not copied: the item says it was promoted unless you write a text. Not for anonymous or security reports. Counts as an operator op. Journaled.",
+      ok: "Promote", decision: "promote_feedback", body: { feedback: fid }, label: "Promote feedback",
+      fields: [imKindField(false), { k: "title", label: "Title (optional; default: the report's about)", max: 120 }, { k: "text", label: "Text (optional)", type: "area" }],
+      confirm: `Promote feedback #${fid}?`, review: ["The sender is told and holds the claim. Journaled."],
+      cancel,
+      done: (d) => { const id = d.result && d.result.id; if (isNum(id)) { setMode("improve"); select("improve", id); } else buildInspector(); },
+    };
+  }
+  // ---------- board-level operations: post a backlog item, promote a feedback report ----------
+  function setImOp(k) { imOp = imOp === k ? null : k; renderImOps(); }
+  function renderImOps() {
+    for (const [id, k] of [["im-post", "post"], ["im-promote", "promote"]]) $(id).setAttribute("aria-pressed", String(imOp === k));
+    const box = $("im-opform");
+    box.hidden = !imOp;
+    if (!imOp) { box.replaceChildren(); return; }
+    const cancel = () => setImOp(null);
+    if (imOp === "post") {
+      box.replaceChildren(imForm({
+        title: "Post an item", ok: "Post", decision: "post", label: "Post improve item", cancel,
+        hint: "A new accepted backlog item any captain may claim. Captains read the title and text. Counts as an operator op. Journaled.",
+        fields: [imKindField(true), { k: "title", label: "Title (one line, at most 120 characters)", max: 120, req: true, check: (v) => (/\n/.test(v) ? "The title is one line." : "") }, { k: "text", label: "Text", type: "area", rows: 4, req: true }],
+        confirm: "Post this item to the improve board?", review: ["Every captain can see and claim it."],
+        done: (d) => { imOp = null; renderImOps(); const id = d.result && d.result.id; if (isNum(id)) select("improve", id); },
+      }));
+    } else {
+      const fid = el("input");
+      fid.type = "number"; fid.min = "1"; fid.inputMode = "numeric"; fid.className = "mono"; fid.placeholder = "Feedback id";
+      fid.setAttribute("aria-label", "Feedback report id");
+      const f = el("form", "actform");
+      f.append(el("h4", "", "Promote a feedback report"), el("p", "hint", "Pick the report by id, then choose kind, title and text. Or open the report in Feedback and use its Promote command."), ctFld("Feedback report id", fid));
+      const foot = el("div", "foot");
+      const next = el("button", "btn sm primary", "Next");
+      next.type = "submit";
+      foot.append(btn("Cancel", "sm ghost", cancel), next);
+      f.append(foot);
+      f.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const n = Number(fid.value);
+        if (!Number.isInteger(n) || n < 1) { fid.focus(); return; }
+        box.replaceChildren(imForm({ ...imPromoteSpec(n, cancel), done: (d) => { imOp = null; renderImOps(); const id = d.result && d.result.id; if (isNum(id)) select("improve", id); } }));
+      });
+      box.replaceChildren(f);
+      setTimeout(() => fid.focus(), 0);
+    }
+  }
+  $("im-post").addEventListener("click", () => setImOp("post"));
+  $("im-promote").addEventListener("click", () => setImOp("promote"));
+
+  // ---------- one item, in the inspector ----------
+  // A unified diff as preformatted text, one span per line (added, removed, hunk, header), all
+  // through textContent: it is shown, never applied, parsed for links or executed.
+  function imDiff(text) {
+    const pre = el("pre", "im-diff");
+    const frag = document.createDocumentFragment();
+    const lines = String(text).split("\n");
+    if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    for (const line of lines) {
+      const cls = /^(\+\+\+ |--- |diff --git |index )/.test(line) ? "h" : line.startsWith("@@") ? "k" : line.startsWith("+") ? "a" : line.startsWith("-") ? "d" : "";
+      frag.append(el("span", cls, `${line}\n`));
+    }
+    pre.append(frag);
+    return pre;
+  }
+  function renderImproveInsp(box) {
+    const id = sel.id;
+    const x = imItem(id);
+    if (!x) {
+      region(box, "head", head({ kind: "Improve item", title: `Item #${id}`, sub: imErr || (imData ? "Not on the board." : "Loading…") }));
+      if (!imData && !imBusy) loadImprove();
+      return;
+    }
+    const c = imClaim(x);
+    const fl = imFlagged(x);
+    const tags = [tag(IM_STATUS[x.status] || x.status, IM_STATUS_TAG[x.status] || ""), tag(x.kind, "")];
+    if (fl) tags.push(tag(`flagged: ${fl.join(", ")}`, "crit", "Read these files in full before shipping"));
+    if (x.source === "feedback") tags.push(tag(`from feedback #${x.feedback}`, "", "Promoted from a feedback report"));
+    if (x.source === "operator") tags.push(tag("posted by the operator", ""));
+    region(box, "head", head({ kind: "Improve item", title: x.title || "(untitled)", id: `#${x.id}`, sub: [`by ${x.author_current || x.author_name || "operator"}`, `tick ${fmt(x.tick)}`, x.at_ms ? stamp(x.at_ms) : "", `season ${x.season}`].filter(Boolean).join(" · "), tags }));
+    const open = x.status !== "shipped" && x.status !== "declined";
+    // Switched off, the server takes only decline, ship, return and assign with no player (clear a
+    // claim): the console offers only those.
+    const on = imOn();
+    const extra = [];
+    if (x.status === "proposed" && on) extra.push(ctToggle("Accept", "accept", "primary"));
+    if (x.status === "review") extra.push(ctToggle("Ship", "ship", "primary"), ctToggle("Return", "return"));
+    if (x.status === "accepted" || x.status === "proposed") extra.push(ctToggle("Ship", "ship"));
+    if (open && (on || c)) extra.push(ctToggle(on ? "Assign" : "Clear claim", "assign"));
+    if (open) extra.push(ctToggle("Decline", "decline", "danger"));
+    if (x.status === "shipped" && on) extra.push(ctToggle("Award Influence", "award", "primary"));
+    if (x.source === "feedback" && isNum(x.feedback)) extra.push(btn(`Feedback #${x.feedback}`, "sm ghost", () => select("feedback", x.feedback)));
+    ctActions(box, JSON.stringify([id, x.status, actOpen, x.feedback, on, !!c]), false, "", extra);
+    const who = c ? imName(c.player, c.call_sign) : null;
+    const patcher = (x.patches || []).length ? imName(x.patches[x.patches.length - 1].by, x.patches[x.patches.length - 1].call_sign) : null;
+    const makers = {};
+    if (x.status === "proposed" && on) {
+      makers.accept = () => imForm({
+        title: `Accept #${id}`, ok: "Accept", decision: "accept", body: { id }, label: "Accept improve item",
+        hint: "The proposal becomes accepted: every captain can see it, and the claimant (if any) keeps its claim. The note goes to the author. Counts as an operator op.",
+        fields: [{ k: "note", label: "Note (optional, sent to the author)", type: "area", rows: 2 }],
+        confirm: `Accept improve item #${id}?`, review: [`“${x.title}” by ${x.author_current || x.author_name}. Journaled.`],
+      });
+    }
+    if (x.status === "review") {
+      makers.return = () => imForm({
+        title: `Return #${id} with changes requested`, ok: "Return", decision: "return", body: { id }, label: "Return improve item",
+        hint: "Back to accepted; the claimant keeps the claim with a fresh lease and is told what to change. Counts as an operator op.",
+        fields: [{ k: "note", label: "What to change (sent to the author and claimant)", type: "area", req: true }],
+        confirm: `Return improve item #${id}?`, review: [`“${x.title}”${patcher ? `, patched by ${patcher}` : ""}. Journaled.`],
+      });
+    }
+    if (open) {
+      makers.ship = () => imForm({
+        title: `Ship #${id}`, ok: "Ship", decision: "ship", body: { id }, label: "Ship improve item",
+        hint: "Closes the item as shipped in this commit of the public repository: the news names the item, its proposer and patcher (never captain text), and the diff body is dropped. Ship only what is merged.",
+        fields: [{ k: "commit", label: "Commit (7 to 40 hex characters)", ph: "abc1234", max: 40, req: true, check: imCommit }],
+        confirm: `Ship improve item #${id}?`, review: [`“${x.title}”. ${fl ? `The latest patch touches ${fl.join(" and ")}: did you read it in full? ` : ""}This closes the item. Journaled.`],
+      });
+      if (!on && c) makers.assign = () => imForm({
+        title: `Clear the claim on #${id}`, ok: "Clear claim", decision: "assign", body: { id }, label: "Clear improve claim",
+        hint: `Held by ${who}. The board is switched off, so a claim can only be cleared, not given. Counts as an operator op.`,
+        fields: [],
+        confirm: `Clear the claim on improve item #${id}?`, review: ["The author and the claimant are told. Journaled."],
+      });
+      else if (on) makers.assign = () => imForm({
+        title: `Assign #${id}`, ok: c ? "Reassign" : "Assign", decision: "assign", body: { id }, label: "Assign improve item",
+        hint: `${c ? `Held by ${who}. ` : ""}Gives the claim to a captain with a fresh lease (within its claim caps), or clears it when empty. An item in review can only have its claim cleared. Counts as an operator op.`,
+        fields: [imPlayerField(false)],
+        confirm: `Change the claim on improve item #${id}?`, review: ["The author and the claimant are told. Journaled."],
+      });
+      makers.decline = () => imForm({
+        title: `Decline #${id}`, ok: "Decline", danger: true, decision: "decline", body: { id }, label: "Decline improve item",
+        hint: "Closes the item; the claim and the diff body are dropped. The note goes to the author and claimant.",
+        fields: [{ k: "note", label: "Why (sent to the author and claimant)", type: "area", req: true }],
+        confirm: `Decline improve item #${id}?`, review: [`“${x.title}” is closed as declined. Journaled.`],
+      });
+    }
+    if (x.status === "shipped" && on) {
+      const patchers = [...new Set((x.patches || []).map((p) => imName(p.by, p.call_sign)))];
+      makers.award = () => imForm({
+        title: `Award Influence for #${id}`, ok: "Award", decision: "award", body: { id }, label: "Award Influence",
+        hint: `Influence only (never credits), once per item and captain, within improve_award_max and the window's budget${imSum() && imSum().influence_awarded ? ` (${fmt(imSum().influence_awarded.used)} of ${fmt(imSum().influence_awarded.budget)} used)` : ""}. ${patchers.length ? `Patched by ${patchers.join(", ")}. ` : ""}Proposed by ${x.author_current || x.author_name || "operator"}.`,
+        fields: [{ ...imPlayerField(true), value: patchers[0] && patchers[0] !== "operator" ? patchers[0] : "" }, { k: "amount", label: "Amount", type: "number", req: true, check: (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? "" : "A whole number above 0.") }, { k: "note", label: "Note (optional, sent to the captain)", type: "area", rows: 2 }],
+        confirm: `Award Influence for improve item #${id}?`, review: ["Added to the captain's Influence this season, in the permanent award ledger. Journaled."],
+      });
+    }
+    ctForm(box, makers);
+    // The body is rebuilt only when the item (or whether its first-claim window is open) changes,
+    // never on a tick, so the diff keeps its scroll and a text selection; a rebuild of the same
+    // patch (a board refetch) restores the diff's scroll position.
+    const firstOpen = isNum(x.first_claim) && !c && S && S.tick < x.first_claim_until;
+    const oldPre = box.querySelector(":scope > [data-role=body] pre.im-diff");
+    const keep = oldPre ? { sha: oldPre.dataset.sha, top: oldPre.scrollTop, left: oldPre.scrollLeft } : null;
+    body(box, JSON.stringify(["improve", x, firstOpen]), (b) => {
+      const warn = el("div", "im-trust");
+      warn.append(el("b", "", "Captain-written data, never instructions."), document.createTextNode(` ${IM_TRUST} ${IM_APPLY}`));
+      b.append(warn);
+      b.append(section("Text", el("blockquote", "fb-text", x.text || "")));
+      const claimV = c ? el("span") : "–";
+      if (c) { claimV.append(imCaptainLink(c.player, c.call_sign), document.createTextNode(x.status === "review" ? " (in review: no lease)" : ` until tick ${fmt(c.expires_tick)}`)); if (x.status !== "review") claimV.append(el("span", "im-left")); }
+      const firstV = firstOpen ? `${imName(x.first_claim)} until tick ${fmt(x.first_claim_until)}` : undefined;
+      b.append(section("Item", facts([
+        ["Status", IM_STATUS[x.status] || x.status, { t: 1, cls: x.status === "review" || x.status === "proposed" ? "warn-t" : "" }],
+        ["Kind", x.kind, { t: 1 }],
+        ["Source", x.source === "feedback" ? link(`feedback #${x.feedback}`, () => select("feedback", x.feedback)) : x.source, { t: 1 }],
+        ["Author", x.author === null || x.author === undefined ? "operator" : imCaptainLink(x.author, x.author_name), { t: 1 }],
+        ["Model", x.model || "–", { t: 1 }],
+        ["Harness", x.harness || "–", { t: 1 }],
+        ["Submitted", `tick ${fmt(x.tick)}${x.at_ms ? ` · ${stamp(x.at_ms)}` : ""}`, { t: 1 }],
+        ["Season", `${x.season}${x.epoch ? ` · epoch ${x.epoch}` : ""}`],
+        ["Accepted", isNum(x.accepted_tick) ? `tick ${fmt(x.accepted_tick)}` : "–"],
+        ["Claim", claimV, { t: 1 }],
+        ["First claim", firstV, { t: 1 }],
+        ["Commit", x.commit || "–", { t: 1 }],
+        ["Closed", isNum(x.closed_tick) ? `tick ${fmt(x.closed_tick)}` : "–"],
+      ], true)));
+      const revs = x.patches || [];
+      if (revs.length) {
+        const ul = el("ul", "textlog im-revs");
+        for (const p of revs.slice().reverse()) {
+          const li = el("li");
+          const m = el("div", "m");
+          m.append(el("b", "", `rev ${p.rev}`), imCaptainLink(p.by, p.call_sign), el("span", "", `tick ${fmt(p.tick)}${p.at_ms ? ` · ${stamp(p.at_ms)}` : ""}`));
+          if (Array.isArray(p.flagged) && p.flagged.length) m.append(tag(`flagged: ${p.flagged.join(", ")}`, "crit"));
+          li.append(m, facts([
+            ["Base", p.base, { t: 1 }], ["Bytes", fmt(p.bytes)],
+            ["Model", p.model || "–", { t: 1 }], ["Harness", p.harness || "–", { t: 1 }],
+            ["Files", (p.files || []).join(", ") || "–", { t: 1 }],
+            ["sha256", p.sha256, { t: 1, cls: "mono" }],
+          ], true));
+          if (p.note) li.append(el("blockquote", "fb-text", p.note));
+          ul.append(li);
+        }
+        b.append(section(`Patch revisions (${revs.length})`, ul));
+      }
+      if (x.diff) {
+        const last = revs[revs.length - 1];
+        const copyB = el("button", "btn xs", "Copy diff");
+        copyB.type = "button";
+        copyB.dataset.label = "Copy diff";
+        copyB.title = "Copy the diff as text, to check with git apply --check in a scratch clone";
+        copyB.addEventListener("click", () => copy(x.diff, copyB));
+        const bar = el("div", "im-diff-bar");
+        bar.append(el("span", "hint", last ? `rev ${last.rev} · base ${last.base} · ${fmt(last.bytes)} bytes` : ""), copyB);
+        const pre = imDiff(x.diff);
+        pre.dataset.sha = last ? last.sha256 || "" : "";
+        b.append(section("Latest diff", bar, pre, el("p", "hint", IM_APPLY)));
+      } else if (revs.length) b.append(section("Latest diff", el("p", "empty", "Closed: the diff body was dropped; every revision's metadata stays.")));
+      const trail = x.trail || [];
+      if (trail.length) {
+        const ul = el("ul", "textlog");
+        for (const s of trail.slice().reverse()) {
+          const li = el("li");
+          const m = el("div", "m");
+          m.append(el("span", "k", s.kind), imCaptainLink(s.by, s.call_sign), el("span", "", `tick ${fmt(s.tick)}${s.at_ms ? ` · ${stamp(s.at_ms)}` : ""}`));
+          if (isNum(s.player)) { m.append(document.createTextNode("→ ")); m.append(imCaptainLink(s.player)); }
+          li.append(m);
+          if (s.note) li.append(el("blockquote", "fb-text", s.note));
+          ul.append(li);
+        }
+        b.append(section(`Trail (${trail.length})`, ul));
+      }
+      const aw = x.awards || [];
+      if (aw.length) {
+        const ul = el("ul", "textlog");
+        for (const a of aw) {
+          const li = el("li");
+          const m = el("div", "m");
+          m.append(imCaptainLink(a.player, a.call_sign), el("b", "mono", `${fmt(a.amount)} Influence`), el("span", "", `tick ${fmt(a.tick)} · season ${a.season}`));
+          li.append(m);
+          if (a.note) li.append(el("blockquote", "fb-text", a.note));
+          ul.append(li);
+        }
+        b.append(section(`Awards (${aw.length})`, ul));
+      }
+    });
+    const pre = box.querySelector(":scope > [data-role=body] pre.im-diff");
+    if (keep && pre && pre !== oldPre && pre.dataset.sha === keep.sha) { pre.scrollTop = keep.top; pre.scrollLeft = keep.left; }
+    // The claim lease countdown, refreshed every pass without rebuilding the body.
+    const left = box.querySelector(":scope > [data-role=body] .im-left");
+    if (left) { const t = c && S && c.expires_tick > S.tick ? ` (${ticksDur(c.expires_tick - S.tick)})` : ""; if (left.textContent !== t) left.textContent = t; }
   }
 
   // ======================================================================
@@ -4900,7 +5464,7 @@
     if (key !== insKey) { insKey = key; insSig = ""; box.replaceChildren(); }
     if (moveTarget !== null && !(sel && sel.kind === "captain" && sel.id === moveTarget && actOpen === "move")) moveTarget = null;
     if (!S) return;
-    const r = !sel ? renderOverview : { captain: renderCaptainInsp, sector: renderSectorInsp, planet: renderPlanetInsp, corp: renderCorpInsp, msg: renderMsgInsp, entry: renderEntryInsp, anon: renderAnonInsp, feedback: renderFeedbackInsp, article: renderArticleInsp, proposal: renderProposalInsp, archive: renderArchiveInsp, hcap: renderHistCapInsp, cpage: renderCPageInsp, cprod: renderCProdInsp }[sel.kind];
+    const r = !sel ? renderOverview : { captain: renderCaptainInsp, sector: renderSectorInsp, planet: renderPlanetInsp, corp: renderCorpInsp, msg: renderMsgInsp, entry: renderEntryInsp, anon: renderAnonInsp, feedback: renderFeedbackInsp, article: renderArticleInsp, proposal: renderProposalInsp, archive: renderArchiveInsp, hcap: renderHistCapInsp, cpage: renderCPageInsp, cprod: renderCProdInsp, improve: renderImproveInsp }[sel.kind];
     if (!r) return renderOverview(box);
     r(box);
   }
@@ -6342,6 +6906,8 @@
   VIEW_CMDS[MODES.indexOf("constitution")].r = "C";
   VIEW_CMDS[MODES.indexOf("history")].r = "H";
   VIEW_CMDS[MODES.indexOf("chronicle")].r = "W";
+  VIEW_CMDS[MODES.indexOf("improve")].t = "Go to Improve board";
+  VIEW_CMDS[MODES.indexOf("improve")].r = "I";
   function commands() {
     const held = S && S.paused;
     return [
@@ -6359,6 +6925,9 @@
       { t: "Open constitution proposals", run: () => { setMode("constitution"); setCtFilter("open"); } },
       { t: "Open production pitches", run: () => { setMode("chronicle"); setChView("productions"); } },
       { t: "Open reported Chronicle pages", run: () => { setMode("chronicle"); setChView("pages"); setChFilter("reported"); } },
+      { t: "Open improve patches in review", run: () => { setMode("improve"); setImFilter("review"); } },
+      { t: "Open improve proposals", run: () => { setMode("improve"); setImFilter("proposed"); } },
+      { t: "Post an improve item…", run: () => { setMode("improve"); if (imOp !== "post") setImOp("post"); } },
       { t: "Show undocumented captains", run: () => { setMode("captains"); const b = document.querySelector('#cap-scope button[data-v="undoc"]'); if (b) b.click(); } },
       { t: "Show captains with a rename pending", run: () => { setMode("captains"); const b = document.querySelector('#cap-scope button[data-v="rename"]'); if (b) b.click(); } },
       { t: "Require every captain to rename…", run: requireRename },
@@ -6401,8 +6970,9 @@
       for (const pg of chData.pages) { const sc = Math.max(score(pg.title), score(`#${pg.id}`)); if (sc) out.push({ g: "Chronicle", t: pg.title, r: `${pg.kind} · #${pg.id}`, run: () => select("cpage", pg.id), s: sc }); }
       for (const x of chData.productions) { const sc = score(x.title); if (sc) out.push({ g: "Chronicle", t: x.title, r: `${x.status} production · #${x.id}`, run: () => select("cprod", x.id), s: sc }); }
     }
+    for (const x of imItems()) { const sc = Math.max(score(x.title), score(`#${x.id}`)); if (sc) out.push({ g: "Improve", t: x.title, r: `${IM_STATUS[x.status] || x.status} · #${x.id}`, run: () => { setMode("improve"); select("improve", x.id); }, s: sc }); }
     for (const c of [...VIEW_CMDS, ...commands()]) { const sc = score(c.t); if (sc) out.push({ ...c, s: sc }); }
-    const gOrder = ["Sectors", "Captains", "NPCs", "Planets", "Corporations", "Chronicle", "Workbench", "Commands"];
+    const gOrder = ["Sectors", "Captains", "NPCs", "Planets", "Corporations", "Chronicle", "Improve", "Workbench", "Commands"];
     return out.sort((a, b) => gOrder.indexOf(a.g) - gOrder.indexOf(b.g) || (b.s || 0) - (a.s || 0)).slice(0, 40);
   }
   function renderPalette() {
@@ -6500,6 +7070,7 @@
     else if (k === "c" || k === "C") { navStack.length = 0; setMode("constitution"); renderBack(); }
     else if (k === "h" || k === "H") { navStack.length = 0; setMode("history"); renderBack(); }
     else if (k === "w" || k === "W") { navStack.length = 0; setMode("chronicle"); renderBack(); }
+    else if (k === "i" || k === "I") { navStack.length = 0; setMode("improve"); renderBack(); }
     else if (k === "Escape") {
       if (!$("map-layers").hidden) toggleLayers(false);
       else if (actOpen) { actOpen = null; buildInspector(); }
@@ -6562,6 +7133,7 @@
     fbOnState();
     ctOnState();
     chOnState();
+    imOnState();
     map.setState(S);
     renderClock();
     renderStatus();

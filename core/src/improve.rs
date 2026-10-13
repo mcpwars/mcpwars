@@ -356,14 +356,15 @@ pub struct AdminArgs {
 // ---------------------------------------------------------------- helpers
 
 /// The current name of a captain (or "operator"), falling back to the name stored at write time.
-fn name_of(w: &World, pid: PlayerId, stored: &str) -> String {
+pub fn name_of(w: &World, pid: PlayerId, stored: &str) -> String {
     if pid == SYSOP {
         return "operator".into();
     }
     w.players.get(&pid).map(|p| p.name.clone()).unwrap_or_else(|| stored.to_string())
 }
 
-fn author_of(w: &World, i: &Item) -> String {
+/// The item's author by current name ("operator" for a post).
+pub fn author_of(w: &World, i: &Item) -> String {
     match i.author {
         Some(a) => name_of(w, a, &i.author_name),
         None => "operator".into(),
@@ -1833,22 +1834,51 @@ fn operator_item(w: &World, i: &Item) -> Value {
     v
 }
 
-/// Everything, for the operator: items (with diff bodies), the award ledger and the budgets.
-/// `status` filters items ("proposed", "accepted", "review", "shipped", "declined"); `id` returns
-/// one item.
-pub fn operator_view(w: &World, status: Option<&str>, id: Option<u64>) -> Value {
+/// The highest id a captain ever proposed (0 when none): the `improve-proposed` alert's signature.
+/// Only a captain submission makes a proposed item and items are never removed, so it only grows.
+pub fn proposals_max_id(w: &World) -> u64 {
+    w.improve
+        .items
+        .iter()
+        .filter(|i| i.source == Source::Captain)
+        .map(|i| i.id)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The board at a glance, for the operator: the summary block of `operator_view` and `improve` in
+/// the sysop state (the console's alerts and badge read it without fetching the board). Counts by
+/// status, the review queue against its cap (`review_max` is the rule), active claims, operator
+/// ops and Influence in the window, the items in review whose latest patch touches a flagged file,
+/// and three alert signals: `review_ids` (ids in review, ascending), `patch_revs` (every patch
+/// revision the board holds; it only grows, so it changes whenever a patch arrives) and
+/// `proposals_max_id` (the highest id a captain ever proposed, 0 when none: every captain
+/// submission starts as proposed and items are never removed, so it only grows and changes only
+/// when a proposal arrives, never when one is decided).
+pub fn summary(w: &World) -> Value {
     let r = &w.rules;
     let count = |s: Status| w.improve.items.iter().filter(|i| i.status == s).count();
-    let summary = json!({
+    let with = |s: Status| w.improve.items.iter().filter(move |i| i.status == s);
+    json!({
         "enabled": r.improve_enabled, "items": w.improve.items.len(), "items_max": r.improve_items_max,
         "proposed": count(Status::Proposed), "accepted": count(Status::Accepted), "review": count(Status::Review),
         "review_max": r.improve_review_max, "shipped": count(Status::Shipped), "declined": count(Status::Declined),
         "active_claims": active_claims_all(w), "max_active_claims": r.improve_max_active_claims,
         "operator_ops": {"used": ops_today(w), "max": r.improve_operator_ops_per_day},
         "influence_awarded": {"used": awarded_today(w), "budget": r.improve_award_budget_per_day},
-        "flagged_in_review": w.improve.items.iter().filter(|i| i.status == Status::Review && i.patches.last().is_some_and(|p| !p.flagged.is_empty())).map(|i| i.id).collect::<Vec<_>>(),
+        "flagged_in_review": with(Status::Review).filter(|i| i.patches.last().is_some_and(|p| !p.flagged.is_empty())).map(|i| i.id).collect::<Vec<_>>(),
+        "review_ids": with(Status::Review).map(|i| i.id).collect::<Vec<_>>(),
+        "patch_revs": w.improve.items.iter().map(|i| i.patches.len()).sum::<usize>(),
+        "proposals_max_id": proposals_max_id(w),
         "window_ticks": r.improve_window_ticks,
-    });
+    })
+}
+
+/// Everything, for the operator: items (with diff bodies), the award ledger and the budgets.
+/// `status` filters items ("proposed", "accepted", "review", "shipped", "declined"); `id` returns
+/// one item.
+pub fn operator_view(w: &World, status: Option<&str>, id: Option<u64>) -> Value {
+    let summary = summary(w);
     if let Some(id) = id {
         let item = w.improve.items.iter().find(|i| i.id == id).map(|i| operator_item(w, i));
         return json!({"summary": summary, "item": item});
