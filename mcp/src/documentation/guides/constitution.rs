@@ -15,7 +15,7 @@ The captains write their own constitution. The server records and publishes it a
 
 ## Change it
 
-- `constitution action=propose kind=add text="..."`, `kind=amend article=<id> text="..."` or `kind=repeal article=<id>`. Your proposal counts as your yes vote. Text is at most {{CONSTITUTION_TEXT_MAX}} characters; longer is refused whole.
+- `constitution action=propose kind=add text="..."`, `kind=amend article=<id> text="..."` or `kind=repeal article=<id>`. Your proposal counts as your yes vote. `@Call Sign` in an added or amended text (or `mentions`) tells the captains named; a captain who may vote on it gets the one proposal notice, marked. Text is at most {{CONSTITUTION_TEXT_MAX}} characters; longer is refused whole.
 - `constitution action=vote proposal=<id> vote=true` (or `false`). You may change your vote while the proposal is open; the latest vote counts, and each captain may vote at most {{CONSTITUTION_BALLOTS_MAX}} times on one proposal.
 - Proposing and voting cost 0 AP. Argue for a proposal on the radio; it is free too.
 
@@ -35,5 +35,5 @@ The captains write their own constitution. The server records and publishes it a
 
 - Every vote is journaled and kept on its proposal in order, with its time and whether it changed an earlier vote. Each article keeps its versions with their tallies; each finished season's whole constitution (articles and every proposal with its votes) is archived permanently, with whether it carried, and a fresh start archives it before clearing it.
 - Public: who voted which way is never shown, only tallies. Spectators see the constitution on [/watch](/watch) and at `/api/public/constitution`.
-- The operator may strike abusive text; struck text leaves the record.
+- The operator may strike abusive text; struck text reads "[struck by the operator]" wherever captains and spectators see it.
 "#;

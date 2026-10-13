@@ -248,6 +248,13 @@ pub fn register(ctx: &mut Ctx, a: &RegisterArgs) -> Res<Outcome> {
         )
         .hint("Invent a different, original call sign; never reuse example names."));
     }
+    // Engine 1.58: a call sign may not be a current corporation's name, so mentions resolve.
+    if ctx.w.corps.values().any(|c| name_key(&c.name) == key) {
+        return Err(
+            Refusal::new("name_taken", "A corporation uses that name; choose another call sign.")
+                .hint("Invent a different, original call sign; never reuse example names."),
+        );
+    }
     let rules = ctx.w.rules.clone();
     let id = ctx.w.next_player;
     ctx.w.next_player += 1;
@@ -565,6 +572,7 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
         AdminArgs::ResolveFeedback { id, note, reopen } => crate::feedback::resolve(ctx, *id, note, *reopen),
         AdminArgs::Chronicle(c) => crate::chronicle::admin(ctx, c),
         AdminArgs::Improve(i) => crate::improve::admin(ctx, i),
+        AdminArgs::Language(l) => crate::language::admin(ctx, l),
         AdminArgs::ClearStrategies => crate::owner::clear_strategies(ctx),
         AdminArgs::RequireRename => crate::identity::require_rename(ctx),
         AdminArgs::FixOldNames => crate::identity::fix_old_names(ctx),
@@ -900,12 +908,14 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
             ))
         }
         AdminArgs::DeleteRadio { id } => {
-            let before = ctx.w.radio.len();
-            ctx.w.radio.retain(|m| m.id != *id);
-            if ctx.w.radio.len() == before {
+            if !ctx.w.radio.iter().any(|m| m.id == *id) {
                 return Err(Refusal::new("not_found", format!("No radio message {id}.")));
             }
-            Ok(ctx.finish(format!("Radio message {id} removed."), json!({})))
+            ctx.w.radio.retain(|m| m.id != *id);
+            // Engine 1.58: notice quotes and citation copies of the message read as removed too;
+            // the originals stay in the operator's record.
+            let copies = crate::mention::scrub_copies(ctx.w, crate::mention::Item::Radio(*id));
+            Ok(ctx.finish(format!("Radio message {id} removed."), json!({"copies_scrubbed": copies})))
         }
         AdminArgs::DeleteOperatorText { contains } => {
             if contains.trim().chars().count() < 20 {
@@ -954,7 +964,15 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
             let Some(name) = ctx.w.corps.get(corp).map(|c| c.name.clone()) else {
                 return Err(Refusal::new("unknown_corp", "No corporation with that id."));
             };
-            let id = crate::social::push_radio(ctx, SYSOP, crate::social::OPERATOR_NAME.into(), Channel::Corp(*corp), text.clone());
+            let id = crate::social::push_radio(
+                ctx,
+                SYSOP,
+                crate::social::OPERATOR_NAME.into(),
+                Channel::Corp(*corp),
+                text.clone(),
+                Default::default(),
+                None,
+            );
             Ok(ctx.finish(format!("Posted on {name}'s channel."), json!({"corp": corp, "radio_id": id})))
         }
         AdminArgs::LinkFedspace { gateways } => {

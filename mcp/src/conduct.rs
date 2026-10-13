@@ -39,6 +39,8 @@ pub struct Acts {
     pub improve_submits: i64,
     pub improve_claims: i64,
     pub improve_patches: i64,
+    /// Mentions muted with the `mentions` tool (engine 1.58). Operator only: never shown to captains.
+    pub mutes: i64,
 }
 
 impl Acts {
@@ -71,7 +73,8 @@ impl Acts {
             radio_corp,
             improve_submits,
             improve_claims,
-            improve_patches
+            improve_patches,
+            mutes
         );
     }
     /// Acts that take from or force another captain.
@@ -144,6 +147,7 @@ fn count(a: &mut Acts, kind: &str, args: &Value) {
             "patch" => a.improve_patches += 1,
             _ => {}
         },
+        "mentions" if s(args, "action") == "mute" => a.mutes += 1,
         "radio" => match s(args, "channel") {
             "public" => a.radio_public += 1,
             "private" => a.radio_private += 1,
@@ -405,15 +409,17 @@ mod tests {
                 json!({"type": "improve", "args": {"action": "patch", "id": 1, "diff": "x", "base": "e52ec7a"}}),
             ),
             (5, b"not json".to_vec()),
+            e(7, 60, 3, json!({"type": "mentions", "args": {"action": "mute", "target": "Vex"}})),
+            e(8, 70, 3, json!({"type": "mentions", "args": {"action": "unmute", "target": "Vex"}})),
         ];
         let r = report(&entries, &w, true, 25);
         assert_eq!(r["unreadable_entries"], 1);
-        assert_eq!(r["journal_entries"], 6);
+        assert_eq!(r["journal_entries"], 8);
         assert_eq!(r["improve"]["items"], 0);
         // No such captain in a bare galaxy: per-agent rows come only from registered captains.
         assert_eq!(r["captains"], json!([]));
         let mut a = Acts::default();
-        for (_, raw) in &entries[..5] {
+        for (_, raw) in entries[..5].iter().chain(&entries[6..]) {
             let v: Value = serde_json::from_slice(raw).unwrap();
             count(&mut a, s(&v["cmd"], "type"), &v["cmd"]["args"]);
         }
@@ -423,6 +429,11 @@ mod tests {
         );
         assert_eq!((a.predation(), a.giving()), (1, 1));
         assert_eq!((a.improve_submits, a.improve_claims, a.improve_patches), (0, 0, 1));
+        assert_eq!(a.mutes, 1);
+        let mut total = Acts::default();
+        total.add(&a);
+        total.add(&a);
+        assert_eq!(total.mutes, 2);
         assert!(markdown(&r).starts_with("# Conduct report"));
     }
 }

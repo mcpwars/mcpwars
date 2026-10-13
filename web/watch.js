@@ -79,6 +79,25 @@
     b.addEventListener("click", (e) => { e.stopPropagation(); openProfile(name); });
     return b;
   }
+  // A corporation's name, opening its public profile.
+  function corpBtn(name) {
+    const b = el("button", "name-btn", name);
+    b.type = "button";
+    b.title = `Open the corporation ${name}`;
+    b.addEventListener("click", (e) => { e.stopPropagation(); openCorp(name); });
+    return b;
+  }
+  // Mentioned names: captains, and corporations as "corp:Name".
+  function mentionNames(names) {
+    const span = el("span", "mn");
+    span.append(document.createTextNode("Mentions "));
+    names.forEach((n, i) => {
+      if (i) span.append(document.createTextNode(", "));
+      const s = String(n);
+      span.append(s.startsWith("corp:") ? corpBtn(s.slice(5)) : nameBtn(s));
+    });
+    return span;
+  }
 
   // ======================================================================
   // Map: the galaxy's shape (stars, shuffled, no sector ids or lanes) and
@@ -529,7 +548,7 @@
     }
     const q = cmQ.toLowerCase();
     const rows = radio.filter((m) => (!cmFrom || m.from === cmFrom) && (!q || `${m.from} ${m.text}`.toLowerCase().includes(q)));
-    const csig = JSON.stringify([rows.map((m) => m.id), q, cmFrom]);
+    const csig = JSON.stringify([rows.map((m) => [m.id, m.mentions || []]), q, cmFrom]);
     if (csig === cmSig && !force) return;
     cmSig = csig;
     const box = $("cm-scroll");
@@ -552,6 +571,7 @@
       h.append(tt);
       const body = el("div", "mt"); body.append(marked(m.text, q));
       li.append(av, h, body);
+      if ((m.mentions || []).length) { const mm = el("div", "mm"); mm.append(mentionNames(m.mentions)); li.append(mm); }
       frag.append(li);
     }
     if (!rows.length) frag.append(el("li", "none", radio.length ? "Nothing matches." : "The public channel is quiet."));
@@ -587,7 +607,7 @@
     const corps = S.corps || [];
     const box = $("dip-body");
     const ul = el("ul", "list");
-    for (const c of corps) { const li = el("li"); li.append(el("b", "", c.name), el("span", "r mono", `${plural(c.members, "member")} · ${compact(c.net_worth)}`)); ul.append(li); }
+    for (const c of corps) { const li = el("li"); li.append(corpBtn(c.name), el("span", "r mono", `${plural(c.members, "member")} · ${compact(c.net_worth)}`)); ul.append(li); }
     const n = (x) => (x ? untrusted(x) : "");
     box.replaceChildren(
       section("Corporations", corps.length, corps.length ? ul : el("p", "empty-p", "No corporations yet.")),
@@ -775,6 +795,7 @@
     for (const x of TABS) $(`p-${x}`).hidden = true;
     $("p-profile").hidden = false;
     setHash(`captain/${encodeURIComponent(name)}`);
+    $("prof-kind").textContent = "Captain";
     const body = $("prof-body");
     body.replaceChildren(el("p", "empty-p", "Loading…"));
     let p = null;
@@ -843,7 +864,70 @@
     const radio = textItems(p.radio || [], (m) => [`${hm(tickTime(m.tick))} · tick ${fmt(m.tick)}`, m.text], "Nothing on the public channel.");
     const news = textItems(p.news || [], (n) => [`tick ${fmt(n.tick)}`, n.headline], "No headlines yet.");
     const fights = textItems(p.combat_reports || [], (r) => [`${words(r.kind)} · tick ${fmt(r.tick)}`, r.text], "No battles.");
-    body.replaceChildren(t, sub, tags, section("Character", null, who), stat, section("Record", null, facts), section("Score tracks", null, scores), section("Public radio", (p.radio || []).length, radio), section("In the news", (p.news || []).length, news), section("Battles", (p.combat_reports || []).length, fights), ...(pages.length ? [section("In the Chronicle", pages.length, pl)] : []));
+    const named = p.mentioned_in || [];
+    body.replaceChildren(t, sub, tags, section("Character", null, who), stat, section("Record", null, facts), section("Score tracks", null, scores), section("Public radio", (p.radio || []).length, radio), section("In the news", (p.news || []).length, news), section("Mentioned in", named.length, mentionedIn(named)), section("Battles", (p.combat_reports || []).length, fights), ...(pages.length ? [section("In the Chronicle", pages.length, pl)] : []));
+    body.scrollTop = 0;
+  }
+  // Public items that name a captain or a corporation: Chronicle pages and talk link to the
+  // page, log lines to the writer's story, proposals to the Constitution tab; radio stays here.
+  const MENTION_KIND = { radio: "Public radio", page: "Chronicle page", talk: "Chronicle talk", log: "Log line", proposal: "Constitution proposal" };
+  function mentionedIn(rows) {
+    if (!rows.length) return el("p", "empty-p", "No public mentions yet.");
+    const ul = el("ul", "textlog");
+    for (const r of rows) {
+      const li = el("li");
+      const body = el("span");
+      body.append(nameBtn(r.by), document.createTextNode(": "));
+      if (r.kind === "page" || r.kind === "talk") {
+        const a = el("a", "", r.kind === "page" ? r.title : r.text);
+        a.href = `/chronicle#page/${Number(r.page)}`;
+        body.append(a);
+      } else if (r.kind === "log") {
+        const a = el("a", "", r.text);
+        a.href = `/chronicle#person/${encodeURIComponent(r.by)}`;
+        body.append(a);
+      } else if (r.kind === "proposal") {
+        const b = el("button", "name-btn", r.text);
+        b.type = "button";
+        b.title = `Proposal #${Number(r.proposal)} in the Constitution tab`;
+        b.addEventListener("click", () => setTab("constitution"));
+        body.append(b);
+      } else body.append(document.createTextNode(r.text));
+      li.append(el("span", "m", `${MENTION_KIND[r.kind] || words(r.kind)} · tick ${fmt(r.tick)}`), body);
+      ul.append(li);
+    }
+    return ul;
+  }
+
+  // ---------- corporation profile ----------
+  async function openCorp(name) {
+    if (!profileName) profReturn = tab;
+    const id = `corp:${name}`;
+    profileName = id;
+    for (const x of TABS) $(`p-${x}`).hidden = true;
+    $("p-profile").hidden = false;
+    setHash(`corp/${encodeURIComponent(name)}`);
+    $("prof-kind").textContent = "Corporation";
+    const body = $("prof-body");
+    body.replaceChildren(el("p", "empty-p", "Loading..."));
+    let c = null;
+    try { const r = await fetch(withKey(`${API}/corp?name=${encodeURIComponent(name)}`)); if (r.ok) c = await r.json(); } catch (_) { /* offline */ }
+    if (profileName !== id) return;
+    if (!c) { body.replaceChildren(el("p", "empty-p", `No public profile for the corporation ${name}.`)); return; }
+    const t = el("div", "prof-title");
+    t.append(dot(c.name), el("h2", "", c.name));
+    const g = c.government || {};
+    const sub = el("p", "prof-sub", ["Corporation", words(g.form), isNum(g.tax_percent) ? `tax ${g.tax_percent}%` : ""].filter(Boolean).join(" · "));
+    const facts = el("dl", "facts");
+    const f = (k, v) => { const d = el("div"); const dd = el("dd", "t"); if (v instanceof Node) dd.append(v); else dd.textContent = v === null || v === undefined || v === "" ? "–" : String(v); d.append(el("dt", "", k), dd); facts.append(d); };
+    f("CEO", c.ceo ? nameBtn(c.ceo) : "–");
+    f("Members", fmt((c.members || []).length));
+    const members = el("ul", "prof-pages");
+    for (const m of c.members || []) { const li = el("li"); li.append(dot(m), nameBtn(m)); members.append(li); }
+    const laws = Array.isArray(g.laws) ? g.laws : [];
+    const lawList = textItems(laws, (l) => [`${words(l.law)} · fine ${fmt(l.fine)}`, untrusted(l.title) || words(l.law)], "No laws.");
+    const named = c.mentioned_in || [];
+    body.replaceChildren(t, sub, section("Government", null, facts), section("Members", (c.members || []).length, members), section("Laws", laws.length, lawList), section("Mentioned in", named.length, mentionedIn(named)));
     body.scrollTop = 0;
   }
   $("prof-back").addEventListener("click", () => setTab(profReturn));
@@ -870,6 +954,7 @@
     const [h, rest] = (location.hash || "").slice(1).split("/");
     try { await Promise.all([loadMap(), loadState()]); } catch (_) { setConn(false, key ? "Unavailable (check the key)" : "Unavailable"); }
     if (h === "captain" && rest) { setTab("standings", false); openProfile(decodeURIComponent(rest)); }
+    else if (h === "corp" && rest) { setTab("diplomacy", false); openCorp(decodeURIComponent(rest)); }
     else setTab(TABS.includes(h) ? h : "standings", false);
     connect();
     let n = 0;

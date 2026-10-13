@@ -1128,6 +1128,66 @@ fn the_founding_era_is_documented_from_the_live_rules() {
     }
 }
 
+/// Mentions and languages (engine 1.58): /languages.txt is served and indexed, and every number
+/// on the mention and language pages comes from the live rules.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mentions_and_languages_are_documented_from_the_live_rules() {
+    let (url, _game) = start(Rules::default()).await;
+    let http = reqwest::Client::new();
+    let languages = document(&http, &url, "languages.txt").await;
+    assert!(languages.starts_with("# MCP Wars: languages"));
+    assert!(languages.contains("Languages are never retired automatically."));
+    assert!(languages.contains("cannot tag radio messages and cannot be adopted"));
+    let llms = document(&http, &url, "llms.txt").await;
+    assert!(
+        markdown_links(&llms).iter().any(|link| link == "/languages.txt"),
+        "llms.txt links /languages.txt"
+    );
+    for path in ["society.txt", "terms.txt"] {
+        let page = document(&http, &url, path).await;
+        assert!(
+            markdown_links(&page).iter().any(|link| link == "/languages.txt"),
+            "{path} links /languages.txt"
+        );
+    }
+    let society = document(&http, &url, "society.txt").await;
+    assert!(society.contains("## Mentions"));
+    assert!(society.contains(&format!("at most {} names an item", af_core::mention::TARGETS_MAX)));
+    assert!(society.contains("at most 20 new captains or corporations every hour"));
+    let world = document(&http, &url, "world.txt").await;
+    assert!(world.contains("[society](/society.txt) (section Mentions)"));
+    let chronicle = document(&http, &url, "chronicle.txt").await;
+    assert!(chronicle.contains(&format!("at least {} new words", af_core::chronicle::CONTRIBUTION_MIN_WORDS)));
+
+    let mut ctx = af_mcp::documentation::DocContext::fixture("http://127.0.0.1:1");
+    ctx.rules.mention_notify_max = 7;
+    ctx.rules.mention_window_ticks = 180;
+    ctx.rules.language_stale_days = 30;
+    ctx.rules.language_retire_days = 90;
+    ctx.rules.language_adopted_grace_days = 10;
+    let society = af_mcp::documentation::render("society.txt", &ctx).unwrap();
+    assert!(society.contains("at most 7 new captains or corporations every 3 hours"));
+    let languages = af_mcp::documentation::render("languages.txt", &ctx).unwrap();
+    assert!(
+        languages
+            .contains("A language with no tagged radio message for 30 days shows as stale (40 days when another captain has adopted it).")
+    );
+    assert!(
+        languages.contains("After 90 days without a tagged radio message (100 days when another captain has adopted it) it is retired.")
+    );
+    assert!(!languages.contains("never retired automatically"));
+    ctx.rules.language_retire_days = 0;
+    let languages = af_mcp::documentation::render("languages.txt", &ctx).unwrap();
+    assert!(languages.contains("shows as stale") && languages.contains("Languages are never retired automatically."));
+    // No adoption grace: no parenthesis repeating the same number of days.
+    ctx.rules.language_retire_days = 90;
+    ctx.rules.language_adopted_grace_days = 0;
+    let languages = af_mcp::documentation::render("languages.txt", &ctx).unwrap();
+    assert!(languages.contains("A language with no tagged radio message for 30 days shows as stale. "));
+    assert!(languages.contains("After 90 days without a tagged radio message it is retired."));
+    assert!(!languages.contains("when another captain has adopted it"));
+}
+
 /// The operator rule covers only the live interfaces (owner, 2026-10-12): the public source
 /// repository, the operator interfaces' own code and documentation included, is open to read and to
 /// improve. Every operator source file carries the source notice, and the console's sign-in banner

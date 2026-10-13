@@ -9,6 +9,7 @@
 //! With `rules.identity_required`, a captain without an identity cannot spend action points
 //! ("undocumented"); reading, talking and writing the identity stay free.
 use crate::engine::{Ctx, Outcome, Refusal, Res};
+use crate::mention;
 use crate::model::{PlayerId, PlayerKind, Tick, World};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,7 @@ pub const STORY_KINDS: &[&str] = &[
     "constitution",
     "galaxy_event",
     "chronicle_canon",
+    "chronicle_named",
     "chronicle_released",
 ];
 
@@ -190,6 +192,9 @@ pub struct LogEntry {
     pub about: Vec<PlayerId>,
     #[serde(default)]
     pub citations: Vec<crate::chronicle::Citation>,
+    /// Captains and corporations a public line mentions (engine 1.58; never on a private line).
+    #[serde(default, skip_serializing_if = "crate::mention::Mentions::is_empty")]
+    pub mentions: crate::mention::Mentions,
 }
 
 /// A public game event in a character's life, recorded by the engine (the ground truth).
@@ -288,6 +293,9 @@ pub struct Args {
     pub version: Option<u32>,
     #[serde(default)]
     pub before: Option<u64>,
+    /// Captains or corporations to notify ("Call Sign" or "corp:Name"); @Name in the text also works.
+    #[serde(default)]
+    pub mentions: Option<Vec<String>>,
 }
 
 impl Args {
@@ -684,10 +692,16 @@ fn find_player(w: &World, s: &str) -> Res<PlayerId> {
         .ok_or_else(|| Refusal::new("unknown_player", format!("No captain '{s}'.")))
 }
 
-fn log_json(w: &World, e: &LogEntry) -> Value {
-    json!({"n": e.n, "tick": e.tick, "at_ms": e.at_ms, "season": e.season, "epoch": e.epoch, "text": e.text, "mood": e.mood,
+/// A log line. `public` (spectators) leaves removed captains out of its mention names.
+fn log_json(w: &World, e: &LogEntry, public: bool) -> Value {
+    let mut v = json!({"n": e.n, "tick": e.tick, "at_ms": e.at_ms, "season": e.season, "epoch": e.epoch, "text": e.text, "mood": e.mood,
            "private": e.private, "about": e.about.iter().map(|a| name_of(w, *a)).collect::<Vec<_>>(),
-           "citations": e.citations.iter().map(|c| json!({"record": c.record, "id": c.id, "tick": c.tick, "note": c.note, "on_record": c.on_record})).collect::<Vec<_>>()})
+           "citations": e.citations.iter().map(|c| json!({"record": c.record, "id": c.id, "tick": c.tick, "note": c.note, "on_record": c.on_record})).collect::<Vec<_>>()});
+    let names = if public { e.mentions.public_names(w) } else { e.mentions.names(w) };
+    if !names.is_empty() {
+        v["mentions"] = json!(names);
+    }
+    v
 }
 
 fn moment_json(w: &World, m: &Moment) -> Value {
@@ -698,6 +712,16 @@ fn moment_json(w: &World, m: &Moment) -> Value {
 /// A character's story: its log (private lines only when `private`) and timeline, newest first,
 /// `limit` of each, before tick `before`.
 pub fn story(w: &World, pid: PlayerId, private: bool, before: Option<u64>, limit: usize) -> Value {
+    story_in(w, pid, private, before, limit, false)
+}
+
+/// A character's public story for spectators: public log lines only, and mention names that
+/// leave out removed captains.
+pub fn public_story(w: &World, pid: PlayerId, before: Option<u64>, limit: usize) -> Value {
+    story_in(w, pid, false, before, limit, true)
+}
+
+fn story_in(w: &World, pid: PlayerId, private: bool, before: Option<u64>, limit: usize, public: bool) -> Value {
     let Some(i) = w.identities.get(&pid) else {
         return json!({"call_sign": name_of(w, pid), "log": [], "moments": []});
     };
@@ -708,7 +732,7 @@ pub fn story(w: &World, pid: PlayerId, private: bool, before: Option<u64>, limit
         .filter(|e| private || !e.private)
         .filter(|e| before.is_none_or(|b| e.tick < b))
         .take(limit)
-        .map(|e| log_json(w, e))
+        .map(|e| log_json(w, e, public))
         .collect();
     let moments: Vec<Value> = i
         .moments
@@ -721,7 +745,21 @@ pub fn story(w: &World, pid: PlayerId, private: bool, before: Option<u64>, limit
     json!({"call_sign": name_of(w, pid), "log": log, "moments": moments})
 }
 
+/// Structured mentions belong to public log lines only (engine 1.58); inline `@` elsewhere is
+/// plain text, never refused.
+fn mentions_here(a: &Args) -> Res<()> {
+    if a.mentions.as_ref().is_some_and(|m| !m.is_empty()) && (a.action != Action::Log || a.private.unwrap_or(false)) {
+        return Err(Refusal::new(
+            "mentions_not_here",
+            "In your identity, mentions apply to public log lines only (a private line tells no one); nothing was stored.",
+        )
+        .hint(crate::social::MENTIONS_HERE));
+    }
+    Ok(())
+}
+
 pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
+    mentions_here(a)?;
     match a.action {
         Action::View => {
             if let Some(other) = a.player.as_deref() {
@@ -845,6 +883,7 @@ fn relations(w: &World, rs: &[RelationArg]) -> Res<Vec<Relation>> {
 }
 
 pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
+    mentions_here(a)?;
     let p = ctx.player(pid)?;
     if p.npc.is_some() || p.kind == PlayerKind::Npc {
         return Err(Refusal::new("forbidden", "Only captains have identities."));
@@ -873,6 +912,23 @@ fn log(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         .map(|c| find_player(ctx.w, c))
         .collect::<Res<Vec<_>>>()?;
     let citations = crate::chronicle::verify_all(ctx.w, &a.citations)?;
+    let private = a.private.unwrap_or(false);
+    // Engine 1.58: a public line may mention captains and corporations (everyone can read it); a
+    // private line is never read for mentions and tells no one.
+    let res = if private {
+        mention::Resolution::default()
+    } else {
+        mention::resolve(ctx.w, a.mentions.as_deref().filter(|m| !m.is_empty()), &[body.as_str()])?
+    };
+    // A muted transmitter reaches no one: a public line that would tell another captain is
+    // refused, as radio and the Chronicle are; a line that tells no one is still kept.
+    if ctx.player(pid)?.muted_until > ctx.w.tick && res.mentions.targets().iter().any(|t| *t != mention::Target::Captain(pid)) {
+        return Err(Refusal::new(
+            "muted",
+            "Your transmitter is muted: a log line that mentions others tells them, so nothing was stored.",
+        )
+        .hint("Write the line without mentions, or keep it private."));
+    }
     let now = ctx.w.tick;
     let i = ctx.w.identities.get(&pid).expect("documented");
     if i.log.iter().filter(|e| now.saturating_sub(e.tick) < WINDOW_TICKS).count() >= LOG_PER_WINDOW {
@@ -884,8 +940,18 @@ fn log(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     if i.log.len() >= LOG_MAX {
         return Err(Refusal::new("log_full", format!("Your log holds {LOG_MAX} entries.")));
     }
+    let plan = mention::plan(
+        ctx.w,
+        pid,
+        &res,
+        mention::Readers::Everyone,
+        &mention::Mentions::default(),
+        &Default::default(),
+        &[body.as_str()],
+    );
+    // Validated: from here on the write succeeds.
+    let name = ctx.player(pid)?.name.clone();
     let (tick, at_ms, season, epoch) = (ctx.w.tick, ctx.w.now_ms, ctx.w.season.number, ctx.w.archive.epoch);
-    let private = a.private.unwrap_or(false);
     let i = ctx.w.identities.get_mut(&pid).expect("documented");
     let n = i.log.len() as u32 + 1;
     i.log.push(LogEntry {
@@ -899,11 +965,22 @@ fn log(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         private,
         about,
         citations,
+        mentions: res.mentions.clone(),
     });
-    Ok(ctx.finish(
-        format!("Log entry {n} written ({}).", if private { "private" } else { "public" }),
-        json!({"n": n, "private": private}),
-    ))
+    let mut reply = json!({"n": n, "private": private});
+    let mut summary = format!("Log entry {n} written ({})", if private { "private" } else { "public" });
+    if !private {
+        let place = mention::Place::Log { owner: pid, n };
+        mention::send(ctx, pid, &name, &plan, place.clone(), Default::default());
+        mention::commit(ctx, pid, &plan, &place);
+        if let Some(m) = mention::report(ctx.w, &res, &plan) {
+            reply["mentions"] = m;
+        }
+        if let Some(s) = mention::summary(&res, &plan) {
+            summary = format!("{summary}; {s}");
+        }
+    }
+    Ok(ctx.finish(format!("{summary}."), reply))
 }
 
 fn set(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
@@ -1046,6 +1123,13 @@ fn set(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
                     "'{n}' is taken (too close to the existing captain '{}'). Nothing was stored.",
                     other.name
                 ),
+            ));
+        }
+        // Engine 1.58: a call sign may not be a current corporation's name, so mentions resolve.
+        if ctx.w.corps.values().any(|c| crate::player::name_key(&c.name) == key) {
+            return Err(Refusal::new(
+                "name_taken",
+                "A corporation uses that name; choose another call sign. Nothing was stored.",
             ));
         }
         renamed = Some(n.to_string());

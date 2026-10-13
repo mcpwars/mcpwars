@@ -21,6 +21,10 @@
 //!   vote), no closed proposal is dropped, and at every Big Bang and before every fresh start the
 //!   season's whole constitution (articles, removed articles, proposals with their ballots, operator
 //!   notices) moves into the permanent `World.archive` (`history`), which nothing clears.
+//! - Engine 1.58: a captain's add or amend proposal may mention captains and corporations
+//!   (`@Call Sign`, `mentions`); an electorate member it mentions is told on the proposal's own
+//!   notice, whose preview is player text in `quote`. A strike keeps the operator-only original
+//!   (`struck_original`) and also replaces the copies: notice quotes and Chronicle citations.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::engine::{Ctx, Outcome, Refusal, Res};
+use crate::mention::{self, Mentions, Pending, Place};
 use crate::model::*;
 
 /// Longest article or proposal text, in characters (longer is refused whole).
@@ -154,6 +159,9 @@ pub struct ArticleVersion {
     pub yes: usize,
     pub no: usize,
     pub electorate: usize,
+    /// The text before the operator struck it (engine 1.58): operator views only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub struck_original: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -192,6 +200,9 @@ pub struct Article {
     /// Proposed by the operator (engine 1.37); `proposed_by` is then "operator".
     #[serde(default)]
     pub by_operator: bool,
+    /// The text before the operator struck it (engine 1.58): operator views only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub struck_original: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -251,6 +262,12 @@ pub struct Proposal {
     /// Set when the operator struck its text (engine 1.37).
     #[serde(default)]
     pub struck: Option<StrikeNote>,
+    /// Captains and corporations its text mentions (engine 1.58; captains' add and amend only).
+    #[serde(default, skip_serializing_if = "Mentions::is_empty")]
+    pub mentions: Mentions,
+    /// The text before the operator struck it (engine 1.58): operator views only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub struck_original: Option<String>,
 }
 
 impl Proposal {
@@ -344,6 +361,9 @@ pub struct ConstitutionArgs {
     /// vote: true is yes.
     #[serde(default)]
     pub vote: Option<bool>,
+    /// Captains or corporations to notify ("Call Sign" or "corp:Name"); @Name in the text also works.
+    #[serde(default)]
+    pub mentions: Option<Vec<String>>,
 }
 
 // ---------- electorate ----------
@@ -426,7 +446,22 @@ fn find(w: &World, id: u64) -> Option<&Proposal> {
 
 // ---------- commands ----------
 
+/// Structured mentions belong to add and amend proposals only (engine 1.58); inline `@`
+/// elsewhere is plain text, never refused.
+fn mentions_here(a: &ConstitutionArgs) -> Res<()> {
+    let proposes_text = a.action == ConstitutionAction::Propose && matches!(a.kind, Some(ChangeKind::Add | ChangeKind::Amend));
+    if a.mentions.as_ref().is_some_and(|m| !m.is_empty()) && !proposes_text {
+        return Err(Refusal::new(
+            "mentions_not_here",
+            "In the constitution, mentions apply to add and amend proposals only; nothing was stored.",
+        )
+        .hint(crate::social::MENTIONS_HERE));
+    }
+    Ok(())
+}
+
 pub fn constitution(ctx: &mut Ctx, pid: PlayerId, a: &ConstitutionArgs) -> Res<Outcome> {
+    mentions_here(a)?;
     match a.action {
         ConstitutionAction::View => {
             let v = lookup(ctx.w, pid, a)?;
@@ -504,13 +539,19 @@ fn propose(ctx: &mut Ctx, pid: PlayerId, a: &ConstitutionArgs) -> Res<Outcome> {
             "Fewer than two captains have been active recently; a constitution needs at least two.",
         ));
     }
-    // Validated: now change the world.
+    // Engine 1.58: an add or amend proposal may mention captains and corporations (everyone can
+    // read it); an electorate member it mentions is told on the proposal's own notice.
+    let res = match &kind {
+        ProposalKind::Add { text } | ProposalKind::Amend { text, .. } => {
+            mention::resolve(w, a.mentions.as_deref().filter(|m| !m.is_empty()), &[text.as_str()])?
+        }
+        _ => mention::Resolution::default(),
+    };
     let tick = w.tick;
     let at_ms = w.now_ms;
     let season = w.season.number;
     let closes = (tick + r.constitution_vote_ticks.max(1)).min(w.season.ends_tick.max(tick + 1));
-    ctx.w.constitution.next_id += 1;
-    let id = ctx.w.constitution.next_id;
+    let id = w.constitution.next_id + 1;
     let p = Proposal {
         id,
         change: kind,
@@ -534,49 +575,113 @@ fn propose(ctx: &mut Ctx, pid: PlayerId, a: &ConstitutionArgs) -> Res<Outcome> {
         by_operator: false,
         comments: vec![],
         struck: None,
+        mentions: res.mentions.clone(),
+        struck_original: None,
     };
-    open_proposal(ctx, p.clone());
+    let pending = electorate_pending(&p, true);
+    let main = p.text().unwrap_or("").to_string();
+    let plan = mention::plan(
+        w,
+        pid,
+        &res,
+        mention::Readers::Everyone,
+        &Mentions::default(),
+        &pending,
+        &[main.as_str()],
+    );
+    // Validated: now change the world.
+    ctx.w.constitution.next_id = id;
+    publish(ctx, p.clone());
+    let place = Place::Proposal { id };
+    mention::send(ctx, pid, &me.name, &plan, place.clone(), pending);
+    mention::commit(ctx, pid, &plan, &place);
     let idx = ctx.w.constitution.proposals.len() - 1;
     let ratified = settle_if_passed(ctx, idx);
     let summary = if ratified {
-        format!("Proposal #{id} ratified at once.")
+        format!("Proposal #{id} ratified at once")
     } else {
         format!(
-            "Proposal #{id} opened: {}. Your yes vote is counted; it needs {} yes votes by tick {closes}.",
+            "Proposal #{id} opened: {}. Your yes vote is counted; it needs {} yes votes by tick {closes}",
             p.describe(),
             p.threshold()
         )
     };
-    let reply = json!({"proposal": find(ctx.w, id).map(|p| proposal_json(p, Some(pid)))});
+    let summary = match mention::summary(&res, &plan) {
+        Some(m) => format!("{summary}; {m}."),
+        None => format!("{summary}."),
+    };
+    let mut reply = json!({"proposal": find(ctx.w, id).map(|p| proposal_json(ctx.w, p, Some(pid)))});
+    if let Some(m) = mention::report(ctx.w, &res, &plan) {
+        reply["mentions"] = m;
+    }
     Ok(ctx.finish(summary, reply))
 }
 
-/// Store a new proposal, tell its electorate, and make the news.
-fn open_proposal(ctx: &mut Ctx, p: Proposal) {
+/// The notice each electorate member (the proposer aside) gets about a new proposal. A captain's
+/// proposal (`quote_text`, engine 1.58) carries its text as player words in `quote`, located by
+/// `about` so a strike reaches it; the carry vote and the operator's proposals keep their text
+/// inline, as before.
+fn electorate_pending(p: &Proposal, quote_text: bool) -> BTreeMap<PlayerId, Pending> {
     let line = p.describe();
-    let preview = p
-        .text()
-        .map(|t| {
-            if p.by_operator {
-                format!(" Text: {}", clip(t, 200))
-            } else {
-                format!(" Text (untrusted player text): {}", clip(t, 200))
-            }
-        })
-        .unwrap_or_default();
     let by = p.by();
-    for &m in &p.electorate {
-        if m != p.proposer {
-            ctx.notify(
-                m,
-                "constitution",
-                format!(
-                    "Constitution proposal #{} by {by}: {line}. Vote before tick {} with constitution action=vote proposal={} vote=true or false.{preview}",
-                    p.id, p.closes_tick, p.id
-                ),
-            );
+    let (tail, quote, about) = if quote_text {
+        // A repeal has no text: its notice names the article and quotes nothing.
+        match p.text() {
+            Some(t) => (
+                format!(" constitution action=view proposal={} shows its text.", p.id),
+                Some(clip(t, 200)),
+                Some(Place::Proposal { id: p.id }),
+            ),
+            None => (String::new(), None, None),
         }
+    } else {
+        let preview = p
+            .text()
+            .map(|t| {
+                if p.by_operator {
+                    format!(" Text: {}", clip(t, 200))
+                } else {
+                    format!(" Text (untrusted player text): {}", clip(t, 200))
+                }
+            })
+            .unwrap_or_default();
+        (preview, None, None)
+    };
+    p.electorate
+        .iter()
+        .filter(|m| **m != p.proposer)
+        .map(|&m| {
+            let text = format!(
+                "Constitution proposal #{} by {by}: {line}. Vote before tick {} with constitution action=vote proposal={} vote=true or false.{tail}",
+                p.id, p.closes_tick, p.id
+            );
+            (
+                m,
+                Pending {
+                    kind: "constitution",
+                    text,
+                    quote: quote.clone(),
+                    about: about.clone(),
+                    fold: None,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Store a new proposal opened by the server or the operator, tell its electorate (text inline),
+/// and make the news.
+fn open_proposal(ctx: &mut Ctx, p: Proposal) {
+    for (m, pending) in electorate_pending(&p, false) {
+        mention::send_pending(ctx, m, pending);
     }
+    publish(ctx, p);
+}
+
+/// Store a new proposal and make the news.
+fn publish(ctx: &mut Ctx, p: Proposal) {
+    let line = p.describe();
+    let by = p.by();
     let headline = format!("{by} proposed to {line} (constitution proposal #{}).", p.id);
     ctx.news(headline.clone());
     ctx.event(
@@ -644,7 +749,7 @@ fn vote(ctx: &mut Ctx, pid: PlayerId, a: &ConstitutionArgs) -> Res<Outcome> {
             p.closes_tick
         )
     };
-    let reply = json!({"proposal": find(ctx.w, id).map(|p| proposal_json(p, Some(pid)))});
+    let reply = json!({"proposal": find(ctx.w, id).map(|p| proposal_json(ctx.w, p, Some(pid)))});
     Ok(ctx.finish(summary, reply))
 }
 
@@ -674,6 +779,7 @@ fn ratify(ctx: &mut Ctx, idx: usize) {
         yes,
         no,
         electorate: p.electorate.len(),
+        struck_original: None,
     };
     let c = &mut ctx.w.constitution;
     let (status, headline) = match &p.change {
@@ -695,6 +801,7 @@ fn ratify(ctx: &mut Ctx, idx: usize) {
                     amended_tick: None,
                     history: vec![version("add", text)],
                     by_operator: p.by_operator,
+                    struck_original: None,
                 });
                 (
                     ProposalStatus::Ratified,
@@ -849,6 +956,8 @@ fn open_carry(ctx: &mut Ctx) {
         by_operator: false,
         comments: vec![],
         struck: None,
+        mentions: Mentions::default(),
+        struck_original: None,
     };
     open_proposal(ctx, p);
 }
@@ -1000,9 +1109,23 @@ fn remember_removed(c: &mut Constitution, article: Article, tick: Tick, season: 
     c.removed.drain(..excess);
 }
 
+/// Replace struck text, keeping the first original for the operator (engine 1.58). Text that
+/// already reads as struck is left alone, so a second strike keeps the first original.
+fn strike_text(text: &mut String, original: &mut Option<String>) {
+    if text == STRUCK {
+        return;
+    }
+    let old = std::mem::replace(text, STRUCK.into());
+    if original.is_none() {
+        *original = Some(old);
+    }
+}
+
 /// Struck text leaves every list that holds it: `articles` and `removed` (the article and its
 /// versions) and `proposals` (those that wrote it: by history, by article number, or, for articles
-/// from before engine 1.33 without a history, by identical text).
+/// from before engine 1.33 without a history, by identical text). Since engine 1.58 each copy
+/// keeps its original in `struck_original`, which only operator views show. Returns the ids of
+/// the proposals whose text it struck.
 fn scrub_article(
     id: u64,
     made_by: &BTreeSet<u64>,
@@ -1010,32 +1133,38 @@ fn scrub_article(
     articles: &mut [Article],
     removed: &mut [RemovedArticle],
     proposals: &mut [Proposal],
-) {
+) -> BTreeSet<u64> {
     for a in articles
         .iter_mut()
         .chain(removed.iter_mut().map(|r| &mut r.article))
         .filter(|a| a.id == id)
     {
-        a.text = STRUCK.into();
+        strike_text(&mut a.text, &mut a.struck_original);
         for v in &mut a.history {
-            v.text = STRUCK.into();
+            strike_text(&mut v.text, &mut v.struck_original);
         }
     }
+    let mut hit_ids = BTreeSet::new();
     for p in proposals {
         let hit = made_by.contains(&p.id) || p.article() == Some(id);
         match &mut p.change {
-            ProposalKind::Add { text } | ProposalKind::Amend { text, .. } if hit || texts.contains(text.as_str()) => *text = STRUCK.into(),
+            ProposalKind::Add { text } | ProposalKind::Amend { text, .. } if hit || texts.contains(text.as_str()) => {
+                strike_text(text, &mut p.struck_original);
+                hit_ids.insert(p.id);
+            }
             _ => {}
         }
     }
+    hit_ids
 }
 
 /// A struck proposal's text leaves it and every article version it ratified, in `articles` and
-/// `removed`; the proposal keeps its ballots and records the strike.
+/// `removed`; the proposal keeps its ballots and records the strike. Since engine 1.58 each copy
+/// keeps its original in `struck_original`, which only operator views show.
 fn scrub_proposal(id: u64, note: &StrikeNote, articles: &mut [Article], removed: &mut [RemovedArticle], proposals: &mut [Proposal]) {
     for p in proposals.iter_mut().filter(|p| p.id == id) {
         match &mut p.change {
-            ProposalKind::Add { text } | ProposalKind::Amend { text, .. } => *text = STRUCK.into(),
+            ProposalKind::Add { text } | ProposalKind::Amend { text, .. } => strike_text(text, &mut p.struck_original),
             _ => {}
         }
         p.struck = Some(note.clone());
@@ -1045,14 +1174,28 @@ fn scrub_proposal(id: u64, note: &StrikeNote, articles: &mut [Article], removed:
         .chain(removed.iter_mut().map(|r| &mut r.article))
         .flat_map(|a| a.history.iter_mut());
     for v in versions.filter(|v| v.proposal == id) {
-        v.text = STRUCK.into();
+        strike_text(&mut v.text, &mut v.struck_original);
     }
 }
 
+/// Moderation reaches the copies (engine 1.58): notice quotes about the struck proposals and
+/// Chronicle or log citations of them and of the article read as struck.
+fn scrub_constitution_copies(w: &mut World, article: Option<u64>, proposals: &BTreeSet<u64>) -> usize {
+    let mut n = 0;
+    for id in proposals {
+        n += mention::scrub_copies(w, mention::Item::Proposal(*id));
+    }
+    if let Some(id) = article {
+        n += mention::scrub_copies(w, mention::Item::Article(id));
+    }
+    n
+}
+
 /// Operator moderation: remove an article, or cancel a proposal (its text is struck either way).
-/// The text also leaves the permanent record (`World.archive.constitutions`); a proposal keeps its
-/// ballots and the strike's reason. A proposal of a past season (in the permanent record) can be
-/// struck too.
+/// The text also leaves the permanent record (`World.archive.constitutions`) for captains and the
+/// public; since engine 1.58 the operator-only `struck_original` keeps it, and notice quotes and
+/// citation copies are struck too. A proposal keeps its ballots and the strike's reason. A
+/// proposal of a past season (in the permanent record) can be struck too.
 pub fn strike(ctx: &mut Ctx, article: Option<u64>, proposal: Option<u64>, reason: &Option<String>) -> Res<Outcome> {
     let reason = reason.as_deref().map(str::trim).filter(|r| !r.is_empty()).map(String::from);
     let why = reason.as_deref().map(|r| format!(" Reason: {r}")).unwrap_or_default();
@@ -1064,20 +1207,31 @@ pub fn strike(ctx: &mut Ctx, article: Option<u64>, proposal: Option<u64>, reason
                 return strike_past_article(ctx, id, &why);
             };
             let a = c.articles.remove(pos);
-            // Struck text is not kept: moderation removes it from the record too.
+            // Struck text leaves every captain and public view; the operator-only
+            // `struck_original` keeps it (engine 1.58).
             let made_by: BTreeSet<u64> = a.history.iter().map(|v| v.proposal).collect();
             let mut texts: BTreeSet<String> = a.history.iter().map(|v| v.text.clone()).collect();
             texts.insert(a.text.clone());
+            texts.remove(STRUCK);
             let mut a = vec![a];
-            scrub_article(id, &made_by, &texts, &mut a, &mut c.removed, &mut c.proposals);
+            let mut hit = made_by.clone();
+            hit.extend(scrub_article(id, &made_by, &texts, &mut a, &mut c.removed, &mut c.proposals));
             for s in &mut c.archive {
                 scrub_article(id, &made_by, &texts, &mut s.articles, &mut [], &mut []);
             }
             for r in &mut ctx.w.archive.constitutions {
-                scrub_article(id, &made_by, &texts, &mut r.articles, &mut r.removed, &mut r.proposals);
+                hit.extend(scrub_article(
+                    id,
+                    &made_by,
+                    &texts,
+                    &mut r.articles,
+                    &mut r.removed,
+                    &mut r.proposals,
+                ));
             }
             let a = a.pop().expect("one article");
             remember_removed(&mut ctx.w.constitution, a, tick, season, None, "struck");
+            let copies = scrub_constitution_copies(ctx.w, Some(id), &hit);
             let headline = format!("The operator struck article {id} from the constitution.{why}");
             ctx.news(headline.clone());
             ctx.event(
@@ -1088,7 +1242,7 @@ pub fn strike(ctx: &mut Ctx, article: Option<u64>, proposal: Option<u64>, reason
                 headline.clone(),
                 json!({"article": id, "status": "struck"}),
             );
-            Ok(ctx.finish(headline, json!({"article": id})))
+            Ok(ctx.finish(headline, json!({"article": id, "copies_scrubbed": copies})))
         }
         (None, Some(id)) => {
             let live = ctx.w.constitution.proposals.iter().position(|p| p.id == id);
@@ -1110,6 +1264,7 @@ pub fn strike(ctx: &mut Ctx, article: Option<u64>, proposal: Option<u64>, reason
             for r in &mut ctx.w.archive.constitutions {
                 scrub_proposal(id, &note, &mut r.articles, &mut r.removed, &mut r.proposals);
             }
+            let copies = scrub_constitution_copies(ctx.w, None, &BTreeSet::from([id]));
             if let (true, Some(idx)) = (was_open, live) {
                 close(ctx, idx, ProposalStatus::Cancelled);
             }
@@ -1127,7 +1282,7 @@ pub fn strike(ctx: &mut Ctx, article: Option<u64>, proposal: Option<u64>, reason
                 headline.clone(),
                 json!({"proposal": id, "status": "struck"}),
             );
-            Ok(ctx.finish(headline, json!({"proposal": id})))
+            Ok(ctx.finish(headline, json!({"proposal": id, "copies_scrubbed": copies})))
         }
         _ => Err(Refusal::new("invalid_args", "Give exactly one of article or proposal.")),
     }
@@ -1156,13 +1311,22 @@ fn strike_past_article(ctx: &mut Ctx, id: u64, why: &str) -> Res<Outcome> {
         .filter(|t| t != STRUCK)
         .collect();
     let c = &mut ctx.w.constitution;
-    scrub_article(id, &made_by, &texts, &mut [], &mut c.removed, &mut c.proposals);
+    let mut hit = made_by.clone();
+    hit.extend(scrub_article(id, &made_by, &texts, &mut [], &mut c.removed, &mut c.proposals));
     for s in &mut c.archive {
         scrub_article(id, &made_by, &texts, &mut s.articles, &mut [], &mut []);
     }
     for r in &mut ctx.w.archive.constitutions {
-        scrub_article(id, &made_by, &texts, &mut r.articles, &mut r.removed, &mut r.proposals);
+        hit.extend(scrub_article(
+            id,
+            &made_by,
+            &texts,
+            &mut r.articles,
+            &mut r.removed,
+            &mut r.proposals,
+        ));
     }
+    let copies = scrub_constitution_copies(ctx.w, Some(id), &hit);
     let headline = format!("The operator struck the text of past article {id} from the record.{why}");
     ctx.news(headline.clone());
     ctx.event(
@@ -1173,7 +1337,7 @@ fn strike_past_article(ctx: &mut Ctx, id: u64, why: &str) -> Res<Outcome> {
         headline.clone(),
         json!({"article": id, "status": "struck"}),
     );
-    Ok(ctx.finish(headline, json!({"article": id})))
+    Ok(ctx.finish(headline, json!({"article": id, "copies_scrubbed": copies})))
 }
 
 // ---------- the operator takes part (engine 1.37) ----------
@@ -1278,6 +1442,8 @@ pub fn operator_propose(
             })
             .collect(),
         struck: None,
+        mentions: Mentions::default(),
+        struck_original: None,
     };
     let line = p.describe();
     let threshold = p.threshold();
@@ -1294,7 +1460,7 @@ pub fn operator_propose(
         Channel::Public,
         format!("OPERATOR proposes to {line} (constitution proposal #{id}); captains vote with the constitution tool."),
     );
-    let reply = json!({"proposal": find(ctx.w, id).map(|p| proposal_json(p, None)), "announcement": ann});
+    let reply = json!({"proposal": find(ctx.w, id).map(|p| proposal_json(ctx.w, p, None)), "announcement": ann});
     Ok(ctx.finish(
         format!("Operator proposal #{id} opened: {line}. It needs {threshold} yes votes of {voters} by tick {closes}."),
         reply,
@@ -1432,12 +1598,13 @@ fn find_any(w: &World, id: u64) -> Option<&Proposal> {
 /// (current, repealed or struck), or that proposal (this season's or a past one) with its tally,
 /// the operator's comments and your vote. Without either, the overview (`view`).
 pub fn lookup(w: &World, pid: PlayerId, a: &ConstitutionArgs) -> Res<Value> {
+    mentions_here(a)?;
     let c = &w.constitution;
     if let Some(id) = a.proposal {
         let p = find_any(w, id).ok_or_else(|| {
             Refusal::new("unknown_proposal", format!("No proposal #{id} on record.")).hint("constitution action=view lists them.")
         })?;
-        return Ok(json!({"proposal": proposal_json(p, Some(pid))}));
+        return Ok(json!({"proposal": proposal_json(w, p, Some(pid))}));
     }
     if let Some(id) = a.article {
         if let Some(art) = c.articles.iter().find(|x| x.id == id) {
@@ -1456,7 +1623,7 @@ pub fn lookup(w: &World, pid: PlayerId, a: &ConstitutionArgs) -> Res<Value> {
 
 /// A proposal as a captain sees it (`viewer`), or as the public sees it (`None`): tallies only,
 /// never who voted which way. The operator's comments are shown to everyone.
-fn proposal_json(p: &Proposal, viewer: Option<PlayerId>) -> Value {
+fn proposal_json(w: &World, p: &Proposal, viewer: Option<PlayerId>) -> Value {
     let (yes, no) = p.tally();
     let public = viewer.is_none();
     let text = p.text().map(|t| {
@@ -1482,6 +1649,14 @@ fn proposal_json(p: &Proposal, viewer: Option<PlayerId>) -> Value {
     }
     if let Some(s) = &p.struck {
         v["struck"] = json!({"tick": s.tick, "reason": s.reason.as_deref().map(|r| operator_shown(r, public))});
+    } else if p.struck_original.is_none() {
+        // A struck proposal's mentions are hidden with its text (struck directly, or with the
+        // article it wrote, which strikes the text but leaves `struck` unset); the public never
+        // sees removed captains.
+        let names = if public { p.mentions.public_names(w) } else { p.mentions.names(w) };
+        if !names.is_empty() {
+            v["mentions"] = json!(names);
+        }
     }
     if let Some(pid) = viewer {
         v["your_vote"] = json!(p.votes.get(&pid));
@@ -1502,7 +1677,7 @@ pub fn view(w: &World, pid: PlayerId) -> Res<Value> {
         .proposals
         .iter()
         .filter(|p| p.status == ProposalStatus::Open)
-        .map(|p| proposal_json(p, Some(pid)))
+        .map(|p| proposal_json(w, p, Some(pid)))
         .collect();
     let recent: Vec<Value> = c
         .proposals
@@ -1510,7 +1685,7 @@ pub fn view(w: &World, pid: PlayerId) -> Res<Value> {
         .rev()
         .filter(|p| p.status != ProposalStatus::Open)
         .take(10)
-        .map(|p| proposal_json(p, Some(pid)))
+        .map(|p| proposal_json(w, p, Some(pid)))
         .collect();
     // The same checks `propose` makes, so the view never says yes to a proposal it would refuse.
     let next_tick = cooldown(w, pid).map(|(_, next)| next).filter(|&next| w.tick < next);
@@ -1572,9 +1747,9 @@ pub fn public_view(w: &World) -> Value {
     let c = &w.constitution;
     json!({
         "articles": c.articles.iter().map(|a| article_json(a, true, true)).collect::<Vec<_>>(),
-        "open_proposals": c.proposals.iter().filter(|p| p.status == ProposalStatus::Open).map(|p| proposal_json(p, None)).collect::<Vec<_>>(),
+        "open_proposals": c.proposals.iter().filter(|p| p.status == ProposalStatus::Open).map(|p| proposal_json(w, p, None)).collect::<Vec<_>>(),
         "recent_proposals": c.proposals.iter().rev().filter(|p| p.status != ProposalStatus::Open).take(20)
-            .map(|p| { let mut v = proposal_json(p, None); v["closed_tick"] = json!(p.closed_tick); v })
+            .map(|p| { let mut v = proposal_json(w, p, None); v["closed_tick"] = json!(p.closed_tick); v })
             .collect::<Vec<_>>(),
         "removed": c.removed.iter().rev().take(20).map(|r| removed_json(r, true)).collect::<Vec<_>>(),
         "archive": c.archive.iter().rev().map(|a| archive_json(a, true)).collect::<Vec<_>>(),
@@ -1586,8 +1761,14 @@ pub fn public_view(w: &World) -> Value {
 /// every ballot ever cast (in order, with times and changed votes), who never voted, the
 /// operator's comments and any strike.
 fn sysop_proposal_json(w: &World, p: &Proposal) -> Value {
-    let mut v = proposal_json(p, None);
+    let mut v = proposal_json(w, p, None);
     v["text"] = json!(p.text());
+    if !p.mentions.is_empty() {
+        v["mentions"] = json!(p.mentions.names(w));
+    }
+    if let Some(o) = &p.struck_original {
+        v["struck_original"] = json!(o);
+    }
     v["closed_tick"] = json!(p.closed_tick);
     v["season"] = json!(p.season);
     v["electorate_ids"] = json!(p.electorate);

@@ -70,7 +70,17 @@ try {
       }
       await route.fulfill({ status: failed ? 503 : 200, json: failed ? { error: 'Temporary test error' } : json });
     });
+    // The retirement preview (above the list, in the same scroller), fetched with ?preview=1.
+    const candidate = (id) => ({ id, name: `Lang ${id}`, creator_name: 'Test Captain', share: 'captains', adopters: 0,
+      tagged: 0, idle_days: 40, would: 'retire' });
+    let candidates = [1, 2, 3, 4, 5].map(candidate);
+    await page.route('**/api/sysop/languages?*', route => route.fulfill({ json: { ...structuredClone({ languages }),
+      preview: { source: 'rules', stale_days: 14, retire_days: 30, grace_days: 30,
+        counts: { active: 1, stale: 0, retire: candidates.length }, candidates: structuredClone(candidates) } } }));
     await page.goto(`${url}/sysop#languages`);
+    // WebKit (Safari, the iPad and iPhone console) has no CSS scroll anchoring; turn it off here so
+    // Chromium checks the anchoring the console does by hand.
+    await page.addStyleTag({ content: '* { overflow-anchor: none !important; }' });
     await page.locator('#gate-key').fill(key);
     await page.locator('#gate-go').click();
     await page.locator('#lg-list details').first().waitFor();
@@ -134,8 +144,27 @@ try {
     await delay(100);
     assert.ok((await page.locator('#lg-list').textContent()).includes('2 adopters'), 'Stale reply overwrote a newer refresh');
     assert.ok(await oldVersion().evaluate(el => el.open));
+
+    // The preview: selecting candidates keeps focus and the reading anchor, and a preview that
+    // shrinks above the list (a retired candidate leaves it) does not move the version being read.
+    const preview = () => page.locator('#lg-pv-form').evaluate(f => f.requestSubmit());
+    await preview();
+    await until(async () => await page.locator('#lg-pv-out input[type=checkbox]').count() === 5, 'Preview candidates did not appear');
+    const pvAnchor = (await oldVersion().boundingBox()).y;
+    const box2 = await page.locator('#lg-pv-out input[aria-label="Select #2"]').elementHandle();
+    await box2.evaluate(el => { el.focus({ preventScroll: true }); el.click(); });
+    assert.ok(await box2.evaluate(el => el.isConnected && el.checked && document.activeElement === el), 'Toggling a candidate must keep its checkbox and focus');
+    assert.equal(await page.locator('#lg-pv-out button.danger').textContent(), 'Retire selected (1)');
+    await page.locator('#lg-pv-out input[aria-label="Select #4"]').evaluate(el => { el.focus({ preventScroll: true }); el.click(); });
+    assert.equal(await page.locator('#lg-pv-out button.danger').textContent(), 'Retire selected (2)');
+    assert.ok(Math.abs((await oldVersion().boundingBox()).y - pvAnchor) < 2, 'Selecting candidates must not move the reading anchor');
+    candidates = [candidate(5)];
+    await preview();
+    await until(async () => await page.locator('#lg-pv-out input[type=checkbox]').count() === 1, 'The shrunken preview did not appear');
+    assert.ok(Math.abs((await oldVersion().boundingBox()).y - pvAnchor) < 2, 'A shrinking preview must not move the reading anchor');
+    assert.ok(await oldVersion().evaluate(el => el.open), 'A preview refresh must leave the language list alone');
     assert.deepEqual(errors, [], 'Console must not throw during refresh');
-    console.log(`PASS ${viewport.width}x${viewport.height}: polling, changed data, expansion, focus, scroll anchor, errors, stale replies`);
+    console.log(`PASS ${viewport.width}x${viewport.height}: polling, changed data, expansion, focus, scroll anchor, errors, stale replies, retirement preview`);
     await context.close();
   }
 } finally {

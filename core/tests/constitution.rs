@@ -79,6 +79,7 @@ impl Sim {
                 article,
                 proposal: None,
                 vote: None,
+                mentions: None,
             },
         )?;
         Ok(out.reply["proposal"]["id"].as_u64().unwrap())
@@ -93,6 +94,7 @@ impl Sim {
                 article: None,
                 proposal: Some(proposal),
                 vote: Some(yes),
+                mentions: None,
             },
         )
     }
@@ -252,6 +254,8 @@ fn thresholds_are_a_majority_and_two_thirds_for_carry() {
         by_operator: false,
         comments: vec![],
         struck: None,
+        mentions: Default::default(),
+        struck_original: None,
     };
     let add = || ProposalKind::Add { text: "t".into() };
     for (n, majority, carry) in [(2, 2, 2), (3, 2, 2), (4, 3, 3), (5, 3, 4), (6, 4, 4), (9, 5, 6), (10, 6, 7)] {
@@ -283,7 +287,8 @@ fn limits_cooldown_max_open_max_articles_and_length() {
                 text: Some("x".into()),
                 article: None,
                 proposal: None,
-                vote: None
+                vote: None,
+                mentions: None,
             }
         )
         .unwrap_err()
@@ -505,6 +510,7 @@ fn views_show_tallies_and_the_public_never_sees_votes() {
                 article: None,
                 proposal: None,
                 vote: None,
+                mentions: None,
             },
         )
         .unwrap();
@@ -522,6 +528,7 @@ fn view_args(article: Option<u64>, proposal: Option<u64>) -> ConstitutionArgs {
         article,
         proposal,
         vote: None,
+        mentions: None,
     }
 }
 
@@ -595,19 +602,104 @@ fn each_season_is_archived_whether_or_not_it_carried() {
     s.replays();
 }
 
+/// The JSON of `v` with every operator-only original (`struck_original`, `struck_quote`) removed.
+fn without_originals(v: &serde_json::Value) -> String {
+    fn strip(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => {
+                m.remove("struck_original");
+                m.remove("struck_quote");
+                m.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut v = v.clone();
+    strip(&mut v);
+    v.to_string()
+}
+
+/// A complete identity, so the captain may write in the Chronicle.
+fn document(s: &mut Sim, pid: PlayerId) {
+    let a = af_core::identity::Args {
+        action: af_core::identity::Action::Set,
+        age: Some(40),
+        pronouns: Some("she/her".into()),
+        homeworld: Some("Lowmoor".into()),
+        bio: Some("A pilot.".into()),
+        backstory: Some("## Family\nNone.".into()),
+        ..Default::default()
+    };
+    s.run(Actor::Player(pid), Command::Identity(Box::new(a))).unwrap();
+}
+
 #[test]
 fn struck_text_leaves_the_record_too() {
-    let (mut s, a, b, _c) = three();
-    let id = s.propose(a, ChangeKind::Add, None, "Something the operator must remove.").unwrap();
+    let (mut s, a, b, c) = three();
+    let orig = "Something the operator must remove.";
+    let id = s.propose(a, ChangeKind::Add, None, orig).unwrap();
+    // A Chronicle page cites the proposal, keeping a copy of it, before the strike.
+    document(&mut s, b);
+    s.run(
+        Actor::Player(b),
+        Command::Chronicle(
+            serde_json::from_value(json!({"action": "write", "kind": "event", "title": "The vote",
+                "body": "A proposal was made.", "citations": [{"record": "proposal", "id": id}]}))
+            .unwrap(),
+        ),
+    )
+    .unwrap();
+    assert!(s.w.chronicle.pages[&1].current().citations[0].on_record.contains("must remove"));
     s.vote(b, id, true).unwrap();
     // Striking the proposal scrubs the version it ratified; the article stays until struck.
+    let out = s
+        .admin(AdminArgs::ConstitutionStrike {
+            article: None,
+            proposal: Some(id),
+            reason: None,
+        })
+        .unwrap();
+    assert!(out.reply["copies_scrubbed"].as_u64().unwrap() >= 2, "{}", out.reply);
+    let v0 = &s.w.constitution.articles[0].history[0];
+    assert_eq!(
+        (v0.text.as_str(), v0.struck_original.as_deref()),
+        ("[struck by the operator]", Some(orig))
+    );
+    assert_eq!(s.proposal(id).struck_original.as_deref(), Some(orig));
+    let n = s.w.players[&c].inbox.iter().find(|n| n.kind == "constitution").unwrap();
+    assert_eq!(
+        (n.quote.as_deref(), n.struck_quote.as_deref()),
+        (Some("[struck by the operator]"), Some(orig))
+    );
+    let cite = &s.w.chronicle.pages[&1].current().citations[0];
+    assert_eq!(cite.on_record, "[struck by the operator]");
+    assert!(cite.struck_original.as_deref().unwrap().contains("must remove"));
+    // The operator sees the original, for the proposal and the version it ratified.
+    let sv = af_core::constitution::sysop_lookup(&s.w, Some(id), None, None).unwrap();
+    assert_eq!(sv["struck_original"], json!(orig));
+    assert_eq!(sv["text"], json!("[struck by the operator]"));
+    let sv = af_core::constitution::sysop_lookup(&s.w, None, Some(1), None).unwrap();
+    assert_eq!(sv["records"][0]["article"]["history"][0]["struck_original"], json!(orig));
+    assert!(af_core::constitution::sysop_view(&s.w).to_string().contains("must remove"));
+    // A second strike keeps the first original.
     s.admin(AdminArgs::ConstitutionStrike {
         article: None,
         proposal: Some(id),
-        reason: None,
+        reason: Some("again".into()),
     })
     .unwrap();
-    assert_eq!(s.w.constitution.articles[0].history[0].text, "[struck by the operator]");
+    assert_eq!(s.proposal(id).struck_original.as_deref(), Some(orig));
+    assert_eq!(
+        s.w.players[&c]
+            .inbox
+            .iter()
+            .find(|n| n.kind == "constitution")
+            .unwrap()
+            .struck_quote
+            .as_deref(),
+        Some(orig)
+    );
     s.admin(AdminArgs::ConstitutionStrike {
         article: Some(1),
         proposal: None,
@@ -616,10 +708,38 @@ fn struck_text_leaves_the_record_too() {
     .unwrap();
     let r = &s.w.constitution.removed[0];
     assert_eq!(
-        (r.how.as_str(), r.proposal, r.article.text.as_str()),
-        ("struck", None, "[struck by the operator]")
+        (
+            r.how.as_str(),
+            r.proposal,
+            r.article.text.as_str(),
+            r.article.struck_original.as_deref()
+        ),
+        ("struck", None, "[struck by the operator]", Some(orig))
     );
-    assert!(!serde_json::to_string(&s.w.constitution).unwrap().contains("must remove"));
+    // Every captain and public view reads as struck: the proposal, the article and its version,
+    // the electorate's notice and the Chronicle's copy.
+    let inbox_args = af_core::query::InboxArgs {
+        include_read: true,
+        ..Default::default()
+    };
+    let views = [
+        af_core::constitution::public_view(&s.w),
+        af_core::constitution::lookup(&s.w, c, &view_args(None, Some(id))).unwrap(),
+        af_core::constitution::lookup(&s.w, c, &view_args(Some(1), None)).unwrap(),
+        af_core::constitution::view(&s.w, c).unwrap(),
+        af_core::query::briefing(&s.w, c).unwrap(),
+        af_core::query::inbox(&s.w, c, &inbox_args).unwrap().0,
+        af_core::chronicle::read(&s.w, c, &serde_json::from_value(json!({"action": "read", "page": 1})).unwrap()).unwrap(),
+        af_core::chronicle::public_page(&s.w, 1).unwrap(),
+    ];
+    for v in &views {
+        let t = v.to_string();
+        assert!(!t.contains("must remove") && !t.contains("struck_original"), "{t}");
+    }
+    // The text stays only in the operator-only originals.
+    let raw = serde_json::to_value(&s.w.constitution).unwrap();
+    assert!(raw.to_string().contains("must remove"));
+    assert!(!without_originals(&raw).contains("must remove"));
     // Striking an article also blanks the proposals that wrote it, so no public list keeps the text.
     let id = s.propose(b, ChangeKind::Add, None, "Buy my ore at double price or else.").unwrap();
     s.vote(a, id, true).unwrap();
@@ -630,9 +750,40 @@ fn struck_text_leaves_the_record_too() {
         reason: None,
     })
     .unwrap();
-    assert!(!serde_json::to_string(&s.w.constitution).unwrap().contains("double price"));
+    assert_eq!(
+        s.proposal(id).struck_original.as_deref(),
+        Some("Buy my ore at double price or else.")
+    );
+    let n = s.w.players[&c].inbox.iter().rev().find(|n| n.kind == "constitution").unwrap();
+    assert_eq!(
+        n.quote.as_deref(),
+        Some("[struck by the operator]"),
+        "the article strike reaches the notice"
+    );
+    assert!(!without_originals(&serde_json::to_value(&s.w.constitution).unwrap()).contains("double price"));
     assert!(!af_core::constitution::public_view(&s.w).to_string().contains("double price"));
+    assert!(
+        !af_core::query::inbox(&s.w, c, &inbox_args)
+            .unwrap()
+            .0
+            .to_string()
+            .contains("double price")
+    );
     s.replays();
+}
+
+#[test]
+fn records_from_before_engine_1_58_render_unchanged() {
+    let (mut s, a, b, _c) = three();
+    let id = s.propose(a, ChangeKind::Add, None, "Plain words.").unwrap();
+    s.vote(b, id, true).unwrap();
+    // No mentions and no strike: none of the 1.58 keys is written, so older bytes stay the same.
+    let raw = serde_json::to_string(&s.w.constitution).unwrap();
+    assert!(!raw.contains("struck_original") && !raw.contains("mentions"), "{raw}");
+    let sv = af_core::constitution::sysop_lookup(&s.w, Some(id), None, None).unwrap();
+    assert!(sv.get("struck_original").is_none() && sv.get("mentions").is_none());
+    let back: af_core::constitution::Constitution = serde_json::from_str(&raw).unwrap();
+    assert_eq!(serde_json::to_string(&back).unwrap(), raw);
 }
 
 #[test]
@@ -822,7 +973,12 @@ fn a_fresh_start_archives_before_wiping_and_the_record_survives() {
         reason: None,
     })
     .unwrap();
-    assert!(!serde_json::to_string(&s.w.archive).unwrap().contains("Article one."));
+    // The text leaves every record but the operator-only originals.
+    let raw = serde_json::to_value(&s.w.archive).unwrap();
+    assert!(raw.to_string().contains("Article one."));
+    assert!(!without_originals(&raw).contains("Article one."));
+    let rec = af_core::constitution::record_json(&s.w, &s.w.archive.constitutions[0]).to_string();
+    assert!(rec.contains("struck_original"), "{rec}");
     assert_eq!(
         s.admin(AdminArgs::ConstitutionStrike {
             article: Some(999),

@@ -24,7 +24,16 @@ pub fn radio_text(m: &RadioMsg) -> serde_json::Value {
     }
 }
 
-pub fn push_radio(ctx: &mut Ctx, from: PlayerId, from_name: String, channel: Channel, text: String) -> u64 {
+/// Store a radio message. `mentions` and `language` are empty for server messages.
+pub fn push_radio(
+    ctx: &mut Ctx,
+    from: PlayerId,
+    from_name: String,
+    channel: Channel,
+    text: String,
+    mentions: crate::mention::Mentions,
+    language: Option<crate::language::LangTag>,
+) -> u64 {
     let id = ctx.w.next_msg;
     ctx.w.next_msg += 1;
     ctx.w.radio.push(RadioMsg {
@@ -35,16 +44,23 @@ pub fn push_radio(ctx: &mut Ctx, from: PlayerId, from_name: String, channel: Cha
         from_name,
         channel,
         text,
+        mentions,
+        language,
     });
     id
 }
 
 /// Messages sent by the server itself (player id 0).
 pub fn system_radio(ctx: &mut Ctx, channel: Channel, text: String) {
-    push_radio(ctx, 0, "Federation Relay".into(), channel, text);
+    push_radio(ctx, 0, "Federation Relay".into(), channel, text, Default::default(), None);
 }
 
+/// The hint every wrong-surface mention refusal carries.
+pub const MENTIONS_HERE: &str =
+    "Mentions notify on public and corp radio, Chronicle pages and talk, public log lines and constitution proposals.";
+
 pub fn radio(ctx: &mut Ctx, pid: PlayerId, a: &RadioArgs) -> Res<Outcome> {
+    use crate::mention::{self, Readers};
     let me = ctx.player(pid)?.clone();
     if me.muted_until > ctx.w.tick {
         return Err(Refusal::new(
@@ -87,7 +103,55 @@ pub fn radio(ctx: &mut Ctx, pid: PlayerId, a: &RadioArgs) -> Res<Outcome> {
             Channel::Private(to)
         }
     };
-    let id = push_radio(ctx, pid, me.name.clone(), channel.clone(), text.clone());
+    // Engine 1.58: mentions (public and corp radio only) and the language tag, all checked
+    // before anything changes.
+    let structured = a.mentions.as_deref().filter(|m| !m.is_empty());
+    let readers = match &channel {
+        Channel::Public => Readers::Everyone,
+        Channel::Corp(c) => Readers::CorpMembers(*c),
+        Channel::Private(_) => {
+            if structured.is_some() {
+                return Err(
+                    Refusal::new("mentions_not_here", "Private radio tells no one else: mentions do not apply.").hint(MENTIONS_HERE),
+                );
+            }
+            Readers::Nobody
+        }
+    };
+    let res = if readers == Readers::Nobody {
+        mention::Resolution::default()
+    } else {
+        mention::resolve(ctx.w, structured, &[text.as_str()])?
+    };
+    if a.language_version.is_some() && a.language.is_none() {
+        return Err(Refusal::new("invalid_args", "language_version needs language."));
+    }
+    let tag = match &a.language {
+        Some(r) => Some(crate::language::check_tag(ctx.w, pid, r, a.language_version)?),
+        None => None,
+    };
+    let plan = mention::plan(
+        ctx.w,
+        pid,
+        &res,
+        readers,
+        &mention::Mentions::default(),
+        &Default::default(),
+        &[text.as_str()],
+    );
+    // Validated: from here on the write succeeds.
+    if tag.is_some() {
+        crate::language::assign_ids(ctx.w);
+    }
+    let id = push_radio(
+        ctx,
+        pid,
+        me.name.clone(),
+        channel.clone(),
+        text.clone(),
+        res.mentions.clone(),
+        tag.as_ref().map(|(_, t)| *t),
+    );
     match &channel {
         Channel::Public => {
             ctx.event(
@@ -122,7 +186,29 @@ pub fn radio(ctx: &mut Ctx, pid: PlayerId, a: &RadioArgs) -> Res<Outcome> {
             );
         }
     }
-    Ok(ctx.finish("Message transmitted.", json!({"message_id": id})))
+    let mut reply = json!({"message_id": id});
+    if let Some((key, t)) = &tag {
+        crate::language::count_tag(ctx.w, key);
+        let name = ctx.w.languages.get(key).map(|l| l.name.clone()).unwrap_or_default();
+        reply["language"] = json!({"id": t.id, "name": name, "version": t.version});
+    }
+    let mut summary = "Message transmitted.".to_string();
+    if readers != Readers::Nobody {
+        let corp = match channel {
+            Channel::Corp(c) => Some(c),
+            _ => None,
+        };
+        let place = mention::Place::Radio { id, corp };
+        mention::send(ctx, pid, &me.name, &plan, place.clone(), Default::default());
+        mention::commit(ctx, pid, &plan, &place);
+        if let Some(m) = mention::report(ctx.w, &res, &plan) {
+            reply["mentions"] = m;
+        }
+        if let Some(s) = mention::summary(&res, &plan) {
+            summary = format!("Message transmitted; {s}.");
+        }
+    }
+    Ok(ctx.finish(summary, reply))
 }
 
 pub fn bounty(ctx: &mut Ctx, pid: PlayerId, a: &BountyArgs) -> Res<Outcome> {

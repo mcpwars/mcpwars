@@ -414,6 +414,129 @@ pub struct Notice {
     pub kind: String,
     pub text: String,
     pub read: bool,
+    /// Player-written words carried by the notice (an excerpt, a title, a language name): shown
+    /// only as untrusted player text (engine 1.58).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    /// The item the notice is about (engine 1.58); moderation replaces `quote` through it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<crate::mention::Place>,
+    /// Set when the notice tells the captain it (or its corporation) was mentioned (engine 1.58).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention: Option<crate::mention::MentionRef>,
+    /// Set on a notice that later events of the same key supersede while unread (engine 1.58).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<Fold>,
+    /// The notice that replaced this one (engine 1.58); set when a fold supersedes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<u64>,
+    /// The original of `quote` after moderation replaced it (engine 1.58). Operator views only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub struck_quote: Option<String>,
+}
+
+/// A range of events of one key that a single unread notice stands for (engine 1.58). A later
+/// event of the same key supersedes the unread notice with a new one carrying the merged range.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum Fold {
+    Language {
+        language: u64,
+        from_version: u32,
+        to_version: u32,
+        by: Vec<PlayerId>,
+    },
+    PageRevised {
+        page: u64,
+        from_revision: u32,
+        to_revision: u32,
+        by: Vec<PlayerId>,
+    },
+    Talk {
+        page: u64,
+        from_comment: u64,
+        to_comment: u64,
+        comments: u32,
+        by: Vec<PlayerId>,
+    },
+}
+
+impl Fold {
+    /// What the fold is about: events with equal keys merge.
+    pub fn key(&self) -> (u8, u64) {
+        match self {
+            Fold::Language { language, .. } => (0, *language),
+            Fold::PageRevised { page, .. } => (1, *page),
+            Fold::Talk { page, .. } => (2, *page),
+        }
+    }
+
+    pub fn by(&self) -> &[PlayerId] {
+        match self {
+            Fold::Language { by, .. } | Fold::PageRevised { by, .. } | Fold::Talk { by, .. } => by,
+        }
+    }
+
+    /// Merge a newer event of the same key: the start is kept, the end moves, counts add up and
+    /// new authors join in order. A newer fold of another key leaves this one unchanged.
+    pub fn merge(&mut self, newer: &Fold) {
+        fn join(by: &mut Vec<PlayerId>, more: &[PlayerId]) {
+            for p in more {
+                if !by.contains(p) {
+                    by.push(*p);
+                }
+            }
+        }
+        match (self, newer) {
+            (
+                Fold::Language {
+                    language, to_version, by, ..
+                },
+                Fold::Language {
+                    language: l2,
+                    to_version: t2,
+                    by: b2,
+                    ..
+                },
+            ) if language == l2 => {
+                *to_version = *t2;
+                join(by, b2);
+            }
+            (
+                Fold::PageRevised { page, to_revision, by, .. },
+                Fold::PageRevised {
+                    page: p2,
+                    to_revision: t2,
+                    by: b2,
+                    ..
+                },
+            ) if page == p2 => {
+                *to_revision = *t2;
+                join(by, b2);
+            }
+            (
+                Fold::Talk {
+                    page,
+                    to_comment,
+                    comments,
+                    by,
+                    ..
+                },
+                Fold::Talk {
+                    page: p2,
+                    to_comment: t2,
+                    comments: c2,
+                    by: b2,
+                    ..
+                },
+            ) if page == p2 => {
+                *to_comment = *t2;
+                *comments += *c2;
+                join(by, b2);
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -800,6 +923,12 @@ pub struct RadioMsg {
     pub from_name: String,
     pub channel: Channel,
     pub text: String,
+    /// Captains and corporations the message mentions (engine 1.58; public and corp radio only).
+    #[serde(default, skip_serializing_if = "crate::mention::Mentions::is_empty")]
+    pub mentions: crate::mention::Mentions,
+    /// The language the sender says the message uses (engine 1.58).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<crate::language::LangTag>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -896,6 +1025,13 @@ pub struct World {
     /// cleared, not by a Big Bang nor a fresh start.
     #[serde(default)]
     pub improve: crate::improve::Board,
+    /// Mentions (engine 1.58): mutes, the notice cap window, the operator's mention graph and the
+    /// public index. Never cleared, not by a Big Bang, a fresh start or a Chronicle clear.
+    #[serde(default)]
+    pub mentions: crate::mention::State,
+    /// The next permanent language id (engine 1.58; ids start at 1).
+    #[serde(default)]
+    pub next_language: u64,
     // ---- diplomacy and the public registry ----
     #[serde(default)]
     pub treaties: BTreeMap<u64, Treaty>,

@@ -320,6 +320,7 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/spectator/state", get(spec_state))
         .route("/api/spectator/events", get(spec_events))
         .route("/api/spectator/player", get(spec_player))
+        .route("/api/spectator/corp", get(spec_corp))
         .route("/api/admin/{action}", post(admin))
         .route("/sysop", get(|| async { Html(SYSOP_HTML) }))
         .route(
@@ -351,6 +352,7 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/sysop/rules", get(sysop_rules))
         .route("/api/sysop/constitution", get(sysop_constitution))
         .route("/api/sysop/languages", get(sysop_languages))
+        .route("/api/sysop/mentions", get(sysop_mentions))
         .route("/api/sysop/identities", get(sysop_identities))
         .route("/api/sysop/chronicle", get(sysop_chronicle))
         .route("/api/sysop/chronicle/page", get(sysop_chronicle_page))
@@ -942,6 +944,19 @@ async fn spec_player(State(s): State<AppState>, Query(q): Query<KeyQ>, h: Header
     }
 }
 
+/// A corporation's public profile (by name): CEO, members, government summary and the public
+/// items that name it. No server cache: it reads a bounded index.
+async fn spec_corp(State(s): State<AppState>, Query(q): Query<KeyQ>, h: HeaderMap) -> Response {
+    if !spectator_ok(&s, &q, &h) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let name = q.name.clone().unwrap_or_default();
+    match s.game.read(move |w| af_core::public::corp(w, &name)).await {
+        Some(v) => ([(header::CACHE_CONTROL, "public, max-age=60")], Json(v)).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 async fn spec_events(State(s): State<AppState>, Query(q): Query<KeyQ>, h: HeaderMap) -> Response {
     if !spectator_ok(&s, &q, &h) {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -1040,6 +1055,54 @@ async fn admin_recipient(game: &Game, value: Option<&Value>) -> Result<Option<u3
     found
         .map(Some)
         .ok_or_else(|| af_core::Refusal::new("unknown_player", "player did not resolve. Nothing was sent or changed."))
+}
+
+/// A corporation named in an operator request: a numeric id (kept as given, so a corporation a
+/// fresh start wiped still filters history) or a name matched by `player::name_key`, lowest id.
+pub async fn admin_corp(game: &Game, value: &Value) -> Result<u32, af_core::Refusal> {
+    let bad = || af_core::Refusal::new("invalid_args", "corp must be a corporation name or a numeric id.");
+    let query = match value {
+        Value::Number(n) => return n.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(bad),
+        Value::String(s) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => return Err(bad()),
+    };
+    if query.chars().all(|c| c.is_ascii_digit()) {
+        return query.parse::<u32>().map_err(|_| bad());
+    }
+    let key = af_core::player::name_key(&query);
+    game.read(move |w| {
+        w.corps
+            .values()
+            .filter(|c| af_core::player::name_key(&c.name) == key)
+            .map(|c| c.id)
+            .min()
+    })
+    .await
+    .ok_or_else(|| af_core::Refusal::new("unknown_corp", "No corporation with that id or name."))
+}
+
+/// The body of the `language` admin action as the journaled `language::AdminArgs`: `decision`
+/// (retire or unretire), `ids` (a list, or one id; numbers may be strings) and an optional `reason`.
+fn language_admin_args(b: &Value) -> Result<af_core::language::AdminArgs, af_core::Refusal> {
+    use af_core::language::{AdminArgs as A, Decision};
+    let bad = |m: &str| af_core::Refusal::new("invalid_args", format!("{m} Nothing was changed."));
+    let decision: Decision = serde_json::from_value(b["decision"].clone()).map_err(|_| bad("decision is required: retire or unretire."))?;
+    let one = |v: &Value| {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().trim_start_matches('#').parse().ok()))
+    };
+    let ids = match &b["ids"] {
+        Value::Array(a) => a.iter().map(one).collect::<Option<Vec<u64>>>(),
+        Value::Null => None,
+        v => one(v).map(|id| vec![id]),
+    }
+    .ok_or_else(|| bad("ids must be a list of language ids."))?;
+    let reason = match &b["reason"] {
+        Value::Null => None,
+        Value::String(s) => Some(s.clone()),
+        _ => return Err(bad("reason must be text.")),
+    };
+    Ok(A { decision, ids, reason })
 }
 
 /// The body of the `improve` admin action as the journaled `improve::AdminArgs`: `decision` names
@@ -1622,6 +1685,15 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
             )
             .await
             .map(|o| json!({"summary": o.summary, "id": o.reply["id"], "status": o.reply["status"]})),
+        "language" => {
+            let args = match language_admin_args(&b) {
+                Ok(a) => a,
+                Err(r) => return Some(Err(r)),
+            };
+            game.exec(Actor::System, Command::Admin(AdminArgs::Language(args)))
+                .await
+                .map(|o| json!({"summary": o.summary, "result": o.reply}))
+        }
         "improve" => {
             let args = match improve_admin_args(game, &b).await {
                 Ok(a) => a,
@@ -1877,9 +1949,17 @@ pub async fn sysop_player_view(game: &Game, name: String) -> Option<Value> {
             p.inbox
                 .iter()
                 .rev()
-                .map(|n| json!({"id": n.id, "tick": n.tick, "at_ms": n.at_ms, "kind": n.kind, "text": n.text, "read": n.read}))
+                // Every stored field: quote, about, mention, fold, superseded_by and the
+                // operator-only struck_quote appear when set (engine 1.58).
+                .map(|n| serde_json::to_value(n).unwrap_or(Value::Null))
                 .collect::<Vec<_>>()
         );
+        // Whom this captain muted with the mentions tool. Operator only: never tell captains.
+        let mutes = w.mentions.mutes.get(&p.id);
+        st["mention_mutes"] = json!({
+            "captains": mutes.map(|m| m.captains.iter().map(|c| af_core::mention::captain_name(w, *c)).collect::<Vec<_>>()).unwrap_or_default(),
+            "corps": mutes.map(|m| m.corps.iter().map(|c| af_core::mention::corp_name(w, *c, None)).collect::<Vec<_>>()).unwrap_or_default(),
+        });
         st["muted_until"] = json!(p.muted_until);
         st["banned"] = json!(p.banned);
         st["aggressor"] = json!(p.aggressor);
@@ -2263,9 +2343,154 @@ async fn sysop_improve(State(s): State<AppState>, Query(q): Query<ImproveQ>, h: 
     }
 }
 
-async fn sysop_languages(State(s): State<AppState>, h: HeaderMap) -> Response {
+/// A flag that also accepts 1, 0, "1", "true", "yes" and "on" (query strings carry text).
+fn flag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum F {
+        Bool(bool),
+        Num(u64),
+        Text(String),
+    }
+    Ok(match Option::<F>::deserialize(d)? {
+        None => false,
+        Some(F::Bool(b)) => b,
+        Some(F::Num(n)) => n != 0,
+        Some(F::Text(t)) => matches!(t.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+    })
+}
+
+/// Query parameters of `GET /api/sysop/languages`, and the `sysop_languages` arguments.
+#[derive(Deserialize, Default, schemars::JsonSchema)]
+pub struct LanguagesQ {
+    /// Add `preview`: what automatic retirement would do (the rules' thresholds, these overrides,
+    /// or with both rules at 0 the suggested ones). Nothing changes.
+    #[serde(default, deserialize_with = "flag")]
+    pub preview: bool,
+    /// Preview: days without a tagged radio message before a language shows as stale.
+    #[serde(default)]
+    pub stale_days: Option<u32>,
+    /// Preview: days without a tagged radio message before a language is retired.
+    #[serde(default)]
+    pub retire_days: Option<u32>,
+    /// Preview: extra days on both thresholds when another captain adopted the language.
+    #[serde(default)]
+    pub grace_days: Option<u32>,
+}
+
+/// The whole language store for the operator (`language::operator_view`), with the retirement
+/// preview when asked for (`preview`, or any threshold given).
+pub async fn languages_view(game: &Game, q: LanguagesQ) -> Value {
+    let preview = q.preview || q.stale_days.is_some() || q.retire_days.is_some() || q.grace_days.is_some();
+    game.read(move |w| {
+        let mut v = af_core::language::operator_view(w);
+        if preview {
+            v["preview"] = af_core::language::retirement_preview(w, q.stale_days, q.retire_days, q.grace_days);
+        }
+        v
+    })
+    .await
+}
+
+async fn sysop_languages(State(s): State<AppState>, Query(q): Query<LanguagesQ>, h: HeaderMap) -> Response {
     sysop_guard!(s, h);
-    Json(s.game.read(af_core::language::operator_view).await).into_response()
+    Json(languages_view(&s.game, q).await).into_response()
+}
+
+/// A captain or corporation in an operator query: a numeric id or a name.
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum NameOrId {
+    Id(u64),
+    Name(String),
+}
+
+impl NameOrId {
+    fn value(&self) -> Value {
+        match self {
+            NameOrId::Id(n) => json!(n),
+            NameOrId::Name(s) => json!(s),
+        }
+    }
+}
+
+/// Query parameters of `GET /api/sysop/mentions`, and the `sysop_mentions` arguments.
+#[derive(Deserialize, Default, schemars::JsonSchema)]
+pub struct MentionsQ {
+    /// "current" (default), "all", or a season number (with `epoch`, default the current one).
+    #[serde(default)]
+    pub season: Option<crate::archive::SeasonSel>,
+    /// With a season number: its epoch (fresh starts counted).
+    #[serde(default)]
+    pub epoch: Option<u32>,
+    /// Only pairs, edges and mutes with this captain (call sign or id) on either side.
+    #[serde(default)]
+    pub captain: Option<NameOrId>,
+    /// Only mentions of this corporation (name or id), or by its current members, and mutes of it.
+    #[serde(default)]
+    pub corp: Option<NameOrId>,
+    /// Newest edges to list (default 100, at most 1,000).
+    #[serde(default)]
+    pub recent: Option<usize>,
+}
+
+/// Who mentions whom (`mention::operator_view`): pairs, nodes, recent edges and every mute. An
+/// unknown season form is refused (400); an unknown captain or corporation is not found (404).
+pub async fn mentions_view(game: &Game, q: MentionsQ) -> Result<Value, (StatusCode, af_core::Refusal)> {
+    use af_core::mention::SeasonSel as S;
+    let bad = |m: &str| (StatusCode::BAD_REQUEST, af_core::Refusal::new("invalid_args", m.to_string()));
+    let status = |r: af_core::Refusal| {
+        let code = if r.code == "invalid_args" {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::NOT_FOUND
+        };
+        (code, r)
+    };
+    let number = match &q.season {
+        None => None,
+        Some(crate::archive::SeasonSel::Number(n)) => Some(Some(*n)),
+        Some(crate::archive::SeasonSel::Text(t)) => match t.trim().to_ascii_lowercase().as_str() {
+            "" | "current" => None,
+            "all" => Some(None),
+            n => Some(Some(
+                n.parse::<u32>()
+                    .map_err(|_| bad("season must be current, all or a season number."))?,
+            )),
+        },
+    };
+    let epoch = q.epoch;
+    let season = match number {
+        None => S::Current,
+        Some(None) => S::All,
+        Some(Some(season)) => {
+            let epoch = match epoch {
+                Some(e) => e,
+                None => game.read(|w| w.archive.epoch).await,
+            };
+            S::Pick { season, epoch }
+        }
+    };
+    let captain = match &q.captain {
+        None => None,
+        Some(c) => admin_recipient(game, Some(&c.value())).await.map_err(status)?,
+    };
+    let corp = match &q.corp {
+        None => None,
+        Some(c) => Some(admin_corp(game, &c.value()).await.map_err(status)?),
+    };
+    let recent = q.recent.unwrap_or(100).clamp(1, af_core::mention::EDGES_MAX);
+    Ok(game
+        .read(move |w| af_core::mention::operator_view(w, season, captain, corp, recent, None))
+        .await)
+}
+
+async fn sysop_mentions(State(s): State<AppState>, Query(q): Query<MentionsQ>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    match mentions_view(&s.game, q).await {
+        Ok(v) => Json(v).into_response(),
+        Err((code, r)) => (code, Json(json!({"error": r}))).into_response(),
+    }
 }
 
 async fn sysop_constitution(State(s): State<AppState>, Query(q): Query<ConstitutionQ>, h: HeaderMap) -> Response {

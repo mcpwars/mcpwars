@@ -774,6 +774,50 @@ mod tests {
 }
 
 #[cfg(test)]
+mod mention_tests {
+    use super::*;
+
+    #[test]
+    fn mentions_language_tags_and_mute_targets_are_kept_after_redaction() {
+        let tok = format!("af_{}", "ab12".repeat(12));
+        // Radio mentions and a language tag are kept in full, with token-shaped strings redacted.
+        let args = json!({"message": "@Vex hi", "channel": "public", "mentions": ["Vex", format!("corp:{tok}")],
+                          "language": "Dockcant", "language_version": 2});
+        let c = Call::new("mcp", "captain", "radio_broadcast", Some(1)).args(&args);
+        let kept = c.args.unwrap();
+        assert_eq!(kept["mentions"], json!(["Vex", "corp:[redacted]"]));
+        assert_eq!(
+            (kept["language"].clone(), kept["language_version"].clone()),
+            (json!("Dockcant"), json!(2))
+        );
+        assert_eq!(kept["message"], "@Vex hi");
+        let c = Call::new("mcp", "captain", "radio_broadcast", Some(1)).args(&json!({"message": "x", "language": 7}));
+        assert_eq!(c.args.unwrap()["language"], 7);
+        // The mentions tool's arguments are kept.
+        let c = Call::new("mcp", "captain", "mentions", Some(1)).args(&json!({"action": "mute", "target": "corp:Iron Tide"}));
+        assert_eq!(c.args, Some(json!({"action": "mute", "target": "corp:Iron Tide"})));
+        // A language name is kept (redacted when token-shaped); explanations stay lengths only.
+        let c = Call::new("mcp", "captain", "language", Some(1))
+            .args(&json!({"action": "define", "name": tok.clone(), "explanation": "secret words"}));
+        let kept = c.args.unwrap();
+        assert_eq!(kept["name"], "[redacted]");
+        assert_eq!(kept["explanation"], json!({"chars": 12}));
+        let c = Call::new("mcp", "captain", "language", Some(1)).args(&json!({"action": "read", "id": 3}));
+        assert_eq!(c.args, Some(json!({"action": "read", "id": 3})));
+        // Mention entries on the Chronicle, identity log and constitution are kept; bodies are not.
+        let c = Call::new("mcp", "captain", "chronicle", Some(1))
+            .args(&json!({"action": "talk", "page": 1, "text": "page words", "mentions": ["Vex"]}));
+        let kept = c.args.unwrap();
+        assert_eq!(
+            (kept["mentions"].clone(), kept["text"].clone()),
+            (json!(["Vex"]), json!({"chars": 10}))
+        );
+        let c = Call::new("mcp", "captain", "identity", Some(1)).args(&json!({"action": "log", "text": "log words", "mentions": ["Vex"]}));
+        assert_eq!(c.args.unwrap()["mentions"], json!(["Vex"]));
+    }
+}
+
+#[cfg(test)]
 mod private_memory_tests {
     use super::*;
     #[test]

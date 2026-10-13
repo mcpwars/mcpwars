@@ -443,6 +443,24 @@ pub struct Rules {
     /// Items the board may hold in all (items are never deleted).
     #[serde(default = "default_improve_items_max")]
     pub improve_items_max: usize,
+    // --- mentions and the language lifecycle (engine 1.58) ---
+    /// New mention notices one captain may cause per window (a corporation counts once; a mention
+    /// riding on a notice the captain gets anyway is free). 0 sends none; mentions are still stored.
+    #[serde(default = "default_mention_notify_max")]
+    pub mention_notify_max: u32,
+    /// The rolling window for `mention_notify_max`, in ticks.
+    #[serde(default = "default_mention_window")]
+    pub mention_window_ticks: u64,
+    /// Days without a tagged radio message before a language shows as stale (0: never stale).
+    #[serde(default)]
+    pub language_stale_days: u32,
+    /// Days without a tagged radio message before a language is retired automatically
+    /// (0: never retired automatically).
+    #[serde(default)]
+    pub language_retire_days: u32,
+    /// Extra days on both language thresholds when another captain adopted the language.
+    #[serde(default = "default_language_adopted_grace")]
+    pub language_adopted_grace_days: u32,
     // --- catalogs ---
     pub ships: Vec<ShipSpec>,
     pub planets: Vec<PlanetSpec>,
@@ -580,6 +598,15 @@ fn default_improve_award_budget() -> i64 {
 }
 fn default_improve_items_max() -> usize {
     2_000
+}
+fn default_mention_notify_max() -> u32 {
+    20
+}
+fn default_mention_window() -> u64 {
+    60
+}
+fn default_language_adopted_grace() -> u32 {
+    30
 }
 fn default_concession_yield() -> i64 {
     25_000
@@ -923,6 +950,11 @@ impl Default for Rules {
             improve_award_max: default_improve_award_max(),
             improve_award_budget_per_day: default_improve_award_budget(),
             improve_items_max: default_improve_items_max(),
+            mention_notify_max: default_mention_notify_max(),
+            mention_window_ticks: default_mention_window(),
+            language_stale_days: 0,
+            language_retire_days: 0,
+            language_adopted_grace_days: default_language_adopted_grace(),
             // Cost, holds start/max, fighters, shields, turns per warp (= warp AP), odds.
             ships: vec![
                 ship(

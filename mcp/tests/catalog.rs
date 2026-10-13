@@ -30,7 +30,13 @@ use serde_json::{Value, json};
 // Engine 1.56 adds avoid_sectors and max_toll to trade_loop (improve board item #8, the same
 // avoidance policy autopilot_travel takes; about 360 bytes of schema with the shortest field
 // docs that still say what each does): the catalog measured 59,266 bytes, budget that plus 150.
-const TOOLS_BYTE_BUDGET: usize = 59_416;
+// Engine 1.58 adds mentions and the language lifecycle: the `mentions` tool (mute, unmute,
+// list), radio_broadcast's `mentions`, `language` and `language_version`, the `mentions`
+// argument of the chronicle, identity and constitution tools, the language tool's `id`, and
+// description lines saying where @mentions notify and where /languages.txt is (about 2,490
+// bytes; the catalog measured 61,396 bytes before main's trade_loop fields), and on top of engine
+// 1.57's trade_loop the catalog measured 61,905 bytes: the budget is that plus 150.
+const TOOLS_BYTE_BUDGET: usize = 62_055;
 
 fn current() -> Value {
     let tools: Vec<Value> = af_mcp::tools::catalog()

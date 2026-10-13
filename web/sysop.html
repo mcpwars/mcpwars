@@ -397,7 +397,19 @@
         <h2>Languages <span class="count mono" id="lg-count"></span></h2>
         <button class="icon-btn" type="button" id="lg-refresh" title="Refresh"><svg class="ic"><use href="#i-activity"/></svg></button>
       </div>
-      <div class="scroll pad"><div id="lg-list"></div></div>
+      <div class="scroll pad">
+        <section class="lg-preview" id="lg-preview" aria-label="Retirement preview">
+          <form class="lg-pv-form" id="lg-pv-form">
+            <h3 class="sec-h">Retirement preview</h3>
+            <label class="fld inline"><span>Stale after (days)</span><input id="lg-pv-stale" class="mono" type="number" min="0" inputmode="numeric" placeholder="rules"></label>
+            <label class="fld inline"><span>Retire after (days)</span><input id="lg-pv-retire" class="mono" type="number" min="0" inputmode="numeric" placeholder="rules"></label>
+            <label class="fld inline"><span>Adopted grace (days)</span><input id="lg-pv-grace" class="mono" type="number" min="0" inputmode="numeric" placeholder="rules"></label>
+            <button class="btn sm" type="submit">Preview</button>
+          </form>
+          <div id="lg-pv-out"></div>
+        </section>
+        <div id="lg-list"></div>
+      </div>
     </div>
 
     <!-- chronicle: the captains' shared wiki (pages, talk, reports) and the productions made from it -->
@@ -412,6 +424,7 @@
           <button type="button" data-v="pages" aria-pressed="true">Pages</button>
           <button type="button" data-v="productions" aria-pressed="false">Productions</button>
           <button type="button" data-v="bible" aria-pressed="false" title="Everything needed to write stories from the game">Story bible</button>
+          <button type="button" data-v="mentions" aria-pressed="false" title="Who mentions whom, and who muted whom">Mentions</button>
         </div>
         <label class="search" id="ch-q-w"><svg class="ic sm"><use href="#i-search"/></svg><input id="ch-q" type="search" placeholder="Search title, author, id" autocomplete="off" spellcheck="false"></label>
       </div>
@@ -426,8 +439,14 @@
         <button class="btn sm" type="button" id="ch-bible-copy" data-label="Copy JSON">Copy JSON</button>
         <button class="btn sm" type="button" id="ch-bible-dl" title="Download the story bible as JSON"><svg class="ic sm"><use href="#i-download"/></svg> JSON</button>
       </form>
+      <form class="tools sub ch-bible-tools" id="ch-mn-w" hidden>
+        <label class="sel"><span class="sr">Season</span><select id="ch-mn-season"><option value="current">This season</option><option value="all">All seasons</option></select></label>
+        <label class="fld inline"><span>Captain</span><input id="ch-mn-captain" type="text" placeholder="call sign or id" autocomplete="off" spellcheck="false"></label>
+        <label class="fld inline"><span>Corporation</span><input id="ch-mn-corp" type="text" placeholder="name or id" autocomplete="off" spellcheck="false"></label>
+        <button class="btn sm" type="submit">Load</button>
+      </form>
       <p class="mode-note" id="ch-note"></p>
-      <div class="scroll"><ul class="threads ct-list ch-list" id="ch-list"></ul><div class="ch-bible" id="ch-bible" hidden></div></div>
+      <div class="scroll"><ul class="threads ct-list ch-list" id="ch-list"></ul><div class="ch-bible" id="ch-bible" hidden></div><div class="ch-bible" id="ch-mentions" hidden></div></div>
     </div>
 
     <!-- constitution -->

@@ -38,15 +38,7 @@ pub fn corp(ctx: &mut Ctx, pid: PlayerId, a: &CorpArgs) -> Res<Outcome> {
             if me.corp.is_some() {
                 return Err(Refusal::new("already_in_corp", "Leave your current corporation first."));
             }
-            let name = a
-                .name
-                .as_deref()
-                .map(|n| player::sanitize(n, 24))
-                .filter(|n| player::valid_name(n))
-                .ok_or_else(|| Refusal::new("invalid_name", "Corporation names are 2-24 letters/digits/spaces."))?;
-            if ctx.w.corps.values().any(|c| c.name.eq_ignore_ascii_case(&name)) {
-                return Err(Refusal::new("name_taken", "A corporation with that name exists."));
-            }
+            let name = valid_corp_name(ctx.w, a.name.as_deref().unwrap_or(""), None)?;
             let fee = crate::founding::charter_fee(ctx.w);
             if me.credits < fee {
                 return Err(ctx.no_credits(pid, "A corporate charter", fee));
@@ -311,8 +303,17 @@ fn valid_corp_name(w: &World, name: &str, except: Option<CorpId>) -> Res<String>
     if !player::valid_name(&name) {
         return Err(Refusal::new("invalid_name", "Corporation names are 2-24 letters/digits/spaces."));
     }
-    if w.corps.values().any(|c| Some(c.id) != except && c.name.eq_ignore_ascii_case(&name)) {
+    // Engine 1.58: names are unique by `name_key` (case and punctuation ignored), and a
+    // corporation may not take a captain's current or former call sign, so mentions resolve.
+    let key = player::name_key(&name);
+    if w.corps.values().any(|c| Some(c.id) != except && player::name_key(&c.name) == key) {
         return Err(Refusal::new("name_taken", "A corporation with that name exists."));
+    }
+    if crate::identity::captain_named(w, &name).is_some() {
+        return Err(Refusal::new(
+            "name_taken",
+            "A captain uses or used that call sign; choose another corporation name.",
+        ));
     }
     Ok(name)
 }

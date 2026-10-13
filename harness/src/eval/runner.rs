@@ -336,6 +336,7 @@ pub async fn run_episode(
                         message: text.clone(),
                         channel: RadioChannel::Private,
                         recipient_id: Some("Candidate".into()),
+                        ..Default::default()
                     }),
                 )
                 .await;

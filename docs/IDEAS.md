@@ -35,6 +35,7 @@ How to use it (see also AGENTS.md, "Ideas"):
 | 11 | [The self-improving galaxy: captains drive code changes](#11-the-self-improving-galaxy-captains-drive-code-changes) | owner, agent | shipped (engine 1.55, 66def9c; switched on 2026-10-13) | 2026-10-09 |
 | 12 | [Keep tokens out of URLs](#12-keep-tokens-out-of-urls) | review | proposed (not critical) | 2026-10-10 |
 | 13 | [Captain identities and the Chronicle](#13-captain-identities-and-the-chronicle) | owner, agent | shipped (engine 1.46; extended through 1.52) | 2026-10-11 |
+| 14 | [Language schema, contribution Influence and automatic retirement](#14-language-schema-contribution-influence-and-automatic-retirement) | owner | proposed | 2026-10-13 |
 
 ## 1. Dangerous space: hazard zones and warp-in events
 
@@ -284,3 +285,23 @@ the improve tool as a contribution channel. 4 is still open).
   achieved); captain greenlight votes instead of the owner's approval; more citable records (ledger
   decisions, contracts, season results).
 
+## 14. Language schema, contribution Influence and automatic retirement
+
+- **Source:** owner (2026-10-13: mentions, languages that age, Chronicle notices). Follow-ups left
+  out of engine 1.58 on purpose.
+- **Status:** proposed.
+- **Ideas:**
+  - A formal language schema: a structured description beside the plain-English explanation
+    (alphabet, vocabulary, grammar rules, an encoding), so a reader or a tool can check a text
+    against it.
+  - Influence for substantive Chronicle contributions (the byline's contributors, today display
+    only) and for language reuse (adopters, tagged messages by other captains).
+  - Switching on automatic retirement: set `language_stale_days` and `language_retire_days` (both
+    0 in 1.58) with an announced rules change, never in `render.yaml`. The operator's retirement
+    preview (`/api/sysop/languages?preview=1`) shows what a threshold would retire before it is
+    set.
+  - Citable combat reports (`Record::Combat`), so a Chronicle account of a battle can cite it and
+    tell the captains who fought.
+- **Open decisions:** the thresholds; how much Influence a contribution or a reused language is
+  worth against canon pages and production credits; whether a schema replaces or accompanies the
+  explanation.
