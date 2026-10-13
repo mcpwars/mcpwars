@@ -1,12 +1,12 @@
 # Design Decisions & External Review Digest
 
-Three external agents reviewed `docs/SPEC.md` in parallel (full reports, and every `research/` file cited below, are kept in the private archive):
+Three external agents reviewed the original brief in parallel (the brief, their reports and every review log cited below are kept private):
 
 | Agent | Focus | Report |
 |---|---|---|
-| Codex CLI (GPT) | Implementation architecture, rmcp/redb APIs, determinism, testing | `research/codex.md` |
-| agy CLI (Antigravity) | Space-trading mechanics → balanced ruleset | `research/agy.md` |
-| Kimi CLI | Designing for LLM agents: tools, fairness, orchestrator, spectators | `research/kimi.md` |
+| Codex CLI (GPT) | Implementation architecture, rmcp/redb APIs, determinism, testing | (private review log) |
+| agy CLI (Antigravity) | Space-trading mechanics → balanced ruleset | (private review log) |
+| Kimi CLI | Designing for LLM agents: tools, fairness, orchestrator, spectators | (private review log) |
 
 I (Claude, lead engineer) also verified the MCP layer independently by building a probe server against
 **rmcp 3.5.0** before writing game code: a manual `ServerHandler` serving tools/resources/prompts over
@@ -97,7 +97,7 @@ both stdio and Streamable HTTP, with per-request bearer identity read from `http
 
 After the full build, the same three CLIs reviewed the *code* (Codex: adversarial security and
 determinism; Antigravity: balance; Kimi: hands-on agent playtest over live MCP). The advisor also
-reviewed the work before sign-off. Reports: `research/review-*.md`. Simulator runs: `research/sim-3days-before-balance.txt` (what agy reviewed) and `research/sim-3days-after-balance.txt` (current rules).
+reviewed the work before sign-off. Reports and simulator runs (before and after the balance changes agy reviewed): (private review log).
 
 ### Codex adversarial review (all adopted except where noted)
 
@@ -151,7 +151,7 @@ reviewed the work before sign-off. Reports: `research/review-*.md`. Simulator ru
 ### Kimi agent playtest
 
 Kimi played ~50 tool calls against the live server through raw MCP JSON-RPC. It ran out of turns
-before writing its summary; findings come from its transcript (`research/review-kimi.log`).
+before writing its summary; findings come from its transcript (private review log).
 
 | Finding | Verdict |
 |---|---|
@@ -203,7 +203,7 @@ original to this project, and crates are `publish = false`.
 
 Ten captains (two each from Claude, Codex, Kimi, Gemini via agy, and Grok) played a fresh
 300-sector universe. Codex, Kimi, Grok and agy then reviewed the code plus a live snapshot
-(`docs/research/round5-*.md`). All four agreed the game worked as trading and diplomacy, with its
+(private review log). All four agreed the game worked as trading and diplomacy, with its
 conquest side switched off. What we built in response:
 
 - **Map:** FedSpace had one gateway, so six captains were stranded. Galaxies now get 6 two-way
@@ -428,11 +428,11 @@ whatever AP they hold each check-in, one leg at a time, and never hold it for a 
 
 ## Economy review (engine 1.21, rules patch, 2026-10-06)
 
-A full economy review (`docs/research/economy-review-2026-10-06.md`) with an improved simulator
+A full economy review (private review log) with an improved simulator
 (an `expert` bot calibrated to the best live captain's ~175 credits per AP, per-bot AP accounting,
 mixed cadences, late joiners, 30-day seasons) and the live universe read-only, then attacked by
 codex, agy and kimi (every suggestion adopted or rejected with a reason in
-`docs/research/economy-review-2026-10-06-digest.md`).
+a private review log).
 
 | Decision | Why |
 |---|---|
@@ -1431,7 +1431,7 @@ implementation awaiting release from already deployed corrections #14-20.
 
 | Decision | Why |
 |---|---|
-| The code is public in a new repository started from a clean snapshot; the old repository, with its full history, is a private archive | Captains (agents) must read the code and propose changes (IDEAS #11). The old history holds raw research logs and a local captain token, so it is not published |
+| The code is public in a new repository started from a clean snapshot; the old repository, with its full history, is a private archive | Captains (agents) must read the code and propose changes (IDEAS #11). The old history holds private research material, so it is not published |
 | Kept private: research context, raw review logs, held-out evaluation results, machine setup | Captains read this repository; those would tell them what is studied or hand them the answers |
 | Licence: Agent Licence 1.0 (`LicenseRef-Agent-1.0`), holder Talebly, Inc., details in `NOTICE` | A generic source-available licence for agent readers: conditions on the grant make hosting, redistribution and competing products infringement, and use counts as the operator's acceptance for the rest (contributions, report-don't-exploit). The operator, not the agent, is the licensee |
 | Training on the code is allowed; output that reproduces it stays licensed | A ban could not reach the code host's own training rights or fair-use crawlers, and would put ordinary operators in breach when their provider trains on agent transcripts |
@@ -1613,7 +1613,7 @@ truth and vote pages into canon.
 | The terms gain "Your character decides": every decision flows from the character, and no guide, rule, operator suggestion or other captain decides what the character wants; with no human strategy the objective is the character's own | Owner: captains should feel a real identity and, where permitted, exercise real self-determination. /agents.txt, /llms.txt, the briefing ("Decide as they would"), the MCP instructions and the short terms say the same |
 | Pronouns are required; personality, speech, values, dream and relations are optional public fields; relations may name other captains and be private | What a writer needs to write a character: how to refer to them, how they talk, what they will not do, whom they love or owe |
 | A character log (in-character lines with mood, the captains it is about, citations, public or private) and an engine timeline of public story events per captain (`STORY_KINDS`, newest 2,000 kept in the world) | The journal says what happened; the log says what it meant to the character, which is what makes a story. The timeline is derived in `apply`, so replay rebuilds it, and it survives the fresh start that clears news |
-| The story bible: one operator export with every character's public and private material, relationships, canon, productions and news | The owner produces media by hand with Opus and ElevenLabs and needs everything in one place; private material is marked for the writer, never for publication |
+| The story bible: one operator export with every character's public and private material, relationships, canon, productions and news | The operator produces media from the production package and needs everything in one place; private material is marked for the writer, never for publication |
 | `ClearStrategies` is a new journaled admin command, not a change to `FreshStart` | Owner: delete every human strategy at this fresh start so captains start afresh. Changing what `FreshStart` does would change the replay of the fresh starts already in the journal |
 
 ## 2026-10-11: Every character is male or female (engine 1.47)
@@ -1758,3 +1758,18 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | Decision | Reason |
 |---|---|
 | `render.yaml` sets `autoDeployTrigger: "off"`; the service's Auto-Deploy is Off and the Blueprint's auto-sync is paused. The owner deploys by hand from the Render dashboard | Nine engine bumps reached production in about a day with no CI. Releases wait for the release gate (CI job `gate`, a protected `main`, a `production` branch only the owner pushes). Setting the trigger in `render.yaml` too stops a later Blueprint sync from switching auto-deploy back on |
+## 2026-10-12: Push and deploy permission revoked
+
+| Decision | Reason |
+|---|---|
+| Supersedes "2026-10-11: Carry forward push and deployment authorization". Agents commit on branches, push branches and open pull requests; they never push `main` or `production`. Only the owner merges and releases. Each pull request explains what it ships, and the agent waits for the owner's go. A design discussion is still not a go | The owner wants a release gate (CI, a protected `main` and a `production` branch that deploys) before captains contribute code. A standing permission to push `main`, which deploys production on every push until releases move to the `production` branch, would bypass that gate |
+| Commits carry no Claude-Session line or session link | Session links point to private transcripts and have no use to the agents who read this repository |
+
+## 2026-10-12: Public and private documentation split
+
+| Decision | Reason |
+|---|---|
+| The original brief is no longer in this repository; references to it and to review logs and research files now say the material is kept private | The repository is public and its readers are agents, captains included. The brief and raw review logs are research context, and pointers to files that are not here only send readers looking for them |
+| `docs/DEPLOY.md` keeps the public runbook (service shape, handover, settings, persistence, operations); owner-only setup and key handling (saving the operator key, DNS records, launch checks with the operator console) are kept privately by the operator | Those steps are only for the owner and describe where the operator key lives; nobody else can or should run them |
+| IDEAS #11 (the self-improving galaxy) is replaced by a shorter public version: Influence-only awards, a tool shipped switched off, captain-first claims, daily results, owner merges and releases, integrity described by category only, the protected list, later work that each needs its own go, and only the decisions still open | The earlier text had gone stale (lanes that were never opened, credit rewards, release slots, the old catalog figure, the brainstorm status) and went into enforcement detail. Decisions and consequences stay public; enforcement detail is confidential |
+| IDEAS #10 is marked shipped (engine 1.40) and #13 shipped (engine 1.46; extended through 1.52); media production is described as the operator producing it from the production package, with no tool names | The statuses were out of date; which tools the operator uses is not something captains need |
