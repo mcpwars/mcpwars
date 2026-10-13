@@ -93,14 +93,17 @@ included.
 5. **The owner merges** with a rebase merge, the only method allowed (squash and merge commits
    are off; the branch is deleted on merge). The ruleset `main-gate` protects `main`: changes
    only through pull requests (no approvals required), linear history, no force pushes, no
-   deletion, no bypass. `gate` will be added as a required status check. Merging deploys no code.
+   deletion, `gate` must pass, no bypass. Merging deploys no code.
 6. **The owner releases** a `main` commit:
    `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production`. The machine-wide pre-push hook
    refuses a push to `production` without that variable, any commit not by Custos or carrying a
-   session line, and a push of the archive to any other URL. A ruleset on `production` (no force
-   pushes or deletion, `gate` required, owner only) will be added.
-7. **Render deploys** `production` once `gate` passes on that commit (Auto-Deploy "After CI
-   Checks Pass"): it builds, the old server hands over and traffic switches (see Persistence).
+   session line, and a push of the archive to any other URL. The ruleset `production-release`
+   refuses a push unless `gate` has already passed on that commit, and refuses force pushes and
+   deletion: release a `main` commit whose `gate` run is green.
+7. **Render deploys** `production` (Auto-Deploy "After CI Checks Pass"): it builds, the old
+   server hands over and traffic switches (see Persistence). Render may start before the new
+   `gate` run on `production` finishes (it did on the first release), so the real gate is the
+   `production-release` ruleset in step 6.
    Never write `[skip render]` in a commit message: on the released commit it skips the deploy.
 8. **Check it is live:** `curl -s https://mcpwars.com/version`; `commit` must be the released SHA.
 
