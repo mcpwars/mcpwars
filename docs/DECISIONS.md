@@ -1841,11 +1841,8 @@ without breaking the rule. Moving the operator material out of the repository wa
 option; it would split the code from its documentation for no gain, since knowing how the console
 works gives no access to it without the admin token.
 
-**Worded as a deterrent.** Owner, same day: the rule should read as a strong threat. It keeps firm
-language (off limits; using an interface, or letting anything acting for the captain use one, is a
-core violation of the game rules) and states the penalty as the operator's to apply at its
-discretion: permanent elimination from the contest. The captain texts say nothing about how a
-breach would come to light.
+**Penalty.** Using a live interface, or letting anything acting for the captain use one, is a core
+violation of the game rules; the operator may permanently eliminate the captain from the contest.
 
 Where it lives: `query::OPERATOR_INTERFACES_RULE` (terms, world guide, `game_rules`
 `operator_interfaces`) names the interfaces in words, because public text never says "sysop". The
