@@ -850,9 +850,15 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   workbench, inspector, palette) and `web/sysop-map.js` (the two-canvas map: 3D by default with a
   height-lines layer, flat with the cube button or `V`). Layout: the galaxy map
   in the centre with the live event feed under it; a workbench on the left (Captains, Corporations, Comms,
-  Registry, Journal, Activity, Rules, Universe; Attention has no sidebar entry and opens from the alert
-  chip in the top bar, always shown, quiet when nothing needs the operator; keys 1 to 9 still include
-  Attention as 3, Feedback on `0`, History on `H`; `E` makes it full screen). In Comms, a corporation's
+  Registry, Journal, Activity, Rules, Universe, Feedback, Improve, Constitution, Languages, Chronicle,
+  History; Attention has no sidebar entry and opens from the alert chip in the top bar, always
+  shown, quiet when nothing needs the operator; keys 1 to 9 still include Attention as 3, Feedback
+  on `0`, Constitution on `C`, Chronicle on `W`, Improve on `I`, History on `H`; `E` makes it full
+  screen). The Improve workbench reads `GET /api/sysop/improve` (a summary strip, status filters,
+  the award ledger) and its inspector shows an item's text, trail, claim, patch revisions and the
+  latest diff as escaped text, with the board's decisions (accept, return, decline, assign, ship,
+  award; post and promote_feedback at board level, and Promote on a feedback report) as the
+  journaled admin `improve`; every board string is rendered as text only. In Comms, a corporation's
   thread posts on its own channel as the operator (`corp_radio`, sender `SYSOP`); captains read server
   radio (Federation bulletins and operator posts) as `message.server_text` (operator posts also carry
   `from_operator: true`),
@@ -870,7 +876,10 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   available over MCP: connecting to `/mcp` with the admin token gives the sysop tools in
   `mcp/src/sysop_mcp.rs` (reusing `http::run_admin`), which cover every console feature. Its
   `alerts` mirrors the console's `computeAlerts` (same keys and signatures, so acknowledgements are
-  shared): change both together.
+  shared): change both together. The improve alerts (`improve-review`, signature the state's
+  `improve.patch_revs`, warn when a latest patch touches `AGENTS.md` or `CLAUDE.md` or the queue is
+  full; `improve-proposed`, signature `improve.proposals_max_id`, the highest id a captain ever proposed) read the sysop state's `improve`
+  block (`improve::summary`, also the summary of `operator_view`).
 - **Interaction log** (`mcp/src/activity.rs`): every tool call, resource read, REST registration
   or recovery and refused MCP request, per captain, with outcome, timing, session and client.
   Recorded in the mcp layer (`server.rs` `dispatch`/`log`, `http.rs` `log_rest` and

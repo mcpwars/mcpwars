@@ -638,7 +638,7 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 "sysop_alerts",
                 true,
                 false,
-                "Attention: what needs the operator now (clock held, season ending, replies to sysop, silent captains, captains with many refusals, captains with no calls in 6 hours, refused unauthenticated calls, unread operator messages, unacknowledged announcements). Open alerts first, then acknowledged ones. Acknowledgements are shared with the sysop console.",
+                "Attention: what needs the operator now (clock held, season ending, replies to sysop, open feedback, Chronicle pitches and reported pages, improve board patches in review (warn when a patch touches AGENTS.md or CLAUDE.md or the queue is full) and proposals waiting, silent captains, captains with many refusals, captains with no calls in 6 hours, refused unauthenticated calls, unread operator messages, unacknowledged announcements). Open alerts first, then acknowledged ones. Acknowledgements are shared with the sysop console.",
             ),
             def::<AckArgs>(
                 "sysop_ack",
@@ -1300,6 +1300,86 @@ pub async fn alerts(game: &Game) -> Vec<Value> {
                 format!("{}: {}", newest.from_name.as_deref().unwrap_or("anonymous"), newest.about),
                 json!({"tool": "sysop_feedback", "args": {"status": "open"}, "mode": "feedback"}),
             );
+        }
+        // The improve board (engine 1.55), mirrored by the console's computeAlerts from the state's
+        // `improve` block (same keys and signatures). Patches in review: the signature is
+        // `patch_revs`, every patch revision the board holds, so a new patch alerts again and a
+        // return or ship does not; a latest revision touching a flagged file (AGENTS.md, CLAUDE.md)
+        // or a full review queue raises it to warn. Proposals waiting for a decision: the
+        // signature is the highest id a captain ever proposed (`improve::proposals_max_id`), so
+        // deciding the newest proposal leaves an acknowledgement standing and only a new one
+        // re-alerts.
+        {
+            use af_core::improve::Status;
+            let s = |n: usize| if n == 1 { "" } else { "s" };
+            let review: Vec<&af_core::improve::Item> = w.improve.items.iter().filter(|i| i.status == Status::Review).collect();
+            if !review.is_empty() {
+                let n = review.len();
+                let flagged: Vec<String> = review
+                    .iter()
+                    .filter_map(|i| {
+                        let p = i.patches.last().filter(|p| !p.flagged.is_empty())?;
+                        Some(format!("#{} touches {}", i.id, p.flagged.join(" and ")))
+                    })
+                    .collect();
+                let full = n >= w.rules.improve_review_max;
+                let mut detail = vec![];
+                if !flagged.is_empty() {
+                    detail.push(format!("Read in full before shipping: {}.", flagged.join("; ")));
+                }
+                if full {
+                    detail.push(format!(
+                        "The review queue is full ({n} of {}): new patches are refused.",
+                        w.rules.improve_review_max
+                    ));
+                }
+                detail.push(
+                    review
+                        .iter()
+                        .rev()
+                        .take(4)
+                        .map(|i| {
+                            let by = i.patches.last().map(|p| af_core::improve::name_of(w, p.by, &p.call_sign));
+                            format!(
+                                "#{} {} (rev {}{})",
+                                i.id,
+                                i.title,
+                                i.patches.len(),
+                                by.map(|b| format!(" by {b}")).unwrap_or_default()
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | "),
+                );
+                add(
+                    if flagged.is_empty() && !full { "info" } else { "warn" },
+                    "Improve",
+                    "improve-review".into(),
+                    w.improve.items.iter().map(|i| i.patches.len()).sum::<usize>().to_string(),
+                    format!("{n} improve item{} in review", s(n)),
+                    detail.join(" "),
+                    json!({"tool": "sysop_improve", "args": {"status": "review"}, "mode": "improve"}),
+                );
+            }
+            let proposed: Vec<&af_core::improve::Item> = w.improve.items.iter().filter(|i| i.status == Status::Proposed).collect();
+            if !proposed.is_empty() {
+                let n = proposed.len();
+                add(
+                    "info",
+                    "Improve",
+                    "improve-proposed".into(),
+                    af_core::improve::proposals_max_id(w).to_string(),
+                    format!("{n} improve proposal{} waiting for a decision", s(n)),
+                    proposed
+                        .iter()
+                        .rev()
+                        .take(4)
+                        .map(|i| format!("#{} {} by {}", i.id, i.title, af_core::improve::author_of(w, i)))
+                        .collect::<Vec<_>>()
+                        .join(" | "),
+                    json!({"tool": "sysop_improve", "args": {"status": "proposed"}, "mode": "improve"}),
+                );
+            }
         }
         // Chronicle (engine 1.46): pitches waiting for a decision (signature: the highest pitched
         // production id) and reported pages not yet struck (signature: the highest reported page id).

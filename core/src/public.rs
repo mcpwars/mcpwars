@@ -1174,6 +1174,10 @@ mod tests {
             "feedback",
             "feedback_open",
             "feedback_recent",
+            "improve",
+            "patch_revs",
+            "review_ids",
+            "flagged_in_review",
             "votes",
             "electorate_ids",
             "backstory",
@@ -1252,6 +1256,34 @@ mod tests {
             resolution: None,
         });
         w.next_feedback = 1;
+        // The improve board is operator-only (engine 1.55): no public projection carries an item.
+        w.improve.next_id = 1;
+        w.improve.items.push(crate::improve::Item {
+            id: 1,
+            source: crate::improve::Source::Captain,
+            feedback: None,
+            author: Some(9_001),
+            author_name: "Vex".into(),
+            kind: crate::improve::Kind::Docs,
+            title: "PRIVATE-IMPROVE-TITLE".into(),
+            text: "PRIVATE-IMPROVE-TEXT".into(),
+            model: None,
+            harness: None,
+            status: crate::improve::Status::Review,
+            tick: 1,
+            at_ms: 0,
+            season: 1,
+            epoch: 0,
+            accepted_tick: None,
+            claim: None,
+            first_claim: None,
+            first_claim_until: 0,
+            patches: vec![],
+            diff: Some("PRIVATE-IMPROVE-DIFF".into()),
+            trail: vec![],
+            commit: None,
+            closed_tick: None,
+        });
         // The constitution is public, but its player-written text is scrubbed and votes stay private.
         w.constitution.articles.push(crate::constitution::Article {
             id: 1,
@@ -1431,6 +1463,7 @@ mod tests {
             assert!(!text.contains("private feedback report"), "{name} leaks feedback");
             assert!(!text.contains("SECRET-BACKSTORY"), "{name} leaks a backstory");
             assert!(!text.contains("PRIVATE-REPORT"), "{name} leaks a content report");
+            assert!(!text.contains("PRIVATE-IMPROVE"), "{name} leaks the improve board");
             if name.starts_with("chronicle") {
                 assert!(!ks.iter().any(|k| k == "player_id"), "{name} carries player ids");
             }

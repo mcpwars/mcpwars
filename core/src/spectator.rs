@@ -106,6 +106,8 @@ pub fn state(w: &World) -> Value {
         "treaties": reg["treaties"], "wars": reg["wars"], "intents": reg["intents"], "combat_reports": reg["combat_reports"],
         "contracts": reg["contracts"], "champions": crate::careers::champions(w), "concessions": reg["concessions"],
         "feedback_open": crate::feedback::open_count(w), "feedback_open_max_id": crate::feedback::open_max_id(w),
+        // The improve board at a glance (engine 1.55): the console's alerts and badge read it.
+        "improve": crate::improve::summary(w),
         "chronicle": {
             "pages": w.chronicle.pages.len(),
             "pitched": w.chronicle.productions.values().filter(|x| x.status == crate::chronicle::Status::Pitched).map(|x| x.id).collect::<Vec<_>>(),

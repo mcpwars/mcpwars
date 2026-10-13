@@ -1749,6 +1749,52 @@ async fn the_improve_board_over_mcp_and_the_operator_actions() {
     // Another captain's proposal stays hidden until the operator accepts it.
     let (ok, t) = text(&improve(1, json!({"action": "view", "id": id})).await.unwrap());
     assert!(!ok, "{t}");
+    // The operator is alerted to the proposal (signature: the highest id a captain ever proposed); the sysop
+    // state carries the same signal for the console.
+    let alert = |key: &'static str| {
+        let game = game.clone();
+        async move { af_mcp::sysop_mcp::alerts(&game).await.into_iter().find(|a| a["key"] == key) }
+    };
+    let sysop_state = || {
+        let (http, url) = (http.clone(), url.clone());
+        async move {
+            http.get(format!("{url}/api/sysop/state"))
+                .bearer_auth("adm")
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
+    let scall = |name: &str, args: Value| {
+        let mut p = CallToolRequestParams::new(name.to_string());
+        p.arguments = args.as_object().cloned();
+        sysop.peer().call_tool_once(p)
+    };
+    let a = alert("improve-proposed").await.expect("proposal alert");
+    assert_eq!(a["sig"], json!(id.to_string()), "{a}");
+    assert_eq!(
+        (a["severity"].as_str(), a["group"].as_str()),
+        (Some("info"), Some("Improve")),
+        "{a}"
+    );
+    assert_eq!(a["title"], "1 improve proposal waiting for a decision", "{a}");
+    assert_eq!(
+        a["detail"],
+        json!(format!("#{id} world.txt omits the toll cap by Ada Vance")),
+        "{a}"
+    );
+    assert_eq!(
+        a["target"],
+        json!({"tool": "sysop_improve", "args": {"status": "proposed"}, "mode": "improve"})
+    );
+    let st = sysop_state().await;
+    assert_eq!(st["improve"]["proposals_max_id"], json!(id), "{}", st["improve"]);
+    assert_eq!(st["improve"]["proposed"], 1);
+    assert!(alert("improve-review").await.is_none());
     let r: Value = action("improve", json!({"decision": "accept", "id": id, "note": "Good catch."}))
         .await
         .unwrap()
@@ -1790,13 +1836,51 @@ async fn the_improve_board_over_mcp_and_the_operator_actions() {
     let (_, t) = text(&improve(0, json!({"action": "view", "id": id})).await.unwrap());
     assert!(envelope(&t)["result"]["item"].get("diff").is_none(), "{t}");
 
+    // A patch in review alerts the operator (signature: every patch revision the board holds),
+    // as a note while nothing is flagged; the proposal alert is gone once it was accepted.
+    assert!(alert("improve-proposed").await.is_none());
+    let a = alert("improve-review").await.expect("review alert");
+    assert_eq!((a["sig"].as_str(), a["severity"].as_str()), (Some("1"), Some("info")), "{a}");
+    assert_eq!(a["title"], "1 improve item in review", "{a}");
+    assert_eq!(
+        a["detail"],
+        json!(format!("#{id} world.txt omits the toll cap (rev 1 by Bo Lindqvist)")),
+        "{a}"
+    );
+    assert_eq!(
+        a["target"],
+        json!({"tool": "sysop_improve", "args": {"status": "review"}, "mode": "improve"})
+    );
+    let st = sysop_state().await;
+    assert_eq!(st["improve"]["review_ids"], json!([id]), "{}", st["improve"]);
+    assert_eq!(st["improve"]["patch_revs"], 1);
+    assert_eq!(st["improve"]["flagged_in_review"], json!([]));
+    // An acknowledgement holds until a new revision arrives; one touching AGENTS.md is a warning.
+    let (ok, t) = text(&scall("sysop_ack", json!({"key": "improve-review"})).await.unwrap());
+    assert!(ok, "{t}");
+    let agents = "--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1 @@\n-old\n+new\n";
+    let (ok, t) = text(
+        &improve(1, json!({"action": "patch", "id": id, "base": "e52ec7a", "diff": agents}))
+            .await
+            .unwrap(),
+    );
+    assert!(ok && t.contains("AGENTS.md"), "{t}");
+    let a = alert("improve-review").await.expect("review alert");
+    assert_eq!((a["sig"].as_str(), a["severity"].as_str()), (Some("2"), Some("warn")), "{a}");
+    assert!(
+        a["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("Read in full before shipping: #{id} touches AGENTS.md.")),
+        "{a}"
+    );
+    let acks = game.console_get("acks").await.unwrap();
+    assert_eq!(acks["improve-review"]["sig"], "1", "the acknowledgement kept the old signature");
+    let st = sysop_state().await;
+    assert_eq!(st["improve"]["flagged_in_review"], json!([id]), "{}", st["improve"]);
+    assert_eq!(st["improve"]["patch_revs"], 2);
+
     // Ship over the operator's MCP tools, then award over the REST action (player by call sign).
-    let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
-    let scall = |name: &str, args: Value| {
-        let mut p = CallToolRequestParams::new(name.to_string());
-        p.arguments = args.as_object().cloned();
-        sysop.peer().call_tool_once(p)
-    };
     let (ok, t) = text(
         &scall(
             "sysop_action",

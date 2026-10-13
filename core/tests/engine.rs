@@ -8636,6 +8636,69 @@ mod improve_board {
         assert!(r.hint.as_deref().unwrap().contains("rename is mandatory"), "{r}");
         assert_eq!(r.hint.as_deref(), Some(af_core::identity::missing_hint(&s.w, a)));
     }
+
+    // The sysop state's `improve` block: the console's alerts and badge read it without the board.
+    #[test]
+    fn sysop_state_summarises_the_board_for_the_alerts() {
+        let mut s = Sim::new(69, 60);
+        let a = s.join("Alder");
+        let b = s.join("Birch");
+        on(&mut s);
+        let st = |s: &Sim| af_core::spectator::state(&s.w)["improve"].clone();
+        let empty = st(&s);
+        assert_eq!(empty["enabled"], true);
+        assert_eq!((empty["proposed"].as_u64(), empty["review"].as_u64()), (Some(0), Some(0)));
+        assert_eq!(empty["proposals_max_id"], 0);
+        assert_eq!(empty["patch_revs"], 0);
+        assert_eq!(empty["review_ids"], json!([]));
+        let first = submit(&mut s, a, "First");
+        let second = submit(&mut s, a, "Second");
+        let backlog = post(&mut s, "Backlog");
+        let v = st(&s);
+        assert_eq!(v["proposed"], 2);
+        assert_eq!(v["accepted"], 1);
+        assert_eq!(v["proposals_max_id"], second, "the operator's post is not a proposal");
+        assert_eq!(v["operator_ops"]["used"], 1, "the post counts as an operator op");
+        // A patch puts the item in review and moves the signature.
+        s.run(Actor::Player(b), imp(json!({"action":"claim","id":backlog}))).unwrap();
+        patch(&mut s, b, backlog).unwrap();
+        let v = st(&s);
+        assert_eq!(v["review_ids"], json!([backlog]));
+        assert_eq!(v["patch_revs"], 1);
+        assert_eq!(v["flagged_in_review"], json!([]));
+        // A revision that touches AGENTS.md is flagged; the signature moves again.
+        s.run(
+            Actor::Player(b),
+            imp(json!({"action":"patch","id":backlog,"diff":diff_for("AGENTS.md"),"base":BASE})),
+        )
+        .unwrap();
+        let v = st(&s);
+        assert_eq!(v["flagged_in_review"], json!([backlog]));
+        assert_eq!(v["patch_revs"], 2);
+        assert_eq!(v, improve::operator_view(&s.w, None, None)["summary"], "one summary for both");
+        // Returned: out of review, the signature stays (an acknowledgement still holds).
+        s.run(
+            Actor::System,
+            op(json!({"decision":"return","id":backlog,"note":"Smaller, please."})),
+        )
+        .unwrap();
+        let v = st(&s);
+        assert_eq!(v["review_ids"], json!([]));
+        assert_eq!(v["flagged_in_review"], json!([]));
+        assert_eq!(v["patch_revs"], 2);
+        // Deciding the newest proposal while an older one waits leaves the signature alone, so an
+        // acknowledgement holds; only a new proposal moves it.
+        s.run(Actor::System, op(json!({"decision":"decline","id":second,"note":"Duplicate."})))
+            .unwrap();
+        let v = st(&s);
+        assert_eq!((v["proposed"].as_u64(), v["proposals_max_id"].as_u64()), (Some(1), Some(second)));
+        s.run(Actor::System, op(json!({"decision":"accept","id":first}))).unwrap();
+        let v = st(&s);
+        assert_eq!((v["proposed"].as_u64(), v["proposals_max_id"].as_u64()), (Some(0), Some(second)));
+        assert_eq!(v["declined"], 1);
+        assert_eq!(st(&s), v, "a read changes nothing");
+        replays(&s);
+    }
 }
 
 // 11. The Big Bang carries every PlayerStats field into the career totals (engine 1.55).
