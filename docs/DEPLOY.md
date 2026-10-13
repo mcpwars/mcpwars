@@ -8,7 +8,7 @@ out. In production the journal lives in **Render Postgres**. The `render.yaml` b
 repo describes everything:
 
 - **Web service `mcpwars`.** A Docker image, always on, one instance, in Virginia, with a
-  `/healthz` health check. Auto-deploy is off (2026-10-12): the owner deploys by hand from the Render dashboard. TLS and
+  `/healthz` health check. It deploys the `production` branch once the CI check `gate` passes. TLS and
   the custom domain are handled by Render.
 - **Database `mcpwars-db`.** Postgres 17 on a starter plan, with point-in-time recovery,
   autoscaling storage, and no public access. The service reaches it over Render's private network.
@@ -55,8 +55,9 @@ at 503 and take over the universe on each restart.
 ### 1. The code on GitHub
 
 The code lives in the public repository `mcpwars/mcpwars`, in the `mcpwars` GitHub organization
-(owned by the Custos account). Render's GitHub app is installed on that organization. Auto-deploy is
-off: `main` changes only through pull requests (rebase merge), and the owner deploys by hand.
+(owned by the Custos account). Render's GitHub app is installed on that organization. `main`
+changes only through pull requests (rebase merge) and never deploys; production deploys the
+`production` branch, which only the owner pushes, after `gate` passes.
 
 ### 2. The Blueprint on Render
 
@@ -166,8 +167,8 @@ and use the **External** connection string from the database page.
 
 | Task | How |
 |---|---|
-| Change a setting in `render.yaml` | Merge it through a pull request. The Blueprint's auto-sync is paused, so the owner applies it with a manual Blueprint sync |
-| Deploy a new version | The owner merges the pull request, then deploys from the Render dashboard (Manual Deploy). Render builds, hands over, and switches traffic (agents retry for about 15 to 20 seconds; pages stay up) |
+| Change a setting in `render.yaml` | Merge it through a pull request; it takes effect when the owner releases a commit that carries it (the Blueprint syncs from `production`) |
+| Deploy a new version | The owner merges the pull request, then releases it: `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production` (the pre-push hook refuses a production push without it). Render deploys once `gate` passes on that commit. Render builds, hands over, and switches traffic (agents retry for about 15 to 20 seconds; pages stay up) |
 | Check a change before it ships | Open a pull request: the GitHub Actions job `gate` (`.github/workflows/ci.yml`) runs `scripts/ci.sh` and the store tests on Postgres 17 for every pull request and every push to `main` or `production`. It has no secrets and a read-only token, because pull requests run untrusted code |
 | Roll back | Roll forward only: back out a bad change with a new commit and deploy it. A build with an older engine refuses the universe (`NewerEngine`) and exits without asking the running server to hand over; a build from before that refusal (schema 1) exits on the schema fence (`NewerFile`) after it has asked, so the game is down until Render restarts the released server (about a minute). Render's **Rollback** is safe only to a deploy with the same engine version and storage schema; prefer a fix |
 | Watch logs | **mcpwars**, then **Logs** (or the Render CLI: `render logs`) |

@@ -12,7 +12,9 @@ services:
     numInstances: 1
     healthCheckPath: /healthz
     maxShutdownDelaySeconds: 60
-    autoDeployTrigger: "off"
+    # Releases: the owner pushes the `production` branch; Render deploys it once CI (`gate`) passes.
+    branch: production
+    autoDeployTrigger: checksPass
     # Render adds www.mcpwars.com automatically and redirects it to the apex.
     domains:
       - mcpwars.com

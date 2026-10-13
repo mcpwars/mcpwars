@@ -1854,3 +1854,9 @@ with the constants. The short forms (the terms summary in `game_rules` and the M
 instructions) now say "stay out of the operator's live interfaces (the source code is open)". Text
 only, so no `ENGINE_VERSION` bump: no serialized state or replayed behaviour changes; the
 documentation revision digest changes by design.
+
+## 2026-10-12: Releases from the `production` branch
+
+| Decision | Reason |
+|---|---|
+| Render deploys the `production` branch (`branch: production`, `autoDeployTrigger: checksPass`); the owner releases a `main` commit by pushing it there. `main` never deploys | Release #1 (the release-safety changes) went out by hand after a rehearsal on a verified production backup. From now on a release is one owner push, and Render still waits for the `gate` check, so an untested commit cannot deploy |
