@@ -260,6 +260,19 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
                 ));
             }
         }
+        // Engine 1.55: every imported note and version within the same bounds as a direct write.
+        for (k, text) in &notes {
+            crate::bounds::check_text(&format!("note '{k}'"), text, crate::bounds::NOTE_MAX_BYTES)?;
+        }
+        for (k, r) in &records {
+            for v in &r.versions {
+                crate::bounds::check_value(
+                    &format!("record '{k}' revision {}", v.revision),
+                    &v.data,
+                    crate::bounds::MEMORY_VALUE_MAX_BYTES,
+                )?;
+            }
+        }
         for (k, r) in &records {
             let floor = ctx.w.players[&pid].memory_revisions.get(k).copied().unwrap_or(0).max(
                 ctx.w.players[&pid]
@@ -346,11 +359,14 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     // (engine 1.53), so the sender can fix the text.
     let mut not_json = None;
     if let Some(text) = data.as_str().filter(|s| s.trim_start().starts_with(['{', '['])) {
+        // Engine 1.55: measured before parsing, so a deep text is refused, never stored as text.
+        crate::bounds::check_text_depth("data", text)?;
         match serde_json::from_str::<Value>(text) {
             Ok(parsed) => data = parsed,
             Err(e) => not_json = Some(format!("data is a string that is not valid JSON ({e})")),
         }
     }
+    crate::bounds::check_depth("data", &data)?;
     if a.action == Action::Patch && !data.is_object() {
         let why = not_json.as_deref().unwrap_or("data is not a JSON object");
         return Err(Refusal::new(
@@ -393,6 +409,8 @@ pub fn write(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
         )
         .checked_add(1)
         .ok_or_else(|| Refusal::new("limit_reached", "Revision limit reached."))?;
+    // Engine 1.55: the value as it will be stored (after a patch or append) stays within bounds.
+    crate::bounds::check_value("data", &data, crate::bounds::MEMORY_VALUE_MAX_BYTES)?;
     let v = Version {
         revision: next_revision,
         tick: ctx.w.tick,

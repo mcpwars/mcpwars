@@ -1,7 +1,11 @@
 //! Deeply nested captain data survives every stored-state read: snapshot, boot (`load_world`),
-//! `world_for_report`, `adopt_universe`, replay from the base and `verify`. A memory value at
-//! depth 120 to 128, or a market claim at 124, is accepted at intake, but once it is wrapped in
-//! the world or a journal entry it sits deeper than serde_json's default limit of 128.
+//! `world_for_report`, `adopt_universe`, replay from the base and `verify`. Before engine 1.55 a
+//! memory value at depth 120 to 128, or a market claim at 124, was accepted at intake, and once it
+//! is wrapped in the world or a journal entry it sits deeper than serde_json's default limit of
+//! 128. Since 1.55 the engine refuses such values when they are written (`af_core::bounds`), so
+//! these tests write that history the way the older engine accepted it: the journal entry as sent
+//! and the world changed as it was then. Those entries precede the base a new engine adopts, so
+//! they are read (journal pages, the private backfill) but never replayed.
 //! Runs on the embedded file always, and on Postgres when `AF_TEST_POSTGRES_URL` is set.
 
 use af_core::cmd::*;
@@ -85,8 +89,47 @@ fn memory_save(key: &str, data: Value) -> Command {
     })
 }
 
+/// Append one entry the way an engine before 1.55 accepted it: `effect` changes the world as
+/// that engine did (the current engine refuses the command), with its private rows.
+fn run_old(store: &Store, w: &mut World, actor: Actor, cmd: Command, effect: impl FnOnce(&mut World)) {
+    let e = Entry {
+        seq: w.seq + 1,
+        at_ms: (w.seq + 1) * 10,
+        actor,
+        cmd,
+    };
+    let before = Capture::before(w, &e);
+    w.seq = e.seq;
+    w.now_ms = e.at_ms;
+    effect(w);
+    let rows = before.after(w, &e).unwrap();
+    store.append_with_private(&e, Some(&w.state_hash()), &rows).unwrap();
+}
+
+/// A memory save as an engine before 1.55 stored it (first revision of a new key).
+fn old_save(store: &Store, w: &mut World, pid: PlayerId, key: &str, sent: Value, stored: Value) {
+    let key = key.to_string();
+    run_old(store, w, Actor::Player(pid), memory_save(&key, sent), move |w| {
+        let tick = w.tick;
+        let p = w.players.get_mut(&pid).unwrap();
+        p.memory_revisions.insert(key.clone(), 1);
+        p.memory.insert(
+            key,
+            af_core::memory::Record {
+                versions: vec![af_core::memory::Version {
+                    revision: 1,
+                    tick,
+                    expires_tick: None,
+                    data: stored,
+                }],
+            },
+        );
+    });
+}
+
 /// Register a captain, store memory values 120 to 128 levels deep (one as a JSON string, the
-/// way some clients send it), fly to the nearest port and publish a market claim 124 deep.
+/// way some clients send it), fly to the nearest port and publish a market claim 124 deep: the
+/// deep writes as an engine before 1.55 accepted them.
 fn play_deep(store: &Store, w: &mut World) -> PlayerId {
     assert!(run(
         store,
@@ -104,12 +147,16 @@ fn play_deep(store: &Store, w: &mut World) -> PlayerId {
         }),
     ));
     let pid = w.players.values().find(|p| p.npc.is_none()).unwrap().id;
+    // The current engine refuses these, and nothing is written.
+    let seq = w.seq;
+    assert!(!run(store, w, Actor::Player(pid), memory_save("deep120", nested(120))));
+    assert_eq!(w.seq, seq);
     for d in 120..=128 {
-        assert!(run(store, w, Actor::Player(pid), memory_save(&format!("deep{d}"), nested(d))));
+        old_save(store, w, pid, &format!("deep{d}"), nested(d), nested(d));
     }
-    // A string holding JSON is parsed into a value (127 levels is the parser's default limit).
+    // A string holding JSON was parsed into a value (127 levels is the parser's default limit).
     let text = serde_json::to_string(&nested(127)).unwrap();
-    assert!(run(store, w, Actor::Player(pid), memory_save("as_text", Value::String(text))));
+    old_save(store, w, pid, "as_text", Value::String(text), nested(127));
     assert!(w.players[&pid].memory["as_text"].versions[0].data.is_array());
     // Nearest port, by breadth-first search over the lanes.
     let start = w.players[&pid].sector;
@@ -151,7 +198,25 @@ fn play_deep(store: &Store, w: &mut World) -> PlayerId {
         after_id: None,
         limit: None,
     });
-    assert!(run(store, w, Actor::Player(pid), report));
+    run_old(store, w, Actor::Player(pid), report, |w| {
+        let p = &w.players[&pid];
+        let port = w.sector(p.sector).unwrap().port.clone().unwrap();
+        let r = af_core::market_log::Report {
+            id: w.market_reports.last().map(|r| r.id + 1).unwrap_or(1),
+            tick: w.tick,
+            season: w.season.number,
+            epoch: w.archive.epoch,
+            captain: pid,
+            call_sign: p.name.clone(),
+            corp: None,
+            sector: p.sector,
+            observed_tick: w.tick,
+            prices: std::array::from_fn(|i| af_core::economy::quote(&w.rules, &port, i)),
+            code: port.code(),
+            claim: Some(nested(124)),
+        };
+        w.market_reports.push(r);
+    });
     assert!(run(store, w, Actor::System, Command::Tick));
     pid
 }
@@ -174,15 +239,18 @@ fn verify(loc: &str) -> String {
 fn deep_memory_and_claims_survive_snapshot_boot_replay_and_verify() {
     for loc in locations("boot") {
         let store = Store::open_location(&loc, Access::Writer).unwrap();
-        let mut w = store.init(&genesis(ENGINE_VERSION)).unwrap();
+        // The deep history was written by an older engine; this one adopts it at the head.
+        let mut w = store.init(&genesis("af-engine-1.54")).unwrap();
         let pid = play_deep(&store, &mut w);
         store.save_snapshot(&w).unwrap();
         // The snapshot really is deeper than serde_json's default limit.
         let raw = store.backend().debug_get(Table::Snapshots, w.seq).unwrap().unwrap();
         assert!(json_depth(&raw) > 128, "{}", json_depth(&raw));
         assert!(serde_json::from_slice::<Value>(&raw).is_err(), "the default limit would refuse it");
+        let base = store.adopt_universe().unwrap();
+        assert_eq!((base.seq, base.engine.as_str()), (w.seq, ENGINE_VERSION));
         // A few entries after the snapshot are replayed on boot.
-        assert!(run(&store, &mut w, Actor::Player(pid), memory_save("after", nested(126))));
+        assert!(run(&store, &mut w, Actor::Player(pid), memory_save("after", nested(32))));
         assert!(run(&store, &mut w, Actor::System, Command::Tick));
         let (loaded, replayed) = store.load_world().unwrap();
         assert_eq!(replayed, 2);
@@ -193,7 +261,8 @@ fn deep_memory_and_claims_survive_snapshot_boot_replay_and_verify() {
         let (report, exact) = store.world_for_report().unwrap();
         assert!(exact);
         assert_eq!(report.state_hash(), w.state_hash());
-        // Journal reads: typed entries and the reverse search pages.
+        // Journal reads, the older engine's deep entries included: typed entries and the
+        // reverse search pages.
         let entries = store.entries_after(0).unwrap();
         assert_eq!(entries.len() as u64, w.seq);
         let page = store.journal_page(None, 1_000).unwrap();
@@ -235,9 +304,12 @@ fn deep_state_is_adopted_by_a_new_engine_and_still_replays() {
         let (loaded, replayed) = store.load_world().unwrap();
         assert_eq!(replayed, 0);
         assert_eq!(loaded.state_hash(), w.state_hash());
-        // The adopted base world is the deep snapshot; play on and replay from it.
+        // The adopted base world is the deep snapshot; play on and replay from it. The new engine
+        // refuses a new value past its bound and keeps the old deep ones.
         let mut w2 = loaded;
-        assert!(run(&store, &mut w2, Actor::Player(pid), memory_save("later", nested(125))));
+        assert!(!run(&store, &mut w2, Actor::Player(pid), memory_save("later", nested(33))));
+        assert!(run(&store, &mut w2, Actor::Player(pid), memory_save("later", nested(32))));
+        assert_eq!(w2.players[&pid].memory["deep125"].versions[0].data, nested(125));
         assert_eq!(store.replay_from_base().unwrap().state_hash(), w2.state_hash());
         drop(store);
         verify(&loc);

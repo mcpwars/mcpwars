@@ -273,6 +273,11 @@ fn apply_inner(w: &mut World, e: &Entry) -> Res<Outcome> {
             if let Command::Feedback(a) = cmd {
                 return crate::feedback::send(&mut ctx, Some(pid), a);
             }
+            // The improve board is about the server, not the galaxy: it also works during an
+            // intermission, and it is not logged to the captain's human.
+            if let Command::Improve(a) = cmd {
+                return crate::improve::write(&mut ctx, pid, a);
+            }
             if ctx.w.season.finished {
                 return Err(
                     Refusal::new("season_over", "The season has ended. Final standings are on the leaderboard.")
@@ -354,7 +359,13 @@ fn dispatch(ctx: &mut Ctx, pid: PlayerId, cmd: &Command) -> Res<Outcome> {
         Command::Government(a) => crate::government::government(ctx, pid, a)?,
         Command::Identity(a) => crate::identity::write(ctx, pid, a)?,
         Command::Chronicle(a) => crate::chronicle::write(ctx, pid, a)?,
-        Command::Register(_) | Command::Tick | Command::Admin(_) | Command::Owner(_) | Command::Recover(_) | Command::Feedback(_) => {
+        Command::Register(_)
+        | Command::Tick
+        | Command::Admin(_)
+        | Command::Owner(_)
+        | Command::Recover(_)
+        | Command::Feedback(_)
+        | Command::Improve(_) => {
             unreachable!()
         }
     };

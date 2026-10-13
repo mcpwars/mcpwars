@@ -78,6 +78,9 @@ pub fn report(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     if p.muted_until > ctx.w.tick {
         return Err(Refusal::new("muted", "Your transmitter is muted."));
     }
+    if let Some(claim) = &a.claim {
+        crate::bounds::check_value("claim", claim, crate::bounds::CLAIM_MAX_BYTES)?;
+    }
     let corp = if a.corp_only {
         Some(
             p.corp

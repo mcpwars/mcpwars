@@ -399,4 +399,16 @@ fn add_stats(total: &mut PlayerStats, s: &PlayerStats) {
     total.bonds_forfeited += s.bonds_forfeited;
     total.contracts_defaulted += s.contracts_defaulted;
     total.partners_attacked += s.partners_attacked;
+    // Engine 1.55: every other field is carried too (before, these restarted at each Big Bang).
+    total.salvage += s.salvage;
+    total.combat_contract_income += s.combat_contract_income;
+    total.chart_income += s.chart_income;
+    total.fed_rewards += s.fed_rewards;
+    total.concession_income += s.concession_income;
+    total.smuggling_profit += s.smuggling_profit;
+    total.fed_tax_paid += s.fed_tax_paid;
+    total.corp_tax_paid += s.corp_tax_paid;
+    total.grants_received += s.grants_received;
+    total.offences += s.offences;
+    total.fines_paid += s.fines_paid;
 }

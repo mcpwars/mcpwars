@@ -377,6 +377,72 @@ pub struct Rules {
     /// Connected sectors the founding agenda's territory step needs.
     #[serde(default = "default_territory_founding_min")]
     pub territory_founding_min: usize,
+    // --- the improve board (engine 1.55) ---
+    // Every improve field is a live rule: tune it with a rules change (never AF_RULES_PATCH, which
+    // re-applies at every boot and would undo an off switch). "Per day" means the rolling
+    // `improve_window_ticks`.
+    /// The kill switch. Off in universes made before 1.55 and in new universes; the operator
+    /// switches it on (and off) with a rules change. While off, captains can still read the board.
+    #[serde(default)]
+    pub improve_enabled: bool,
+    /// The window every improve daily count uses, in ticks.
+    #[serde(default = "default_improve_window")]
+    pub improve_window_ticks: u64,
+    /// Items one captain may submit per window.
+    #[serde(default = "default_improve_submits")]
+    pub improve_submits_per_day: usize,
+    /// Items all captains together may submit per window.
+    #[serde(default = "default_improve_global_submits")]
+    pub improve_global_submits_per_day: usize,
+    /// Claims one captain may take per window (stops claim and release churn).
+    #[serde(default = "default_improve_claims_per_day")]
+    pub improve_claims_per_day: usize,
+    /// Active claims one captain may hold (items in review do not count).
+    #[serde(default = "default_one_usize")]
+    pub improve_claims_per_captain: usize,
+    /// Active claims all captains together may hold (items in review do not count).
+    #[serde(default = "default_improve_max_active_claims")]
+    pub improve_max_active_claims: usize,
+    /// How long a claim lasts, in ticks.
+    #[serde(default = "default_improve_claim_ticks")]
+    pub improve_claim_ticks: u64,
+    /// Patches one captain may send per window.
+    #[serde(default = "default_improve_patches")]
+    pub improve_patches_per_day: usize,
+    /// Patches all captains together may send per window.
+    #[serde(default = "default_improve_global_patches")]
+    pub improve_global_patches_per_day: usize,
+    /// Items that may wait in review at once; when full, a patch is refused.
+    #[serde(default = "default_improve_review_max")]
+    pub improve_review_max: usize,
+    /// Longest item text, in characters.
+    #[serde(default = "default_improve_text_max")]
+    pub improve_text_max: usize,
+    /// Longest patch or trail note, in characters.
+    #[serde(default = "default_improve_note_max")]
+    pub improve_note_max: usize,
+    /// Largest diff, in bytes.
+    #[serde(default = "default_improve_patch_max_bytes")]
+    pub improve_patch_max_bytes: usize,
+    /// Most files one diff may touch.
+    #[serde(default = "default_improve_patch_max_files")]
+    pub improve_patch_max_files: usize,
+    /// Steps one item's trail may hold; after that only decline or ship.
+    #[serde(default = "default_improve_trail_max")]
+    pub improve_trail_max: usize,
+    /// Operator decisions that count against a shared daily cap (accept, post, promote_feedback,
+    /// assign and return), per window.
+    #[serde(default = "default_improve_operator_ops")]
+    pub improve_operator_ops_per_day: usize,
+    /// Most Influence one award may give.
+    #[serde(default = "default_improve_award_max")]
+    pub improve_award_max: i64,
+    /// Influence all awards together may give per window.
+    #[serde(default = "default_improve_award_budget")]
+    pub improve_award_budget_per_day: i64,
+    /// Items the board may hold in all (items are never deleted).
+    #[serde(default = "default_improve_items_max")]
+    pub improve_items_max: usize,
     // --- catalogs ---
     pub ships: Vec<ShipSpec>,
     pub planets: Vec<PlanetSpec>,
@@ -457,6 +523,63 @@ fn default_territory_depot_markup_bp() -> i64 {
 }
 fn default_territory_founding_min() -> usize {
     3
+}
+fn default_improve_window() -> u64 {
+    1_440
+}
+fn default_improve_submits() -> usize {
+    3
+}
+fn default_improve_global_submits() -> usize {
+    40
+}
+fn default_improve_claims_per_day() -> usize {
+    6
+}
+fn default_one_usize() -> usize {
+    1
+}
+fn default_improve_max_active_claims() -> usize {
+    10
+}
+fn default_improve_claim_ticks() -> u64 {
+    240
+}
+fn default_improve_patches() -> usize {
+    3
+}
+fn default_improve_global_patches() -> usize {
+    20
+}
+fn default_improve_review_max() -> usize {
+    20
+}
+fn default_improve_text_max() -> usize {
+    4_000
+}
+fn default_improve_note_max() -> usize {
+    1_000
+}
+fn default_improve_patch_max_bytes() -> usize {
+    16_384
+}
+fn default_improve_patch_max_files() -> usize {
+    8
+}
+fn default_improve_trail_max() -> usize {
+    50
+}
+fn default_improve_operator_ops() -> usize {
+    40
+}
+fn default_improve_award_max() -> i64 {
+    2_000
+}
+fn default_improve_award_budget() -> i64 {
+    10_000
+}
+fn default_improve_items_max() -> usize {
+    2_000
 }
 fn default_concession_yield() -> i64 {
     25_000
@@ -780,6 +903,26 @@ impl Default for Rules {
             territory_depot_citadel: default_territory_depot_citadel(),
             territory_depot_markup_bp: default_territory_depot_markup_bp(),
             territory_founding_min: default_territory_founding_min(),
+            improve_enabled: false,
+            improve_window_ticks: default_improve_window(),
+            improve_submits_per_day: default_improve_submits(),
+            improve_global_submits_per_day: default_improve_global_submits(),
+            improve_claims_per_day: default_improve_claims_per_day(),
+            improve_claims_per_captain: default_one_usize(),
+            improve_max_active_claims: default_improve_max_active_claims(),
+            improve_claim_ticks: default_improve_claim_ticks(),
+            improve_patches_per_day: default_improve_patches(),
+            improve_global_patches_per_day: default_improve_global_patches(),
+            improve_review_max: default_improve_review_max(),
+            improve_text_max: default_improve_text_max(),
+            improve_note_max: default_improve_note_max(),
+            improve_patch_max_bytes: default_improve_patch_max_bytes(),
+            improve_patch_max_files: default_improve_patch_max_files(),
+            improve_trail_max: default_improve_trail_max(),
+            improve_operator_ops_per_day: default_improve_operator_ops(),
+            improve_award_max: default_improve_award_max(),
+            improve_award_budget_per_day: default_improve_award_budget(),
+            improve_items_max: default_improve_items_max(),
             // Cost, holds start/max, fighters, shields, turns per warp (= warp AP), odds.
             ships: vec![
                 ship(

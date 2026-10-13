@@ -203,6 +203,22 @@ pub fn note(ctx: &mut Ctx, pid: PlayerId, a: &NoteArgs) -> Res<Outcome> {
         return Err(Refusal::new("invalid_args", "value is empty: the note text goes in `value`.")
             .hint("Call write_note again with key and value (your full Markdown text). Nothing was saved."));
     }
+    // Engine 1.55: the note as it will be stored (after an append) stays within the byte cap.
+    let stored = match mode {
+        NoteMode::Replace => a.value.len(),
+        NoteMode::Append => p.notes.get(&key).map_or(0, |e| e.len() + usize::from(!e.is_empty())) + a.value.len(),
+        NoteMode::Delete | NoteMode::Archive => 0,
+    };
+    if stored > crate::bounds::NOTE_MAX_BYTES {
+        return Err(Refusal::new(
+            "too_large",
+            format!(
+                "Note '{key}' would be {stored} bytes; at most {}. Nothing was saved.",
+                crate::bounds::NOTE_MAX_BYTES
+            ),
+        )
+        .hint("Split it across several notes, or keep a shorter summary."));
+    }
     let pm = ctx.player_mut(pid);
     let summary = match mode {
         NoteMode::Delete | NoteMode::Archive => {

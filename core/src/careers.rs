@@ -173,6 +173,9 @@ pub fn scores(w: &World, p: &Player) -> [(ScoreTrack, i64); 4] {
         .count() as i64;
     influence += 3_000 * personal;
     influence += crate::chronicle::influence(w, p.id);
+    // Awards for improvements that shipped this season (engine 1.55): Influence only, from the
+    // permanent award ledger, before the Diplomat multiplier like the Chronicle.
+    influence += crate::improve::influence(w, p.id);
     if p.profession == Some(Career::Diplomat) {
         influence = influence * 3 / 2;
     }

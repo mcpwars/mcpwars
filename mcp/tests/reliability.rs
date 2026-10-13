@@ -267,13 +267,23 @@ async fn arguments_deeper_than_the_cap_are_refused_before_the_journal() {
     assert_eq!(tools::json_depth(&nest(40)), 40);
     let game = Game::spawn(generate(&GenesisConfig::new(17, 60)), None);
     let (a, _) = game.register("Deep Thinker", Some("test".into()), PlayerKind::Human).await.unwrap();
-    // The arguments object is one level, so data of 39 levels makes 40 in all.
-    let ok = json!({"action":"save", "key":"deep", "expected_revision":0, "data": nest(39)});
+    // The arguments object is one level, so a field of 39 levels makes 40 in all: past the
+    // intake. (The stored value itself is bounded lower, by the engine: see below.)
+    let ok = json!({"action":"save", "key":"deep", "expected_revision":0, "data": {"a": 1}, "extra": nest(39)});
     assert_eq!(tools::json_depth(&ok), tools::MAX_ARG_DEPTH);
     let before = last_seq(&game);
     let reply = tools::call(&game, a, "memory", &ok).await;
     assert!(reply.ok, "{}", reply.text);
     assert_ne!(last_seq(&game), before);
+
+    // Engine 1.55: a value deeper than the engine's bound passes the intake but is refused by
+    // the engine, and nothing is journaled.
+    let engine = json!({"action":"save", "key":"engine", "expected_revision":0, "data": nest(af_core::bounds::MAX_JSON_DEPTH + 1)});
+    let before = last_seq(&game);
+    let reply = tools::call(&game, a, "memory", &engine).await;
+    assert!(!reply.ok);
+    assert_eq!(reply.data["error"]["code"], "too_deep", "{}", reply.text);
+    assert_eq!(last_seq(&game), before);
 
     let deep = json!({"action":"save", "key":"deeper", "expected_revision":0, "data": nest(40)});
     assert_eq!(tools::json_depth(&deep), tools::MAX_ARG_DEPTH + 1);
