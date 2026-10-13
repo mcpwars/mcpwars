@@ -1991,3 +1991,19 @@ Vuori); the operator added the tests, the default reply and the validation below
 | A charted toll the ship will pay (doctrine `pay_tolls` on, charted toll within `max_toll`) is not a hazard for the loop's planning or its legs; between equally short routes the one with fewer such tolls wins | Review fix: paying a toll charts it, so with tolls as hazards the inbound leg re-planned around a toll the outbound leg had just paid, flying a longer route than the AP preflight covered or stranding the ship at `sell_at` (`max_toll` covered one crossing per command). `path::plot_within` and `nav::autopilot_within` take the allowance; with 0 (every other caller) they plan exactly as before, since all costs are scaled by one factor and the toll tie-break only applies to tolls above 0 |
 | `avoid_sectors` longer than the galaxy's sector count is refused (`invalid_args`) | Review fix: the list is journaled and the HTTP body is not size-limited, so it needs a bound; more entries than sectors is always a mistake. `autopilot_travel` and `plot_course` keep their unbounded lists, since a new refusal there could change the replay of existing journals |
 | Engine 1.56; the catalog budget rises to 59,416 bytes (about 360 bytes of schema) | A journaled command's arguments and semantics changed |
+
+## 2026-10-13: trade_loop keeps credits for the tolls it plans to pay (engine 1.57)
+
+A known gap in 1.56: with `max_toll` set the loop planned through charted tolls it would pay but
+reserved no credits for them, so a lap that spent nearly everything on cargo could be turned back
+at a toll mid-leg (`combat.rs` pays only when `credits >= toll`), leaving unsold cargo away from a port.
+
+| Decision | Reason |
+|---|---|
+| Each lap, after planning both legs, sums the charted toll of every sector the legs enter after their start that `knowledge::known_payable_toll` says the ship pays (the planner's own predicate), a sector crossed on both legs counted twice | The same allowance decides the route, so the reserve covers exactly the tolls the plan accepts |
+| The purchase is capped (`economy::max_affordable` on credits minus the reserve) only when the full purchase would leave less than the reserve; if not one unit fits, the lap stops before any change with a stop reason naming the reserve | A smaller cargo that finishes the lap beats a full one stranded; stopping before buying keeps the "a stopped lap changes nothing" promise |
+| The profit check becomes observed bid x units > purchase cost + reserve: a lap whose margin (on the cargo it would actually buy, after any cap) cannot cover the charted tolls it pays stops before buying, with a stop reason naming the tolls | Stopping beats a smaller cargo, or any cargo, when the lap loses money to its tolls: every lap would only drain credits. With the reserve at 0 this is the 1.55 check unchanged |
+| Both legs are reserved, though inbound tolls are paid after the sale | The sale price is the observed one and may have moved; reserving both keeps the lap safe without trusting it. Purchases are untaxed and the sale tax comes out of its own proceeds, so nothing else is reserved |
+| A toll that is not charted, or charted lower than it now is, is not reserved: met in flight it still turns the ship back and the loop stops honestly | It cannot be known before the purchase; the field doc says so |
+| With `max_toll` omitted (allowance 0) the reserve is 0 and nothing changes: same purchases, replies and world hashes as 1.56. A call naming `max_toll` gains `policy.toll_reserve`: the current lap's reserve, computed as soon as the lap is planned (before the hazard, AP and profit checks), so it also explains a lap that stopped | Old journals replay identically; the field shows why a purchase was smaller or why the loop stopped |
+| Engine 1.57; the `max_toll` description grows, the catalog (59,413 bytes) stays inside the 59,416 budget | A journaled command's semantics changed |

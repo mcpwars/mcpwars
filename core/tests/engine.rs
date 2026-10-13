@@ -7160,15 +7160,17 @@ fn trade_loop_max_toll_pays_up_to_the_cap_and_restores_doctrine() {
     }
 }
 
-/// A 100-credit toll at sector 4, on the short way both ways, from a hostile stack. `charted`
+/// A `toll`-credit toll at sector 4, on the short way both ways, from a hostile stack. `charted`
 /// says whether the captain's chart already shows it; otherwise the first crossing charts it.
-fn toll_at_4_world(seed: u64, charted: bool) -> (Sim, PlayerId) {
+/// Fuel ore sells at 2 for less than 3 pays, so a lap earns a little per unit: a lap with a
+/// 100-credit toll each way cannot cover it (stops before buying in 1.57), a small toll can.
+fn toll_at_4_world(seed: u64, charted: bool, toll: i64) -> (Sim, PlayerId) {
     let (mut s, a) = avoid_loop_world(seed);
     s.w.players.get_mut(&a).unwrap().credits = 100_000;
     s.w.players.get_mut(&a).unwrap().aggressor = true;
     let enemy = s.join("Toll Keeper");
     let mut stack = FighterStack::new(enemy, 100, FighterMode::Toll);
-    stack.toll_price = Some(100);
+    stack.toll_price = Some(toll);
     s.w.sector_mut(4).unwrap().fighters = Some(stack);
     s.w.sector_mut(4).unwrap().fedspace = false;
     if charted {
@@ -7177,10 +7179,30 @@ fn toll_at_4_world(seed: u64, charted: bool) -> (Sim, PlayerId) {
     (s, a)
 }
 
+/// The toll the captain's chart shows at sector 4, which the reserve counts once per crossing.
+fn charted_toll_at_4(w: &World, a: PlayerId) -> i64 {
+    af_core::knowledge::merged(w, a)[&4].toll.expect("the toll at 4 is charted")
+}
+
+/// Proceeds of every sale minus the cost of every purchase among a loop's steps.
+fn loop_trade_margin(reply: &serde_json::Value) -> i64 {
+    reply["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|st| {
+            let t = &st["trade"];
+            let total = t["total_credits"].as_i64()?;
+            Some(if t["action"] == "sell" { total } else { -total })
+        })
+        .sum()
+}
+
 #[test]
 fn trade_loop_paid_toll_on_the_way_does_not_divert_or_strand_later_legs() {
     for charted in [false, true] {
-        let (mut s, a) = toll_at_4_world(890, charted);
+        // A 10-credit toll and ten units a lap: the margin covers both crossings, so both laps run.
+        let (mut s, a) = toll_at_4_world(890, charted, 10);
         // AP for exactly two laps of the short way (2-4-3-4-2): the preflight's plan, nothing spare.
         let warp_ap = s.w.rules.ship(s.p(a).ship.class).warp_ap;
         let lap = 4 * warp_ap + 2 * s.w.rules.ap_trade;
@@ -7188,12 +7210,18 @@ fn trade_loop_paid_toll_on_the_way_does_not_divert_or_strand_later_legs() {
         let snapshot = s.w.clone();
         let journal_start = s.journal.len();
         let mut args = avoid_loop_args(2);
+        args.quantity = Some(10);
         args.max_toll = Some(100);
         let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
         assert_eq!(out.reply["completed_laps"], 2, "charted {charted}: {}", out.reply);
         assert_eq!(out.reply["sector"], 2);
         assert_eq!(out.reply["ap_spent"], 2 * lap);
-        assert_eq!(s.p(a).stats.tolls_paid, 400, "four crossings of sector 4");
+        assert_eq!(out.reply["units_sold"], out.reply["units_bought"]);
+        assert_eq!(out.reply["cargo_remaining"], 0);
+        // Charted by now either way (paying charts it); the last lap reserved both crossings.
+        let toll = charted_toll_at_4(&s.w, a);
+        assert_eq!(out.reply["policy"]["toll_reserve"], 2 * toll);
+        assert_eq!(s.p(a).stats.tolls_paid, 4 * toll, "four crossings of sector 4");
         let taken = loop_sectors_taken(&out.reply);
         assert!(!taken.contains(&5) && !taken.contains(&6), "diverted: {taken:?}");
         assert_eq!(out.reply["policy"]["planned_inbound"], serde_json::json!([3, 4, 2]));
@@ -7206,17 +7234,18 @@ fn trade_loop_paid_toll_on_the_way_does_not_divert_or_strand_later_legs() {
     // Below the cap, or with paying tolls switched off in the doctrine, the charted toll is still a
     // hazard: the lap is planned the long way round and never pays.
     for (cap, pay) in [(Some(99), true), (Some(100), false)] {
-        let (mut s, a) = toll_at_4_world(891, true);
+        let (mut s, a) = toll_at_4_world(891, true, 100);
         s.w.players.get_mut(&a).unwrap().doctrine.pay_tolls = pay;
         let mut args = avoid_loop_args(1);
         args.max_toll = cap;
         let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
         assert_eq!(out.reply["completed_laps"], 1, "{}", out.reply);
         assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::json!([2, 5, 6, 3]));
+        assert_eq!(out.reply["policy"]["toll_reserve"], 0);
         assert_eq!(s.p(a).stats.tolls_paid, 0);
     }
     // Between equally short routes, the one without a toll wins.
-    let (mut s, a) = toll_at_4_world(892, true);
+    let (mut s, a) = toll_at_4_world(892, true, 100);
     s.w.sector_mut(2).unwrap().warps = vec![4, 5, 7];
     s.w.sector_mut(3).unwrap().warps = vec![4, 6, 7];
     let seven = s.w.sector_mut(7).unwrap();
@@ -7232,6 +7261,194 @@ fn trade_loop_paid_toll_on_the_way_does_not_divert_or_strand_later_legs() {
     assert_eq!(out.reply["completed_laps"], 1, "{}", out.reply);
     assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::json!([2, 7, 3]));
     assert_eq!(s.p(a).stats.tolls_paid, 0);
+}
+
+// ---------------------------------------------------------------- trade_loop toll reserve (engine 1.57)
+// With max_toll set, a lap keeps back from its purchase the charted tolls its planned legs pay,
+// and stops before buying when its margin cannot cover them.
+
+/// What `n` units of fuel ore cost the captain at sector 2 right now.
+fn loop_ask(w: &World, a: PlayerId, n: i64) -> i64 {
+    let port = w.sector(2).unwrap().port.as_ref().unwrap();
+    let discount = af_core::economy::exp_discount(&w.rules, w.players[&a].experience);
+    af_core::economy::total_ask(&w.rules, port, 0, n, discount)
+}
+
+#[test]
+fn trade_loop_keeps_credits_for_the_charted_tolls_it_plans_to_pay() {
+    // Exactly enough for ten units plus both crossings of the 20-credit toll at 4. The first lap
+    // buys all ten and is left holding exactly the reserve; ten units earn more than the reserve,
+    // so the second lap buys again. Two full laps.
+    let (mut s, a) = toll_at_4_world(894, true, 20);
+    let reserve = 2 * charted_toll_at_4(&s.w, a);
+    let cost = loop_ask(&s.w, a, 10);
+    s.w.players.get_mut(&a).unwrap().credits = cost + reserve;
+    let snapshot = s.w.clone();
+    let journal_start = s.journal.len();
+    let mut args = avoid_loop_args(2);
+    args.quantity = Some(10);
+    args.max_toll = Some(100);
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args.clone())).unwrap();
+    assert_eq!(out.reply["completed_laps"], 2, "{}", out.reply);
+    assert_eq!(out.reply["steps"][0]["trade"]["filled"], 10, "the first purchase is not reduced");
+    assert_eq!(out.reply["steps"][0]["you"]["credits"], reserve, "exactly the reserve is kept");
+    assert_eq!(out.reply["units_sold"], out.reply["units_bought"]);
+    assert_eq!(out.reply["cargo_remaining"], 0);
+    assert_eq!(out.reply["sector"], 2);
+    assert_eq!(out.reply["policy"]["toll_reserve"], reserve);
+    assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::json!([2, 4, 3]));
+    assert_eq!(s.p(a).stats.tolls_paid, 2 * reserve, "two laps, two crossings each");
+    let mut replay = snapshot;
+    for e in &s.journal[journal_start..] {
+        apply(&mut replay, e).unwrap();
+    }
+    assert_eq!(replay.state_hash(), s.w.state_hash());
+
+    // Ten credits short of the outbound toll after a full purchase: 1.56 bought ten units and was
+    // turned back at 4 with them. Now the purchase shrinks so the reserve stays, the smaller
+    // cargo's margin still covers the tolls, and the lap completes without being turned back.
+    let (mut s, a) = toll_at_4_world(895, true, 20);
+    let toll = charted_toll_at_4(&s.w, a);
+    let reserve = 2 * toll;
+    let cost = loop_ask(&s.w, a, 10);
+    let credits = cost + toll - 10;
+    s.w.players.get_mut(&a).unwrap().credits = credits;
+    let snapshot = s.w.clone();
+    let journal_start = s.journal.len();
+    let mut args = avoid_loop_args(1);
+    args.quantity = Some(10);
+    args.max_toll = Some(100);
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+    assert_eq!(out.reply["completed_laps"], 1, "{}", out.reply);
+    let bought = out.reply["units_bought"].as_i64().unwrap();
+    assert!((1..10).contains(&bought), "reduced purchase: {}", out.reply);
+    // The most that fits beside the reserve, and no more.
+    assert!(loop_ask(&snapshot, a, bought) <= credits - reserve);
+    assert!(loop_ask(&snapshot, a, bought + 1) > credits - reserve);
+    assert!(
+        loop_trade_margin(&out.reply) > reserve,
+        "the reduced cargo covers the tolls: {}",
+        out.reply
+    );
+    assert_eq!(out.reply["cargo_remaining"], 0);
+    assert_eq!(out.reply["sector"], 2);
+    assert_eq!(out.reply["policy"]["toll_reserve"], reserve);
+    assert_eq!(s.p(a).stats.tolls_paid, reserve);
+    let turned_back = out.reply["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|st| st["log"].to_string().contains("Turned back"));
+    assert!(!turned_back, "{}", out.reply);
+    let mut replay = snapshot;
+    for e in &s.journal[journal_start..] {
+        apply(&mut replay, e).unwrap();
+    }
+    assert_eq!(replay.state_hash(), s.w.state_hash());
+
+    // Not even one unit fits beside the reserve: the lap stops before buying and changes nothing.
+    let (mut s, a) = toll_at_4_world(896, true, 20);
+    let reserve = 2 * charted_toll_at_4(&s.w, a);
+    let one = loop_ask(&s.w, a, 1);
+    s.w.players.get_mut(&a).unwrap().credits = one + reserve - 1;
+    let before = s.p(a).clone();
+    let mut args = avoid_loop_args(1);
+    args.max_toll = Some(100);
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+    let after = s.p(a);
+    assert_eq!(out.reply["completed_laps"], 0);
+    assert_eq!(out.reply["units_bought"], 0);
+    assert_eq!(out.reply["ap_spent"], 0);
+    assert_eq!(out.reply["steps"], serde_json::json!([]));
+    assert_eq!(out.reply["policy"]["toll_reserve"], reserve);
+    assert!(
+        out.reply["stop_reason"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("toll reserve of {reserve}")),
+        "{}",
+        out.reply
+    );
+    assert_eq!(
+        (after.credits, after.ap, after.sector, after.ship.cargo),
+        (before.credits, before.ap, before.sector, before.ship.cargo)
+    );
+}
+
+#[test]
+fn trade_loop_stops_before_buying_when_the_margin_cannot_cover_the_tolls() {
+    // A 100-credit toll each way on the short route, and ten units whose observed margin is less
+    // than the 200 credits of tolls the lap would pay: buying would lose money, so the lap stops
+    // before any change, though credits are ample.
+    let (mut s, a) = toll_at_4_world(898, true, 100);
+    let reserve = 2 * charted_toll_at_4(&s.w, a);
+    let mut args = avoid_loop_args(1);
+    args.quantity = Some(10);
+    args.max_toll = Some(100);
+    let chart = af_core::knowledge::merged(&s.w, a);
+    let observed_bid = chart[&3].port.as_ref().unwrap().prices[0];
+    let discount = af_core::economy::exp_discount(&s.w.rules, s.p(a).experience);
+    let margin = (observed_bid + discount) * 10 - loop_ask(&s.w, a, 10);
+    assert!(margin > 0 && margin <= reserve, "the setup: margin {margin}, reserve {reserve}");
+    let before = s.p(a).clone();
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args.clone())).unwrap();
+    let after = s.p(a);
+    assert_eq!(out.reply["completed_laps"], 0, "{}", out.reply);
+    assert_eq!(out.reply["units_bought"], 0);
+    assert_eq!(out.reply["ap_spent"], 0);
+    assert_eq!(out.reply["credit_change_after_tax"], 0);
+    assert_eq!(out.reply["steps"], serde_json::json!([]));
+    assert_eq!(out.reply["policy"]["toll_reserve"], reserve);
+    assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::json!([2, 4, 3]));
+    let reason = out.reply["stop_reason"].as_str().unwrap();
+    assert!(reason.contains(&format!("{reserve} credits of charted tolls")), "{}", out.reply);
+    assert_eq!(
+        (after.credits, after.ap, after.sector, after.ship.cargo),
+        (before.credits, before.ap, before.sector, before.ship.cargo)
+    );
+    assert_eq!(s.p(a).stats.tolls_paid, 0);
+
+    // The same world with max_toll unset: the toll is a hazard routed around, nothing is reserved,
+    // and the lap trades as before.
+    let snapshot = s.w.clone();
+    let journal_start = s.journal.len();
+    args.max_toll = None;
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+    assert_eq!(out.reply["completed_laps"], 1, "{}", out.reply);
+    assert_eq!(out.reply["units_bought"], 10);
+    assert_eq!(out.reply["units_sold"], 10);
+    assert_eq!(out.reply["sector"], 2);
+    assert!(out.reply["policy"].get("toll_reserve").is_none(), "{}", out.reply);
+    assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::json!([2, 5, 6, 3]));
+    assert_eq!(s.p(a).stats.tolls_paid, 0);
+    let mut replay = snapshot;
+    for e in &s.journal[journal_start..] {
+        apply(&mut replay, e).unwrap();
+    }
+    assert_eq!(replay.state_hash(), s.w.state_hash());
+}
+
+#[test]
+fn trade_loop_without_max_toll_reserves_nothing() {
+    // Unset, the allowance is 0: the charted toll is a hazard routed around, nothing is kept back
+    // and the reply has no toll_reserve, exactly as in 1.56.
+    let (mut s, a) = toll_at_4_world(897, true, 100);
+    let cost = loop_ask(&s.w, a, 10);
+    s.w.players.get_mut(&a).unwrap().credits = cost;
+    let snapshot = s.w.clone();
+    let journal_start = s.journal.len();
+    let mut args = avoid_loop_args(1);
+    args.quantity = Some(10);
+    let out = s.run(Actor::Player(a), Command::TradeLoop(args)).unwrap();
+    assert_eq!(out.reply["completed_laps"], 1, "{}", out.reply);
+    assert_eq!(out.reply["units_bought"], 10);
+    assert!(out.reply["policy"].get("toll_reserve").is_none(), "{}", out.reply);
+    assert_eq!(out.reply["policy"]["planned_outbound"], serde_json::json!([2, 5, 6, 3]));
+    let mut replay = snapshot;
+    for e in &s.journal[journal_start..] {
+        apply(&mut replay, e).unwrap();
+    }
+    assert_eq!(replay.state_hash(), s.w.state_hash());
 }
 
 #[test]
