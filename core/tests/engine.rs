@@ -1275,6 +1275,32 @@ fn fresh_captains_have_earned_nothing_and_upgrades_keep_holds() {
 }
 
 #[test]
+fn holds_hint_quotes_the_cost_of_filling_every_hold() {
+    let mut s = Sim::new(11, 120).without_founding();
+    let a = s.join("Ada");
+    assert_eq!(s.p(a).ship.holds, 20);
+    assert_eq!(s.w.rules.ship(ShipClass::MerchantCruiser).holds_max, 75);
+    let hint = query::hints(&s.w, a, true)
+        .into_iter()
+        .find(|h| h.contains("cargo holds"))
+        .expect("holds hint");
+    assert!(hint.contains("650"), "{hint}");
+    assert!(hint.contains("65450"), "{hint}");
+    sysop_set(&mut s, a, 400_000, 1);
+    let before = s.p(a).credits;
+    s.run(
+        Actor::Player(a),
+        Command::BuyEquipment(BuyEquipmentArgs {
+            item: EquipmentItem::Holds,
+            quantity: Some(55),
+        }),
+    )
+    .unwrap();
+    assert_eq!(s.p(a).ship.holds, 75);
+    assert_eq!(before - s.p(a).credits, 65450);
+}
+
+#[test]
 fn arming_ends_newbie_protection() {
     let mut s = Sim::new(12, 120);
     let a = s.join("Ada");
