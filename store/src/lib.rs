@@ -23,7 +23,10 @@
 //! Compatibility rules:
 //! * Stores without a schema version, or from a newer build, are refused before
 //!   any world is deserialized.
-//! * A universe recorded by a different engine version is refused by default.
+//! * A universe recorded by a newer engine version is always refused
+//!   (`NewerEngine`): an older build would silently drop the state it does not
+//!   know. Roll forward only.
+//! * A universe recorded by an older engine version is refused by default.
 //!   `adopt_universe` rebases it onto the current engine from a snapshot taken
 //!   at the head of the journal (old history is kept but no longer replayed).
 
@@ -55,11 +58,24 @@ const UNIVERSE_KEYS: [&str; 3] = ["genesis", "base", "base_world"];
 pub const CHECKPOINT_EVERY: u64 = 100;
 
 /// Storage layout version. Bump together with a new entry in `MIGRATIONS`.
-pub const SCHEMA_VERSION: u64 = 1;
+/// Version 2 is the engine fence: it changes no table, but every build made before
+/// the newer-engine refusal supports only version 1, so it refuses (`NewerFile`) a
+/// database that a fenced build has opened instead of silently rebasing it.
+pub const SCHEMA_VERSION: u64 = 2;
+
+/// The oldest schema a read-only connection opens without migrating (only a writer
+/// migrates). Schema 2 changed no table, so readers (verify, export, reports) still
+/// open a version 1 store. Raise it with any migration that changes a table.
+const READ_COMPATIBLE_FROM: u64 = 1;
 
 type Migration = fn(&dyn Backend) -> Result<()>;
 /// `MIGRATIONS[i]` upgrades a store from schema version `i + 1` to `i + 2`.
-const MIGRATIONS: &[Migration] = &[];
+const MIGRATIONS: &[Migration] = &[engine_fence];
+
+/// Schema 1 to 2: nothing to change. The new version number is the fence itself.
+fn engine_fence(_: &dyn Backend) -> Result<()> {
+    Ok(())
+}
 const _: () = assert!(SCHEMA_VERSION == 1 + MIGRATIONS.len() as u64, "one migration per schema bump");
 
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +96,10 @@ pub enum StoreError {
         "this universe was recorded by engine '{file}' but this binary is '{binary}'. Start the server with --adopt-universe to rebase it onto the new rules (needs a snapshot at the head of the journal: stop the old server gracefully first), or run the matching build"
     )]
     EngineMismatch { file: String, binary: String },
+    #[error(
+        "this universe was recorded by engine '{file}', newer than this binary ('{binary}'). An older build never opens or rebases a newer universe (it would drop the state the newer engine wrote): run a build at '{file}' or later (roll forward only)"
+    )]
+    NewerEngine { file: String, binary: String },
     #[error(
         "cannot adopt: the latest snapshot (seq {snapshot}) is not at the head of the journal (seq {head}); stop the old server gracefully so it writes one"
     )]
@@ -256,6 +276,9 @@ impl Store {
                 });
             }
             Some(v) if v < SCHEMA_VERSION => {
+                if !writer && v >= READ_COMPATIBLE_FROM {
+                    return Ok(Store { b, loc });
+                }
                 if !writer {
                     return Err(StoreError::Db(format!(
                         "schema version {v} needs migrating; open it as the writer first"
@@ -388,8 +411,10 @@ impl Store {
     }
 
     /// Engine version the replay base was recorded with (reads metadata only).
+    /// A newer engine is `NewerEngine`, any other difference `EngineMismatch`.
     pub fn check_engine(&self) -> Result<()> {
         let b = self.base()?;
+        refuse_newer_engine(&b.engine)?;
         if b.engine != ENGINE_VERSION {
             return Err(StoreError::EngineMismatch {
                 file: b.engine,
@@ -669,11 +694,13 @@ impl Store {
         Ok(w)
     }
 
-    /// Rebase a universe recorded by another engine version onto this one.
+    /// Rebase a universe recorded by an older engine version onto this one.
     /// Requires a snapshot at the head of the journal; the old journal is kept
     /// for the record but replay starts from that snapshot from now on.
+    /// A universe from a newer engine is refused (`NewerEngine`) before anything is written.
     pub fn adopt_universe(&self) -> Result<Base> {
         let old = self.base()?;
+        refuse_newer_engine(&old.engine)?;
         if old.engine == ENGINE_VERSION {
             return Ok(old);
         }
@@ -697,6 +724,72 @@ impl Store {
         ])?;
         Ok(base)
     }
+}
+
+/// The numbers of an engine version (`af-engine-1.41` is `[1, 41]`), or None when the
+/// text is not one (an empty or hand-written name). Compared numerically, never as text.
+pub fn engine_number(version: &str) -> Option<Vec<u64>> {
+    let rest = version.strip_prefix("af-engine-")?;
+    rest.split('.').map(|p| p.parse().ok()).collect()
+}
+
+/// True when engine version `a` is newer than `b`, comparing the numbers part by part
+/// (`af-engine-1.41` is newer than `af-engine-1.9`; a missing part counts as 0).
+/// A version that does not parse is never newer.
+pub fn engine_newer(a: &str, b: &str) -> bool {
+    let (Some(a), Some(b)) = (engine_number(a), engine_number(b)) else {
+        return false;
+    };
+    for i in 0..a.len().max(b.len()) {
+        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// Refuse a universe recorded by an engine newer than this binary.
+fn refuse_newer_engine(file: &str) -> Result<()> {
+    if engine_newer(file, ENGINE_VERSION) {
+        return Err(StoreError::NewerEngine {
+            file: file.into(),
+            binary: ENGINE_VERSION.into(),
+        });
+    }
+    Ok(())
+}
+
+/// Whether this build may take over the universe at `loc`, read from its metadata
+/// directly: no writer lock, no migration, no world deserialized. A starting server
+/// calls it before it asks a running writer to hand over, so an older build never
+/// makes a newer server let go of a universe it would then refuse to open.
+/// Refuses only a newer storage schema (`NewerFile`) or a newer engine (`NewerEngine`);
+/// an empty store, an older schema (the writer migrates it) and an older engine
+/// (`--adopt-universe`) pass. A file location that does not exist passes too.
+pub fn check_takeover(loc: &str) -> Result<()> {
+    let b: Box<dyn Backend> = if pg::is_postgres(loc) {
+        Box::new(PgBackend::open(loc, Access::Reader)?)
+    } else if Path::new(loc).exists() {
+        Box::new(RedbBackend::open(Path::new(loc))?)
+    } else {
+        return Ok(());
+    };
+    if let Some(v) = b.meta_get("schema_version")?
+        && let Some(found) = serde_json::from_slice::<serde_json::Value>(&v)?.as_u64()
+        && found > SCHEMA_VERSION
+    {
+        return Err(StoreError::NewerFile {
+            found,
+            supported: SCHEMA_VERSION,
+        });
+    }
+    if let Some(v) = b.meta_get("base")?
+        && let Some(engine) = serde_json::from_slice::<serde_json::Value>(&v)?["engine"].as_str()
+    {
+        refuse_newer_engine(engine)?;
+    }
+    Ok(())
 }
 
 /// Export a Postgres universe to a portable redb file, atomically.

@@ -35,7 +35,10 @@ universe would corrupt it, so the server enforces a single writer:
    of the journal and releases the lock. Until Render stops it, it keeps serving pages and reads from
    the galaxy in memory, and refuses anything that acts (MCP calls, registration) with a 503.
 3. **The switch.** The new server takes the lock, loads the snapshot (and adopts it if the engine
-   version changed), turns healthy, and Render moves traffic over.
+   is older than its own), turns healthy, and Render moves traffic over. A server whose engine or
+   storage schema is older than the universe's reads both before step 2 and exits without asking
+   for the handover, so the running server keeps serving (roll forward only; builds from before
+   storage schema 2 are the exception, see Roll back below).
 
 Viewers see no interruption: pages and the live view keep loading. Agents get about 15 to 20 seconds
 of 503 with `Retry-After: 5` on game actions (most of it is Render switching traffic), then
@@ -108,7 +111,8 @@ Four layers, from the inside out:
    and Render restarts it. Snapshots every 500 entries make restarts fast. Hash checkpoints every
    100 entries detect any divergence on replay.
 2. **Graceful handovers.** Every deploy, restart and SIGTERM ends with a snapshot at the head of
-   the journal. With `--adopt-universe`, an engine upgrade ships as a plain deploy.
+   the journal. With `--adopt-universe`, an engine upgrade ships as a plain deploy. A downgrade
+   never does: an older engine refuses a newer universe.
 3. **Render Postgres.**
    - With a high-availability standby (add it when scaling up), the standby takes over if the
      primary fails. The server's connection drops, it restarts and reconnects; replication is
@@ -136,6 +140,9 @@ Four layers, from the inside out:
   af-server import --from mcpwars-....redb --to "postgres://..."
   ```
   The import refuses a database that already holds a universe and verifies the result.
+- **Storage schema.** A file store always opens as the writer, so `verify` or `import` with a build
+  of a later storage schema migrates the backup file itself, and older builds refuse it from then on
+  (roll forward only). To keep a file usable by an older build, run the commands on a copy.
 
 ### Moving a universe
 
@@ -162,7 +169,7 @@ and use the **External** connection string from the database page.
 | Change a setting in `render.yaml` | Push it. The Blueprint sync applies it in its own deploy, after any code deploy in the same push |
 | Deploy a new version | `git push`. Render builds, hands over, and switches traffic (agents retry for about 15 to 20 seconds; pages stay up) |
 | Check a change before it ships | Open a pull request: the GitHub Actions job `gate` (`.github/workflows/ci.yml`) runs `scripts/ci.sh` and the store tests on Postgres 17 for every pull request and every push to `main` or `production`. It has no secrets and a read-only token, because pull requests run untrusted code |
-| Roll back | **mcpwars**, then **Events**, then **Rollback** on an earlier deploy. This is safe between builds with the same engine version. After an engine upgrade the universe has been rebased, so roll forward with a fix instead |
+| Roll back | Roll forward only: back out a bad change with a new commit and deploy it. A build with an older engine refuses the universe (`NewerEngine`) and exits without asking the running server to hand over; a build from before that refusal (schema 1) exits on the schema fence (`NewerFile`) after it has asked, so the game is down until Render restarts the released server (about a minute). Render's **Rollback** is safe only to a deploy with the same engine version and storage schema; prefer a fix |
 | Watch logs | **mcpwars**, then **Logs** (or the Render CLI: `render logs`) |
 | Operator console | `https://mcpwars.com/sysop` (the admin token): live map, pilots, comms moderation, rules editor, season controls, journal, backup download |
 | Shell | **mcpwars**, then **Shell** |

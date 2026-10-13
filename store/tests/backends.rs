@@ -259,6 +259,141 @@ fn engine_mismatch_is_refused_until_adopted_at_head() {
     }
 }
 
+/// Every meta key and the latest snapshot, as stored: what an older build must never change.
+fn stored_bytes(store: &Store) -> Vec<Option<Vec<u8>>> {
+    let b = store.backend();
+    let mut out: Vec<Option<Vec<u8>>> = ["schema_version", "genesis", "base", "base_world"]
+        .iter()
+        .map(|k| b.meta_get(k).unwrap())
+        .collect();
+    let snap = b.snapshot_last().unwrap().map(|(seq, v)| [seq.to_le_bytes().to_vec(), v].concat());
+    out.push(snap);
+    out.push(Some(store.last_seq().unwrap().to_le_bytes().to_vec()));
+    out
+}
+
+#[test]
+fn newer_engine_is_refused_and_left_byte_identical() {
+    for loc in locations("newer") {
+        let store = loc.open();
+        let mut w = store.init(&genesis("af-engine-9.99")).unwrap();
+        play(&store, &mut w, 30);
+        store.save_snapshot(&w).unwrap();
+        let before = stored_bytes(&store);
+        // Even with a head snapshot (what a handover writes), an older build never rebases it.
+        assert!(matches!(store.adopt_universe(), Err(StoreError::NewerEngine { .. })), "{}", loc.0);
+        assert!(matches!(store.check_engine(), Err(StoreError::NewerEngine { .. })));
+        assert!(matches!(store.load_world(), Err(StoreError::NewerEngine { .. })));
+        assert!(matches!(store.replay_from_base(), Err(StoreError::NewerEngine { .. })));
+        assert_eq!(stored_bytes(&store), before);
+        drop(store);
+        // The pre-handover check reads the same refusal without the writer lock.
+        assert!(matches!(af_store::check_takeover(&loc.0), Err(StoreError::NewerEngine { .. })));
+        let store = loc.open();
+        assert_eq!(stored_bytes(&store), before, "{}", loc.0);
+    }
+}
+
+#[test]
+fn engine_versions_compare_numerically() {
+    use af_store::{engine_newer, engine_number};
+    assert_eq!(engine_number("af-engine-1.9"), Some(vec![1, 9]));
+    assert_eq!(engine_number("af-engine-1.41"), Some(vec![1, 41]));
+    assert!(engine_newer("af-engine-1.41", "af-engine-1.9"), "1.41 is newer than 1.9");
+    assert!(!engine_newer("af-engine-1.9", "af-engine-1.41"));
+    assert!(engine_newer("af-engine-1.10", "af-engine-1.9"));
+    assert!(engine_newer("af-engine-2.0", "af-engine-1.99"));
+    assert!(engine_newer("af-engine-9.99", ENGINE_VERSION));
+    assert!(!engine_newer(ENGINE_VERSION, ENGINE_VERSION));
+    assert!(!engine_newer("af-engine-1.41.0", "af-engine-1.41"));
+    assert!(engine_newer("af-engine-1.41.1", "af-engine-1.41"));
+    assert!(!engine_newer("af-engine-0.9", ENGINE_VERSION));
+    // Names that are not engine versions are never newer, so they still adopt as before.
+    for odd in ["", "old", "af-engine-", "af-engine-1.x", "1.99"] {
+        assert_eq!(engine_number(odd), None, "{odd}");
+        assert!(!engine_newer(odd, ENGINE_VERSION), "{odd}");
+    }
+    // The fence is only as good as this build's own number.
+    assert!(engine_number(ENGINE_VERSION).is_some(), "ENGINE_VERSION must be af-engine-X.Y");
+}
+
+#[test]
+fn schema_fence_migrates_old_stores_and_older_builds_refuse_it() {
+    // Builds made before the fence support schema 1 only.
+    const PRE_FENCE: u64 = 1;
+    const { assert!(af_store::SCHEMA_VERSION > PRE_FENCE) };
+    let stamp = |s: &Store| serde_json::from_slice::<u64>(&s.backend().meta_get("schema_version").unwrap().unwrap()).unwrap();
+    for loc in locations("fence") {
+        let store = loc.open();
+        let mut w = store.init(&genesis(ENGINE_VERSION)).unwrap();
+        play(&store, &mut w, 30);
+        store.save_snapshot(&w).unwrap();
+        drop(store);
+        set_meta_raw(&loc.0, "schema_version", Some(b"1"));
+        assert!(
+            af_store::check_takeover(&loc.0).is_ok(),
+            "an older schema is the writer's to migrate"
+        );
+        if pg::is_postgres(&loc.0) {
+            // A reader opens schema 1 as it is (the fence changed no table) and leaves it.
+            let reader = Store::open_location(&loc.0, Access::Reader).unwrap();
+            assert_eq!(reader.load_world().unwrap().0.state_hash(), w.state_hash());
+            assert_eq!(stamp(&reader), 1);
+        }
+        // The fenced writer migrates and stamps the new version; the universe is unchanged.
+        let store = loc.open();
+        assert_eq!(stamp(&store), af_store::SCHEMA_VERSION, "{}", loc.0);
+        assert_eq!(store.load_world().unwrap().0.state_hash(), w.state_hash());
+        drop(store);
+        // What a pre-fence build runs on open: any stored schema above the one it supports is
+        // refused. Simulated here with this build and a schema one above its own.
+        let above = (af_store::SCHEMA_VERSION + 1).to_string();
+        set_meta_raw(&loc.0, "schema_version", Some(above.as_bytes()));
+        assert!(matches!(
+            Store::open_location(&loc.0, Access::Writer),
+            Err(StoreError::NewerFile { found, supported }) if found == af_store::SCHEMA_VERSION + 1 && supported == af_store::SCHEMA_VERSION
+        ));
+        assert!(matches!(af_store::check_takeover(&loc.0), Err(StoreError::NewerFile { .. })));
+    }
+    // An empty or missing store is no reason to refuse.
+    let missing = std::env::temp_dir().join(format!("af-store-missing-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&missing);
+    assert!(af_store::check_takeover(&missing.display().to_string()).is_ok());
+    assert!(!missing.exists());
+}
+
+#[test]
+fn postgres_fenced_build_takes_over_a_schema_one_writer() {
+    let Some(_) = pg_url() else { return };
+    let loc = locations("fence_handover").pop().unwrap();
+    // The running server: a build from before the fence, on schema 1.
+    let old = loc.open();
+    let mut w = old.init(&genesis(ENGINE_VERSION)).unwrap();
+    play(&old, &mut w, 30);
+    set_meta_raw(&loc.0, "schema_version", Some(b"1"));
+    // The starting fenced build: busy, checks the versions without the lock, asks, takes over.
+    assert!(matches!(Store::open_location(&loc.0, Access::Writer), Err(StoreError::Busy(_))));
+    af_store::check_takeover(&loc.0).unwrap();
+    let url = loc.0.clone();
+    let listener = std::thread::spawn(move || pg::wait_for_handoff(&url).unwrap());
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    pg::request_handoff(&loc.0).unwrap();
+    assert!(listener.join().unwrap());
+    old.save_snapshot(&w).unwrap();
+    drop(old);
+    let new = loc.open();
+    let stamped: u64 = serde_json::from_slice(&new.backend().meta_get("schema_version").unwrap().unwrap()).unwrap();
+    assert_eq!(stamped, af_store::SCHEMA_VERSION);
+    assert_eq!(new.load_world().unwrap().0.state_hash(), w.state_hash());
+    // Now an older build starts against the newer server: its check refuses before it would
+    // ask for the handover, and the lock stays where it is.
+    let mut base: serde_json::Value = serde_json::from_slice(&new.backend().meta_get("base").unwrap().unwrap()).unwrap();
+    base["engine"] = "af-engine-9.99".into();
+    set_meta_raw(&loc.0, "base", Some(&serde_json::to_vec(&base).unwrap()));
+    assert!(matches!(af_store::check_takeover(&loc.0), Err(StoreError::NewerEngine { .. })));
+    assert!(matches!(Store::open_location(&loc.0, Access::Writer), Err(StoreError::Busy(_))));
+}
+
 #[test]
 fn copies_between_backends_and_backs_up_consistently() {
     for loc in locations("copy") {

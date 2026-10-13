@@ -85,6 +85,7 @@ enum Cmd {
         allow_host: Vec<String>,
         /// Rebase a universe recorded by an older engine onto this build's rules
         /// (requires a head snapshot, i.e. the old server was stopped gracefully).
+        /// A universe from a newer engine is always refused.
         #[arg(long)]
         adopt_universe: bool,
     },
@@ -201,6 +202,16 @@ async fn main() -> anyhow::Result<()> {
                 match opened {
                     Ok(v) => break v,
                     Err(e) if matches!(e.downcast_ref::<af_store::StoreError>(), Some(af_store::StoreError::Busy(_))) => {
+                        // Never ask a newer server to let go of a universe this build would refuse:
+                        // it would release the lock and the game would stop until it restarts.
+                        let loc2 = loc.clone();
+                        match tokio::task::spawn_blocking(move || af_store::check_takeover(&loc2)).await? {
+                            Err(e @ (af_store::StoreError::NewerFile { .. } | af_store::StoreError::NewerEngine { .. })) => {
+                                return Err(e.into());
+                            }
+                            Err(e) => eprintln!("could not read the universe's versions before the handover ({e}); asking anyway"),
+                            Ok(()) => {}
+                        }
                         eprintln!("another server is running this universe: asking it to hand over");
                         let loc2 = loc.clone();
                         if let Err(e) = tokio::task::spawn_blocking(move || af_store::pg::request_handoff(&loc2)).await? {
