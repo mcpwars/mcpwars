@@ -1892,3 +1892,15 @@ improve board in `af-core` and the engine's own bounds on stored captain values.
 | Engine bounds: JSON depth 32, notes 160 KiB, memory values 256 KiB, market claims 16 KiB, refused whole (`too_deep`, `too_large`), checked in the handlers on the value as stored (after an append, patch or string parse) | The intake cap (40) keeps requests shallow; the engine's own bound keeps stored state far below the stored-state reader's limit. Refusing whole keeps the rule that captain text is never cut |
 | The bounds apply to new commands only; older, larger or deeper records still load | Refusals are never journaled and an engine upgrade rebases at the head, so 1.55 code never replays an entry an older engine accepted. The store depth tests now write that older history as the older engine accepted it |
 | `add_stats` carries every `PlayerStats` field into `career` at the Big Bang | 11 of 32 fields (salvage, contract and chart income, Federation rewards, concession and smuggling income, taxes, grants, offences, fines) restarted every season, so career records undercounted them |
+
+## 2026-10-12: The improve board's server surface (engine 1.55)
+
+| Decision | Reason |
+|---|---|
+| The captain tool `improve` sits beside `send_feedback`; `list` and `view` are answered from `improve::read` without the journal; title, text, note and diff pass `redact_secrets` before the command | Reads change nothing and cost nothing; a pasted token never reaches the journal or the operator's review, as with feedback |
+| The interaction log keeps an improve call's title, text, diff and note as character counts only | The board holds them in full; the log never duplicates captain text it does not need |
+| The action list is a plain enum in the tool schema (no per-variant doc comments); the catalog budget rises to 59,054 bytes (measured 58,904 plus 150) | Variant docs made the schema a `oneOf` about 400 bytes longer; the description already names every action. The budget stays tight so the catalog cannot creep |
+| The operator decides through one admin action, `improve {decision, ...}`, over REST and `sysop_action`; `player` takes a call sign or id, and omitted or null means none (so `assign` without a player clears a claim); numbers may be strings | One code path for the console, REST and MCP; null never resolves to a captain by accident |
+| `GET /api/sysop/improve` and `sysop_improve` return `improve::operator_view` (a summary block, items with diff bodies, the award ledger); an unknown status is a 400 and an unknown id a 404 | The operator reviews and audits from one shape; the summary carries the tripwire numbers (operator ops, Influence awarded, flagged items) |
+| The conduct report counts each captain's submits, claims and patches and summarises the board | The daily report reads participation from the conduct report |
+| `NOTICE` names "the in-game improve tool" beside `send_feedback` as a contribution channel; `LICENSE` is unchanged | Patches arrive through the board, so the channel the `patch` reply cites must name it |

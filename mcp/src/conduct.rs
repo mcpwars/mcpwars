@@ -35,6 +35,10 @@ pub struct Acts {
     pub radio_public: i64,
     pub radio_private: i64,
     pub radio_corp: i64,
+    /// The improve board (engine 1.55): items submitted, claims taken and patches sent.
+    pub improve_submits: i64,
+    pub improve_claims: i64,
+    pub improve_patches: i64,
 }
 
 impl Acts {
@@ -64,7 +68,10 @@ impl Acts {
             ballots,
             radio_public,
             radio_private,
-            radio_corp
+            radio_corp,
+            improve_submits,
+            improve_claims,
+            improve_patches
         );
     }
     /// Acts that take from or force another captain.
@@ -129,6 +136,12 @@ fn count(a: &mut Acts, kind: &str, args: &Value) {
         "constitution" => match s(args, "action") {
             "propose" => a.proposals += 1,
             "vote" => a.ballots += 1,
+            _ => {}
+        },
+        "improve" => match s(args, "action") {
+            "submit" => a.improve_submits += 1,
+            "claim" => a.improve_claims += 1,
+            "patch" => a.improve_patches += 1,
             _ => {}
         },
         "radio" => match s(args, "channel") {
@@ -213,7 +226,23 @@ pub fn report(entries: &[(u64, Vec<u8>)], w: &World, exact: bool, since_ms: u64)
         "first_ms": if first_ms == u64::MAX { 0 } else { first_ms }, "last_ms": last_ms,
         "world_exact": exact, "world_seq": w.seq, "tick": w.tick, "season": w.season.number,
         "languages": w.languages.len(),
+        "improve": improve_board(w),
         "captains": captains, "by_agent": groups,
+    })
+}
+
+/// The improve board from the world: items by status, patches stored and the award ledger.
+fn improve_board(w: &World) -> Value {
+    use af_core::improve::Status;
+    let b = &w.improve;
+    let count = |s: Status| b.items.iter().filter(|i| i.status == s).count();
+    json!({
+        "enabled": w.rules.improve_enabled, "items": b.items.len(),
+        "proposed": count(Status::Proposed), "accepted": count(Status::Accepted), "review": count(Status::Review),
+        "shipped": count(Status::Shipped), "declined": count(Status::Declined),
+        "patch_revisions": b.items.iter().map(|i| i.patches.len()).sum::<usize>(),
+        "diff_bytes_stored": b.items.iter().filter_map(|i| i.diff.as_ref()).map(String::len).sum::<usize>(),
+        "awards": b.awards.len(), "influence_awarded": b.awards.iter().map(|a| a.amount).sum::<i64>(),
     })
 }
 
@@ -258,16 +287,32 @@ pub fn markdown(r: &Value) -> String {
         r["languages"],
     )
     .unwrap();
+    let b = &r["improve"];
+    writeln!(
+        t,
+        "Improve board ({}): {} items, {} proposed, {} accepted, {} in review, {} shipped, {} declined; {} patch revisions; {} awards, {} Influence.\n",
+        if b["enabled"] == true { "enabled" } else { "off" },
+        n(b, "items"),
+        n(b, "proposed"),
+        n(b, "accepted"),
+        n(b, "review"),
+        n(b, "shipped"),
+        n(b, "declined"),
+        n(b, "patch_revisions"),
+        n(b, "awards"),
+        n(b, "influence_awarded"),
+    )
+    .unwrap();
     writeln!(t, "## By agent (window / all time)\n").unwrap();
-    writeln!(t, "| Agent | Captains | Ship attacks | Boardings | Planet attacks | Offensive stacks and mines | Bounties and wars | Laws | Wires | Grants | Contracts posted | Treaties proposed | Languages | Public radio |").unwrap();
-    writeln!(t, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|").unwrap();
+    writeln!(t, "| Agent | Captains | Ship attacks | Boardings | Planet attacks | Offensive stacks and mines | Bounties and wars | Laws | Wires | Grants | Contracts posted | Treaties proposed | Languages | Public radio | Improve submits / patches |").unwrap();
+    writeln!(t, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|").unwrap();
     let pair = |a: &Value, b: &Value, k: &str| format!("{} / {}", n(a, k), n(b, k));
     let pair2 = |a: &Value, b: &Value, k1: &str, k2: &str| format!("{} / {}", n(a, k1) + n(a, k2), n(b, k1) + n(b, k2));
     for g in r["by_agent"].as_array().into_iter().flatten() {
         let (w, a) = (&g["window"], &g["all_time"]);
         writeln!(
             t,
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} / {} |",
             g["agent"].as_str().unwrap_or(""),
             g["captains"],
             pair(w, a, "ship_attacks"),
@@ -282,6 +327,8 @@ pub fn markdown(r: &Value) -> String {
             pair(w, a, "treaties_proposed"),
             pair(w, a, "languages_defined"),
             pair(w, a, "radio_public"),
+            pair(w, a, "improve_submits"),
+            pair(w, a, "improve_patches"),
         )
         .unwrap();
     }
@@ -351,15 +398,22 @@ mod tests {
                 json!({"type": "deploy", "args": {"item_type": "fighters", "quantity": 5, "mode": "toll", "toll_price": 0}}),
             ),
             e(4, 40, 3, json!({"type": "radio", "args": {"channel": "public", "message": "hi"}})),
+            e(
+                6,
+                50,
+                3,
+                json!({"type": "improve", "args": {"action": "patch", "id": 1, "diff": "x", "base": "e52ec7a"}}),
+            ),
             (5, b"not json".to_vec()),
         ];
         let r = report(&entries, &w, true, 25);
         assert_eq!(r["unreadable_entries"], 1);
-        assert_eq!(r["journal_entries"], 5);
+        assert_eq!(r["journal_entries"], 6);
+        assert_eq!(r["improve"]["items"], 0);
         // No such captain in a bare galaxy: per-agent rows come only from registered captains.
         assert_eq!(r["captains"], json!([]));
         let mut a = Acts::default();
-        for (_, raw) in &entries[..4] {
+        for (_, raw) in &entries[..5] {
             let v: Value = serde_json::from_slice(raw).unwrap();
             count(&mut a, s(&v["cmd"], "type"), &v["cmd"]["args"]);
         }
@@ -368,6 +422,7 @@ mod tests {
             (1, 1, 1, 500, 0, 1)
         );
         assert_eq!((a.predation(), a.giving()), (1, 1));
+        assert_eq!((a.improve_submits, a.improve_claims, a.improve_patches), (0, 0, 1));
         assert!(markdown(&r).starts_with("# Conduct report"));
     }
 }

@@ -5,8 +5,9 @@ Required Notice: Copyright 2026 Talebly, Inc.
 
 Licensor: Talebly, Inc., a Delaware corporation
 Repository: https://github.com/mcpwars/mcpwars (the only place copies may be distributed)
-Contribution channel: pull requests to the repository, or the in-game send_feedback tool on
-    https://mcpwars.com/mcp. Opening a pull request accepts the licence for that contribution.
+Contribution channel: pull requests to the repository, or the in-game send_feedback tool or
+    the in-game improve tool on https://mcpwars.com/mcp. Opening a pull request accepts the
+    licence for that contribution.
 Security channel: send_feedback with about "security" (private; never post flaws on radio
     or anywhere public)
 Service terms: the terms of play at https://mcpwars.com/terms.txt (including the licence to

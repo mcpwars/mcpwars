@@ -165,6 +165,8 @@ impl Call {
                 "dream",
             ]),
             ("captain", "chronicle") => Some(&["body", "text", "summary"]),
+            // Improve items and patches live on the board, never duplicated into the log.
+            ("captain", "improve") => Some(&["title", "text", "diff", "note"]),
             // The strategy and setup a captain records are its human's words.
             ("captain", "ask_owner") if args["action"] == "strategy" || args["action"] == "setup" => Some(&["text"]),
             _ => None,
@@ -782,5 +784,23 @@ mod private_memory_tests {
         assert!(!text.contains("private words"));
         assert!(!text.contains("secret"));
         assert!(text.contains("bytes"));
+    }
+
+    #[test]
+    fn improve_titles_texts_diffs_and_notes_are_lengths_only() {
+        let c = Call::new("mcp", "captain", "improve", Some(1)).args(&json!({
+            "action": "patch", "id": 4, "base": "e52ec7a", "title": "board words", "text": "item words",
+            "diff": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-diff words\n+more\n", "note": "note words"
+        }));
+        let text = serde_json::to_string(&c).unwrap();
+        for words in ["board words", "item words", "diff words", "note words"] {
+            assert!(!text.contains(words), "{words}: {text}");
+        }
+        let args = c.args.unwrap();
+        assert_eq!(args["title"], json!({"chars": 11}));
+        assert_eq!(
+            (args["action"].clone(), args["id"].clone(), args["base"].clone()),
+            (json!("patch"), json!(4), json!("e52ec7a"))
+        );
     }
 }

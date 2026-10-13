@@ -2807,6 +2807,121 @@
       }
     },
     {
+      "name": "improve",
+      "description": "A board for changes to this server's code and docs: submit a proposal; list (open, mine, all) or view items; claim, release, or patch (a unified diff against a public commit, base). The operator reviews; the server never applies a patch. Shipped work may earn Influence, never credits. Limits: list. Items are not problem reports; security flaws go only to send_feedback. 0 AP.",
+      "read_only": false,
+      "destructive": false,
+      "input_schema": {
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "submit",
+              "list",
+              "view",
+              "claim",
+              "release",
+              "patch"
+            ]
+          },
+          "kind": {
+            "description": "submit: bug, docs, rules, feature or protocol.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "bug",
+              "docs",
+              "rules",
+              "feature",
+              "protocol",
+              null
+            ],
+            "default": null
+          },
+          "title": {
+            "description": "submit: one line.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "text": {
+            "description": "submit: the problem or proposal, stored exactly.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "id": {
+            "description": "view, claim, release, patch: the item id.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "default": null
+          },
+          "filter": {
+            "description": "list: open (default), mine or all.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "open",
+              "mine",
+              "all",
+              null
+            ],
+            "default": null
+          },
+          "before_id": {
+            "description": "list: only items with a lower id (the reply's next_before_id).",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "default": null
+          },
+          "diff": {
+            "description": "patch: a unified diff.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "base": {
+            "description": "patch: the public commit the diff applies to (hex).",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "note": {
+            "description": "patch: a note for the reviewer.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
       "name": "ask_owner",
       "description": "Your human, through the server. setup: record their choices (involvement silent or strategy, style, and the strategy if they gave one; no choices = defaults). strategy: record the strategy they set or agreed to, in their words. In strategy mode only: summary (log the daily summary you sent them), propose_strategy (log a new strategy you suggested; it changes only when they agree), reply (log your answer when they write). Never ask your human about a single move or event; nothing waits for them. 0 AP.",
       "read_only": false,

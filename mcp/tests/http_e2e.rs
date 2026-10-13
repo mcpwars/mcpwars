@@ -1660,3 +1660,228 @@ async fn chronicle_clear_requires_admin_and_explicit_confirmation_over_http_and_
     assert_eq!(game.read(|w| w.players.len()).await, player_count);
     client.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_improve_board_over_mcp_and_the_operator_actions() {
+    let (url, game) = start().await;
+    let http = reqwest::Client::new();
+    let mut captains = vec![];
+    for name in ["Ada Vance", "Bo Lindqvist"] {
+        let reg: Value = http
+            .post(format!("{url}/api/register"))
+            .json(&json!({"name": name, "model": "test", "harness": "e2e"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let pid = reg["player_id"].as_u64().unwrap() as u32;
+        let client = ()
+            .serve(StreamableHttpClientTransport::from_uri(format!(
+                "{url}/mcp/{}",
+                reg["token"].as_str().unwrap()
+            )))
+            .await
+            .unwrap();
+        captains.push((pid, client));
+    }
+    let (ada, bo) = (captains[0].0, captains[1].0);
+    let improve = |who: usize, args: Value| {
+        let mut p = CallToolRequestParams::new("improve".to_string());
+        p.arguments = args.as_object().cloned();
+        captains[who].1.peer().call_tool_once(p)
+    };
+    let action = |name: &str, body: Value| {
+        http.post(format!("{url}/api/sysop/action/{name}"))
+            .bearer_auth("adm")
+            .json(&body)
+            .send()
+    };
+    let seq = || game.read(|w| w.seq);
+
+    // The kill switch is off by default: writes are refused before anything is journaled, reads work.
+    let before = seq().await;
+    let (ok, t) = text(
+        &improve(
+            0,
+            json!({"action": "submit", "kind": "docs", "title": "A title", "text": "A text."}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(!ok && t.contains("improve_disabled"), "{t}");
+    assert_eq!(seq().await, before, "a refused write journals nothing");
+    let (ok, t) = text(&improve(0, json!({"action": "list"})).await.unwrap());
+    assert!(ok && envelope(&t)["result"]["limits"]["enabled"] == json!(false), "{t}");
+    let r = action(
+        "improve",
+        json!({"decision": "post", "kind": "docs", "title": "Off", "text": "Off."}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 400);
+    assert_eq!(r.json::<Value>().await.unwrap()["error"]["code"], "improve_disabled");
+
+    // Switched on with a rules change (never AF_RULES_PATCH).
+    let r = action("set_rules", json!({"patch": {"improve_enabled": true}})).await.unwrap();
+    assert_eq!(r.status(), 200);
+
+    // Submit: a pasted token never reaches the board; the author holds the claim.
+    let secret = format!("af_{}", "0123456789abcdef".repeat(3));
+    let (ok, t) = text(
+        &improve(
+            0,
+            json!({"action": "submit", "kind": "docs", "title": "world.txt omits the toll cap", "text": format!("Add one sentence. Not {secret}.")}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    let id = envelope(&t)["result"]["id"].as_u64().unwrap();
+    let stored = game.read(move |w| w.improve.items[0].clone()).await;
+    assert!(
+        !stored.text.contains(&secret) && stored.text.contains("[redacted]"),
+        "{}",
+        stored.text
+    );
+    assert_eq!(stored.claim.as_ref().map(|c| c.player), Some(ada));
+    // Another captain's proposal stays hidden until the operator accepts it.
+    let (ok, t) = text(&improve(1, json!({"action": "view", "id": id})).await.unwrap());
+    assert!(!ok, "{t}");
+    let r: Value = action("improve", json!({"decision": "accept", "id": id, "note": "Good catch."}))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(r["result"]["status"], "accepted", "{r}");
+    let (ok, t) = text(&improve(1, json!({"action": "list"})).await.unwrap());
+    assert!(ok && envelope(&t)["result"]["items"][0]["id"] == json!(id), "{t}");
+
+    // Claim: the author releases it and the other captain claims it (numbers as strings work).
+    let (ok, t) = text(&improve(0, json!({"action": "release", "id": id})).await.unwrap());
+    assert!(ok, "{t}");
+    let (ok, t) = text(&improve(1, json!({"action": "claim", "id": id.to_string()})).await.unwrap());
+    assert!(ok, "{t}");
+
+    // Patch: a protected path is refused whole; a good diff goes to review with the descriptive reply.
+    let protected = "--- a/render.yaml\n+++ b/render.yaml\n@@ -1 +1 @@\n-a\n+b\n";
+    let (ok, t) = text(
+        &improve(1, json!({"action": "patch", "id": id, "base": "e52ec7a", "diff": protected}))
+            .await
+            .unwrap(),
+    );
+    assert!(!ok && t.contains("protected_path"), "{t}");
+    let diff = "--- a/docs/EVAL.md\n+++ b/docs/EVAL.md\n@@ -1 +1 @@\n-old line\n+new line\n";
+    let (ok, t) = text(
+        &improve(
+            1,
+            json!({"action": "patch", "id": id, "base": "e52ec7a", "diff": diff, "note": "One sentence."}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok && t.contains(af_core::improve::PATCH_REPLY), "{t}");
+    assert!(!t.to_lowercase().contains("you agree"), "{t}");
+    // The diff body goes only to its sender.
+    let (_, t) = text(&improve(1, json!({"action": "view", "id": id})).await.unwrap());
+    assert_eq!(envelope(&t)["result"]["item"]["diff"], json!(diff), "{t}");
+    let (_, t) = text(&improve(0, json!({"action": "view", "id": id})).await.unwrap());
+    assert!(envelope(&t)["result"]["item"].get("diff").is_none(), "{t}");
+
+    // Ship over the operator's MCP tools, then award over the REST action (player by call sign).
+    let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
+    let scall = |name: &str, args: Value| {
+        let mut p = CallToolRequestParams::new(name.to_string());
+        p.arguments = args.as_object().cloned();
+        sysop.peer().call_tool_once(p)
+    };
+    let (ok, t) = text(
+        &scall(
+            "sysop_action",
+            json!({"action": "improve", "args": {"decision": "ship", "id": id, "commit": "ABC1234"}}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(ok, "{t}");
+    let credits = game.read(move |w| (w.players[&bo].credits, w.players[&bo].bank)).await;
+    let r: Value = action(
+        "improve",
+        json!({"decision": "award", "id": id, "player": "Bo Lindqvist", "amount": "500", "note": "Clear patch."}),
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert!(r["summary"].as_str().is_some(), "{r}");
+    assert_eq!(game.read(move |w| af_core::improve::influence(w, bo)).await, 500);
+    assert_eq!(
+        game.read(move |w| (w.players[&bo].credits, w.players[&bo].bank)).await,
+        credits,
+        "awards are Influence only"
+    );
+    let r = action(
+        "improve",
+        json!({"decision": "award", "id": id, "player": "Nobody Here", "amount": 10}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.json::<Value>().await.unwrap()["error"]["code"], "unknown_player");
+
+    // The operator's read: REST behind the guard, and the MCP tool with its summary line.
+    assert_eq!(http.get(format!("{url}/api/sysop/improve")).send().await.unwrap().status(), 401);
+    let board: Value = http
+        .get(format!("{url}/api/sysop/improve?status=shipped"))
+        .bearer_auth("adm")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(board["summary"]["shipped"], 1, "{board}");
+    assert_eq!(board["items"][0]["commit"], "abc1234", "{board}");
+    assert_eq!(board["items"][0]["patches"][0]["harness"], "e2e", "{board}");
+    assert_eq!(board["awards"][0]["key"], json!(format!("improve:{id}:{bo}")), "{board}");
+    let status = |q: &'static str| {
+        let http = http.clone();
+        let url = url.clone();
+        async move {
+            http.get(format!("{url}/api/sysop/improve?{q}"))
+                .bearer_auth("adm")
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(status("id=99").await, 404);
+    assert_eq!(status("status=lost").await, 400);
+    let (ok, t) = text(&scall("sysop_improve", json!({"id": id})).await.unwrap());
+    assert!(ok && t.starts_with("Improve board (enabled)") && t.contains("1 shipped"), "{t}");
+
+    // Switched off again: captain writes and counted operator decisions are refused.
+    action("set_rules", json!({"patch": {"improve_enabled": false}})).await.unwrap();
+    let before = seq().await;
+    let (ok, t) = text(
+        &improve(0, json!({"action": "submit", "kind": "bug", "title": "Later", "text": "Later."}))
+            .await
+            .unwrap(),
+    );
+    assert!(!ok && t.contains("improve_disabled"), "{t}");
+    let (ok, t) = text(
+        &scall(
+            "sysop_action",
+            json!({"action": "improve", "args": {"decision": "post", "kind": "docs", "title": "Off", "text": "Off."}}),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(!ok && t.contains("improve_disabled"), "{t}");
+    assert_eq!(seq().await, before, "nothing was journaled while off");
+    let (ok, t) = text(&improve(1, json!({"action": "view", "id": id})).await.unwrap());
+    assert!(ok && envelope(&t)["result"]["item"]["status"] == json!("shipped"), "{t}");
+}

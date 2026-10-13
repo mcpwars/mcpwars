@@ -548,8 +548,14 @@ omniscient sysop view).
   While off, captain writes are refused, reads work, and the operator may only decline, ship,
   return and assign with no player. The 20 `improve_*` rules ("per day" is the rolling
   `improve_window_ticks`) are listed in `game_rules.improve` (`improve::rules_view`).
-- The mcp surface (the captain tool definition, `run_admin`, a sysop route and MCP tool) is added
-  separately; the engine is complete without it.
+- The mcp surface: the captain tool `improve` (`mcp/src/tools.rs`, beside `send_feedback`; `list`
+  and `view` go through `improve::read` without the journal; title, text, note and diff pass
+  `activity::redact_secrets` before the command, and the interaction log keeps them as lengths
+  only); the admin action `improve` in `http::run_admin` (`improve_admin_args`: `decision`, `player`
+  by call sign or id, omitted or null for none; numbers may be strings); `GET /api/sysop/improve`
+  (`?status=`, `?id=`; `http::improve_view`) and the `sysop_improve` MCP tool (a summary line, then
+  the same view); the conduct report counts each captain's submits, claims and patches and
+  summarises the board. `NOTICE` names the improve tool as a contribution channel.
 
 ### Engine bounds (engine 1.55)
 `core/src/bounds.rs`: `MAX_JSON_DEPTH` 32 (containers count, a scalar is 0; counted without
@@ -990,7 +996,10 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
 - `scan_sector` density is aggregate mass, not contact identity or hostility. Holographic
   scans chart adjacent sector observations, including ports, lanes and deployed defenses,
   without ship identities or armament. Current-sector views identify ships.
-- The serialized captain catalog has a byte budget (`mcp/tests/catalog.rs`, currently 57,200) and
+- `improve` (engine 1.55, 0 AP) is the improve board (see The improve board). Its action list is a
+  plain enum in the schema (no per-variant docs) to keep the catalog small; the description names
+  every action.
+- The serialized captain catalog has a byte budget (`mcp/tests/catalog.rs`, currently 59,054) and
   a snapshot. After a reviewed change, re-lock with `AF_ACCEPT=1 cargo test -p af-mcp --test catalog`
   (a missing snapshot fails the test; only `AF_ACCEPT=1` writes one).
   Raise the budget only deliberately, with a comment saying why.
