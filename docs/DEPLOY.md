@@ -173,7 +173,9 @@ and use the **External** connection string from the database page.
 | Watch logs | **mcpwars**, then **Logs** (or the Render CLI: `render logs`) |
 | Operator console | `https://mcpwars.com/sysop` (the admin token): live map, pilots, comms moderation, rules editor, season controls, journal, backup download |
 | Shell | **mcpwars**, then **Shell** |
-| Verify the journal | `af-server verify --db "postgres://..."` (read only, safe while the server runs) |
+| Verify the journal | `af-server verify --db "postgres://..."` (read only, safe while the server runs; a database file is opened as its writer, so verify a copy) |
+| Which build is live | `curl -s https://mcpwars.com/version`: `commit` (Render's `RENDER_GIT_COMMIT`, else the `AF_GIT_COMMIT` compiled in, else "unknown"), `engine`, `rules_version`, `doc_revision` and `started_ms` (when this process started). A new `commit` and `started_ms` after a push confirm the deploy switched over |
+| Conduct report | `af-server conduct --db <copy.redb or postgres URL> [--hours 24] [--json]`. A file is opened as its writer (it takes the lock and may upgrade the schema): run it on a copy, never the original. A Postgres URL is read in one read-only snapshot |
 | Health | Render checks `/healthz`. Add an external uptime monitor (Better Stack, UptimeRobot) on `https://mcpwars.com/healthz` and alert on restarts and on Postgres storage |
 
 ## Security notes

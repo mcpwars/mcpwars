@@ -4,7 +4,8 @@
 # Run:    docker run -p 8080:8080 -e DATABASE_URL=postgres://... -e AF_ADMIN_TOKEN=... mcpwars
 #    or:  docker run -p 8080:8080 -v mcpwars-data:/data -e AF_ADMIN_TOKEN=... mcpwars
 
-FROM rust:1.96-bookworm AS build
+# The build image names the exact toolchain `rust-toolchain.toml` pins; change both together.
+FROM rust:1.96.0-bookworm AS build
 WORKDIR /src
 COPY . .
 # crates.io occasionally drops connections mid-download: retry, avoid HTTP/2 multiplexing (the

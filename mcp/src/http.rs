@@ -311,6 +311,7 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/public/chronicle", get(public_chronicle))
         .route("/api/public/chronicle/page", get(public_chronicle_page))
         .route("/healthz", get(|| async { "ok" }))
+        .route("/version", get(version))
         .route("/api/info", get(info))
         .route("/api/register", post(register))
         .route("/api/recover", post(recover_rest))
@@ -660,6 +661,16 @@ async fn robots_txt(State(s): State<AppState>) -> Response {
             (header::CACHE_CONTROL, "no-cache"),
         ],
         text,
+    )
+        .into_response()
+}
+
+/// Which build is live: `{commit, engine, rules_version, doc_revision, started_ms}` (see `build_info`).
+async fn version(State(s): State<AppState>) -> Response {
+    let rules_version = s.game.read(|w| w.rules.version_label()).await;
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(crate::build_info::version_json(rules_version)),
     )
         .into_response()
 }

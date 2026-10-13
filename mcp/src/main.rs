@@ -115,15 +115,19 @@ enum Cmd {
     },
     /// Verify the journal: replay from genesis and compare with snapshot-based restore.
     Verify {
-        /// A database file or a postgres:// URL (read only; safe while the server runs).
+        /// A postgres:// URL (read in one read-only snapshot; safe while the server runs) or a
+        /// database file (opened as its writer, as `conduct` does: use a copy).
         #[arg(long, default_value = "data/universe.redb")]
         db: String,
     },
     /// The conduct report (operator only): what captains did to and for each other, from the
     /// journal's accepted commands and each captain's record, by captain and by model and harness.
-    /// Read only; safe on a backup made by another engine version.
+    /// It changes no game state and works on a backup made by another engine version, but a
+    /// database file is opened as its writer (it takes the file's lock and may upgrade its schema),
+    /// so run it on a copy, never on the original. A postgres:// URL is read in one read-only
+    /// snapshot, safe while the server runs.
     Conduct {
-        /// A database file or a postgres:// URL (read only).
+        /// A database file (opened as writer: use a copy) or a postgres:// URL (read only).
         #[arg(long, default_value = "data/universe.redb")]
         db: String,
         /// The window: acts in the last this many hours before the newest journal entry.
@@ -180,6 +184,8 @@ async fn main() -> anyhow::Result<()> {
             trusted_ip_header,
             registrations_per_ip_per_hour,
         } => {
+            // Record the build's commit and start time for /version.
+            af_mcp::build_info::init();
             let postgres = database_url.is_some();
             let loc = database_url.unwrap_or_else(|| db.display().to_string());
             // Bind first. While this server waits for the universe (another server may

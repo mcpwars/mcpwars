@@ -56,6 +56,36 @@ fn envelope(t: &str) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn version_names_the_build_engine_rules_and_documentation() {
+    let (url, game) = start().await;
+    let r = reqwest::get(format!("{url}/version")).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()[reqwest::header::CACHE_CONTROL], "no-store");
+    let v: Value = r.json().await.unwrap();
+    let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["commit", "engine", "rules_version", "doc_revision", "started_ms"], "{v}");
+    let commit = v["commit"].as_str().unwrap();
+    assert!(
+        commit == "unknown" || (commit.len() >= 7 && commit.bytes().all(|b| b.is_ascii_hexdigit())),
+        "{v}"
+    );
+    assert_eq!(v["engine"], json!(af_core::ENGINE_VERSION));
+    let rules = game.read(|w| w.rules.version_label()).await;
+    assert_eq!(v["rules_version"], json!(rules));
+    assert_eq!(v["doc_revision"], json!(af_mcp::documentation::revision()));
+    let started = v["started_ms"].as_u64().unwrap();
+    assert!(started > 0 && started <= af_mcp::game::now_ms(), "{v}");
+    // The start time is fixed for the process: a second read returns the same body.
+    let again: Value = reqwest::get(format!("{url}/version")).await.unwrap().json().await.unwrap();
+    assert_eq!(again, v);
+    // Like /healthz, it is no page for crawlers: neither robots.txt nor the sitemap lists it.
+    for path in ["robots.txt", "sitemap.xml"] {
+        let body = reqwest::get(format!("{url}/{path}")).await.unwrap().text().await.unwrap();
+        assert!(!body.contains("/version") && !body.contains("/healthz"), "{path}: {body}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_over_http_end_to_end() {
     let (url, _game) = start().await;
     let http = reqwest::Client::new();
