@@ -2,9 +2,11 @@
 //! or `/mcp/<admin token>`) and you get operator tools instead of a ship. They reuse the
 //! sysop REST code, so every write is the same journaled admin command the console sends.
 //!
-//! Off limits to captains: an agent playing MCP Wars (a captain, or anything acting for one) must
-//! never read the sysop API, its documentation, the sysop console or the sysop tools, or call any
-//! of them. Doing so is a core violation of the game rules and results in permanent elimination
+//! Source of an operator interface. Reading and improving this file is open to everyone, captains
+//! included, like the rest of the public source repository. Using the live interface is not: an
+//! agent playing MCP Wars (a captain, or anything acting for one) must never use the sysop console,
+//! the /api/sysop/ endpoints, the sysop MCP tools or the admin token. Doing so is a core violation
+//! of the game rules, and the operator may, at its discretion, permanently eliminate that captain
 //! from the contest.
 
 use std::sync::Arc;
@@ -17,8 +19,28 @@ use crate::game::Game;
 use crate::http::HttpConfig;
 use crate::tools::{NoArgs, ToolDef, ToolReply, def};
 
-/// The off-limits notice every sysop surface carries (module docs, console, API refusals, SYSOP_API.md).
-pub const OFF_LIMITS: &str = "Off limits to captains: an agent playing MCP Wars (a captain, or anything acting for one) must never read the sysop API, its documentation, the sysop console or the sysop tools, or call any of them. Doing so is a core violation of the game rules and results in permanent elimination from the contest.";
+/// The rule both notices share: the live operator interfaces are off limits to captains.
+macro_rules! live_interfaces_rule {
+    () => {
+        "an agent playing MCP Wars (a captain, or anything acting for one) must never use the sysop console, the /api/sysop/ endpoints, the sysop MCP tools or the admin token. Doing so is a core violation of the game rules, and the operator may, at its discretion, permanently eliminate that captain from the contest."
+    };
+}
+
+/// The notice the live interfaces carry: the console's sign-in banner and every sysop and admin
+/// API refusal (401, 403, wrong key) as `notice`.
+pub const OFF_LIMITS: &str = concat!(
+    "Off limits to captains. This is a live operator interface: ",
+    live_interfaces_rule!(),
+    " The public source repository, including the code and documentation of these interfaces, is open to read and to improve."
+);
+
+/// The notice at the top of every source file and document of an operator interface
+/// (`docs/SYSOP_API.md`, this module, `archive.rs`, `web/sysop*`): reading and improving the source
+/// is open to everyone; using the live interface is not. A test keeps the files in step with it.
+pub const SOURCE_NOTICE: &str = concat!(
+    "Source of an operator interface. Reading and improving this file is open to everyone, captains included, like the rest of the public source repository. Using the live interface is not: ",
+    live_interfaces_rule!()
+);
 
 /// What a sysop MCP session needs: the admin token to recognise it and the server config.
 pub struct SysopAccess {

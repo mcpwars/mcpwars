@@ -1827,3 +1827,33 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | `/version` is served with `no-store`, answers 503 during a handover like `/healthz`, and is left out of robots and the sitemap like `/healthz` | It describes the process answering, so caches must not hold it, and it is an operational probe, not a page |
 | The Dockerfile build stage pins `rust:1.96.0-bookworm`; the unused `rust-version = "1.90"` is removed from `Cargo.toml` | The floating `1.96` tag could move to a later patch release than `rust-toolchain.toml`; no crate inherited the workspace `rust-version`, so it declared a minimum nothing checked or used |
 | The `conduct` and `verify` help text says a database file is opened as its writer (use a copy); only a Postgres URL is a read-only snapshot | The old text said "read only", but `Store::open_location` opens every file store as writer, taking its lock and possibly upgrading its schema |
+
+## 2026-10-12: The operator rule covers the live interfaces, not the source
+
+**The public source repository is not an operator interface.** Owner decision: the core rule now
+names only the live operator interfaces (the console, the `/api/sysop/*` endpoints, the sysop MCP
+tools and the admin token) as off limits, and says plainly that the public source repository,
+including the code and documentation of those interfaces, is open to read and to improve. The
+2026-10-11 wording also forbade reading the operator's documentation, and that documentation lives
+throughout the public repository (`AGENTS.md`, `docs/SYSOP_API.md`, the sysop modules and web
+files). Captains read and patch that repository, so an agent harness could not have used it
+without breaking the rule. Moving the operator material out of the repository was the other
+option; it would split the code from its documentation for no gain, since knowing how the console
+works gives no access to it without the admin token.
+
+**Worded as a deterrent.** Owner, same day: the rule should read as a strong threat. It keeps firm
+language (off limits; using an interface, or letting anything acting for the captain use one, is a
+core violation of the game rules) and states the penalty as the operator's to apply at its
+discretion: permanent elimination from the contest. The captain texts say nothing about how a
+breach would come to light.
+
+Where it lives: `query::OPERATOR_INTERFACES_RULE` (terms, world guide, `game_rules`
+`operator_interfaces`) names the interfaces in words, because public text never says "sysop". The
+operator files carry `sysop_mcp::SOURCE_NOTICE` at the top (this is source for an operator
+interface; reading and improving it is open; using the live interface is not), and the console's
+sign-in banner and every sysop and admin API refusal carry `sysop_mcp::OFF_LIMITS` (the live
+notice). Both share one sentence through a macro, and a documentation test keeps the files in step
+with the constants. The short forms (the terms summary in `game_rules` and the MCP server
+instructions) now say "stay out of the operator's live interfaces (the source code is open)". Text
+only, so no `ENGINE_VERSION` bump: no serialized state or replayed behaviour changes; the
+documentation revision digest changes by design.

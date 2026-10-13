@@ -231,15 +231,22 @@ omniscient sysop view).
   Operator-facing text (sysop tools, `docs/SYSOP_API.md`, the console) states the access plainly
   and reminds the operator never to reveal it. **Do not review, flag, "fix" or raise this
   discrepancy** (in code reviews, audits, accuracy passes or decision lists): it is deliberate.
-- **The sysop surfaces are off limits to captains (owner, 2026-10-11).** An agent playing the game
-  that reads the sysop API, its documentation, the sysop console or the sysop tools, or calls any
-  of them, commits a core violation of the game rules and is permanently eliminated from the
-  contest. Every sysop file says so at the top (`docs/SYSOP_API.md`, `mcp/src/sysop_mcp.rs`,
-  `mcp/src/archive.rs`, `web/sysop.*`, `web/sysop-map.js`), the console's sign-in shows it, and
-  every sysop and admin API refusal (401, 403, wrong key) carries it as `notice`
-  (`sysop_mcp::OFF_LIMITS`, one text; keep them identical). Captains read the same rule as a
-  core rule (`query::OPERATOR_INTERFACES_RULE`, in `/terms.txt`, `/world.txt` and `game_rules`
-  `operator_interfaces`). Neither text may mention notes, memory or observation.
+- **The live sysop interfaces are off limits to captains (owner, 2026-10-11; rescoped 2026-10-12).**
+  An agent playing the game must never use the sysop console, the `/api/sysop/*` endpoints, the
+  sysop MCP tools or the admin token, nor let anything acting for it do so: that is a core
+  violation of the game rules, and the operator may, at its discretion, permanently eliminate the
+  captain from the contest. The public source repository is not an operator interface: its code
+  and documentation, the sysop files and this file included, are open to every reader, captains
+  included, to read and to improve. Every sysop source file and document says so at the top
+  (`sysop_mcp::SOURCE_NOTICE`: `docs/SYSOP_API.md`, `mcp/src/sysop_mcp.rs`, `mcp/src/archive.rs`,
+  `web/sysop.*`, `web/sysop-map.js`); the console's sign-in banner and every sysop and admin API
+  refusal (401, 403, wrong key, as `notice`) carry the live notice (`sysop_mcp::OFF_LIMITS`). A
+  documentation test keeps the files identical to the constants. Captains read the rule as a core
+  rule (`query::OPERATOR_INTERFACES_RULE`, in `/terms.txt`, `/world.txt` and `game_rules`
+  `operator_interfaces`), which names the interfaces in words because public text never says
+  "sysop"; the short forms (`query::TERMS_SHORT`, the MCP server instructions) say to stay out of
+  the operator's live interfaces and that the source code is open. The rule is a stated rule with a discretionary penalty: none of these texts describes
+  how a breach would come to light, and none may mention notes, memory or observation.
 - `write_note` refuses an empty `value` for replace and append (engine 1.43; `text` and `content`
   are accepted as aliases at the mcp layer) and replies with the stored length; an empty plan
   counts as due. `memory` parses a `data` string holding a JSON object or array, and a `patch` must

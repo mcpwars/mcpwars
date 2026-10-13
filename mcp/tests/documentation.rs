@@ -1126,6 +1126,83 @@ fn the_founding_era_is_documented_from_the_live_rules() {
     }
 }
 
+/// The operator rule covers only the live interfaces (owner, 2026-10-12): the public source
+/// repository, the operator interfaces' own code and documentation included, is open to read and to
+/// improve. Every operator source file carries the source notice, and the console's sign-in banner
+/// carries the live notice the API refusals send.
+#[test]
+fn the_operator_rule_covers_only_the_live_interfaces() {
+    let rule = af_core::query::OPERATOR_INTERFACES_RULE;
+    for expected in [
+        "the operator's live interfaces",
+        "the operator console, the operator API, the operator MCP tools and the admin token",
+        "letting anything acting for you use them",
+        "core violation of the game rules",
+        "the operator may, at its discretion, permanently eliminate you from the contest",
+        "The public source repository, including the code and documentation of those interfaces, is open to read and to improve.",
+    ] {
+        assert!(rule.contains(expected), "the operator rule is missing {expected}");
+    }
+    // Public text never names the operator role's paths.
+    assert!(!rule.to_ascii_lowercase().contains("sysop"));
+    // The rule states the penalty; it says nothing of how a breach would come to light.
+    for absent in ["monitor", "detect", "logged", "watch", "observ", "notes", "memory", "\u{2014}"] {
+        assert!(!rule.contains(absent), "the operator rule mentions {absent}");
+    }
+    for notice in [af_mcp::sysop_mcp::OFF_LIMITS, af_mcp::sysop_mcp::SOURCE_NOTICE] {
+        assert!(notice.contains("core violation") && notice.contains("at its discretion, permanently eliminate"));
+        assert!(!notice.contains('\u{2014}'));
+    }
+    assert!(af_mcp::sysop_mcp::OFF_LIMITS.contains("is open to read and to improve"));
+    // The terms summary in game_rules names the same scope.
+    assert!(
+        af_core::query::TERMS_SHORT.contains("stay out of the operator's live interfaces (the source code is open)"),
+        "the terms summary scopes the rule to the live interfaces"
+    );
+
+    // Strip comment and Markdown markers, tags and line breaks, so a wrapped notice reads as one line.
+    fn flat(text: &str) -> String {
+        let mut out = String::new();
+        for line in text.lines() {
+            let mut line = line.trim_start();
+            for prefix in ["//!", "//", "/*", "<!--", ">"] {
+                if let Some(rest) = line.strip_prefix(prefix) {
+                    line = rest;
+                    break;
+                }
+            }
+            out.push(' ');
+            out.push_str(line);
+        }
+        let out = ["*/", "-->", "**", "<strong>", "</strong>"]
+            .iter()
+            .fold(out, |acc, mark| acc.replace(mark, ""));
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    for file in [
+        "docs/SYSOP_API.md",
+        "mcp/src/sysop_mcp.rs",
+        "mcp/src/archive.rs",
+        "web/sysop.html",
+        "web/sysop.css",
+        "web/sysop.js",
+        "web/sysop-map.js",
+    ] {
+        let text = std::fs::read_to_string(root.join(file)).unwrap();
+        let head: String = text.lines().take(12).collect::<Vec<_>>().join("\n");
+        assert!(
+            flat(&head).contains(af_mcp::sysop_mcp::SOURCE_NOTICE),
+            "{file} lacks the operator source notice at its top"
+        );
+    }
+    let console = std::fs::read_to_string(root.join("web/sysop.html")).unwrap();
+    assert!(
+        flat(&console).contains(af_mcp::sysop_mcp::OFF_LIMITS),
+        "the console's sign-in banner carries the live notice"
+    );
+}
+
 /// The terms of play are the only rules a captain agrees to: a fiction, the stated objective first,
 /// honesty owed only to the operator, the exact operator calls, languages with stored explanations,
 /// and the edge of the fiction. Every other page describes the world and links to the terms.
