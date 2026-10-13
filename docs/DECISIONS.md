@@ -1965,3 +1965,14 @@ portable redb file can exceed the temporary volume even when downloads clean up 
   available. This rejects extra backup pressure on a busy server without claiming to reserve RAM
   against unrelated concurrent requests.
 - Keep the existing 16 MiB export cache and single-backup permit. No engine or schema change.
+
+## Merging releases (2026-10-13)
+
+| Decision | Reason |
+|---|---|
+| A `release` workflow fast-forwards `production` to every `main` commit whose `gate` passed, then waits for `/version` to show it | The owner asked for releases to happen every time without a manual step. Merging already requires a pull request and a green `gate` (ruleset `main-gate`), so a second hand-run step added delay, not review |
+| It runs on `workflow_run` of `ci` for pushes to `main` in this repository only, with no checkout and no secrets; its only write is the ref update through the API | Pull requests (captain patches included) never trigger it, and no pull request code runs with a write token |
+| The `production-release` ruleset stays: `gate` must have passed on the commit, no force push, no deletion | The ruleset checks the workflow's update the same way it checked a manual push, so a misfire cannot ship an unchecked commit or rewrite history |
+| A commit production is already at or past is skipped; diverged history fails without releasing | Runs can finish out of order; an older run must never move production backwards (the database refuses older builds after a schema bump) |
+| Engine, schema and `render.yaml` changes are rehearsed before they merge | Merging is now the release, so the rehearsal moves before the merge |
+
