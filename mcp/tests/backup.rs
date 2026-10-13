@@ -156,15 +156,35 @@ async fn backup_download_is_one_at_a_time_complete_verifiable_and_leaves_nothing
             let _ = std::fs::remove_file(&copy);
         }
 
-        // A requester that stops waiting: the copy finishes under its permit, then its file goes.
+        // A download whose requester stops waiting: the copy finishes under its permit, then its
+        // file goes.
         let permit = game.backup_permit().unwrap();
         let dest = dir.join("abandoned.redb");
         let waiting = tokio::spawn({
             let (game, dest) = (game.clone(), dest.clone());
-            async move { game.backup_with(dest, permit).await }
+            async move { game.backup_with(dest, permit, true).await }
         });
         waiting.abort();
         settled(&game, &dir, 0).await;
+
+        // A file the operator asked for on the server is kept even when nobody waits for it.
+        let permit = game.backup_permit().unwrap();
+        let dest = dir.join("manual-abandoned.redb");
+        let waiting = tokio::spawn({
+            let (game, dest) = (game.clone(), dest.clone());
+            async move { game.backup_with(dest, permit, false).await }
+        });
+        // Stop waiting once the copy has started (its file exists).
+        for _ in 0..400 {
+            if !files(&dir).is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        waiting.abort();
+        settled(&game, &dir, 1).await;
+        assert!(dest.exists(), "{:?}", files(&dir));
+        std::fs::remove_file(&dest).unwrap();
 
         // The operator's backup action writes a private file it keeps.
         let r = run_admin(&game, &config(&dir), "backup", json!({})).await.unwrap().unwrap();

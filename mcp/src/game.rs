@@ -34,8 +34,10 @@ enum Req {
     JournalPage(Option<u64>, usize, oneshot::Sender<Result<Vec<serde_json::Value>, String>>),
     Snapshot(oneshot::Sender<()>),
     /// Copy the database between transactions (a consistent online backup). The permit is held
-    /// until the copy has finished, even when the requester has gone.
-    Backup(std::path::PathBuf, BackupPermit, oneshot::Sender<Result<u64, String>>),
+    /// until the copy has finished, even when the requester has gone. The flag says whether a
+    /// finished copy nobody waits for any more is removed (a download) or kept (a file the
+    /// operator asked for on the server).
+    Backup(std::path::PathBuf, BackupPermit, bool, oneshot::Sender<Result<u64, String>>),
     /// Hand the universe to a successor: snapshot at the head, close the store
     /// (which releases the writer lock), and refuse commands from then on.
     Release(oneshot::Sender<()>),
@@ -229,12 +231,12 @@ impl Drop for BackupSlot {
     }
 }
 
-/// Reply to a finished backup. Nobody waiting (an HTTP client that went away) means nobody will
-/// use the file, so it is removed rather than left on disk.
-fn finish_backup(dest: &std::path::Path, done: Option<oneshot::Sender<Result<u64, String>>>, r: Result<u64, String>) {
+/// Reply to a finished backup. For a download (`discard`), nobody waiting (an HTTP client that
+/// went away) means nobody will use the file, so it is removed rather than left on disk.
+fn finish_backup(dest: &std::path::Path, discard: bool, done: Option<oneshot::Sender<Result<u64, String>>>, r: Result<u64, String>) {
     let ok = r.is_ok();
     let delivered = done.is_some_and(|d| d.send(r).is_ok());
-    if ok && !delivered {
+    if ok && discard && !delivered {
         let _ = std::fs::remove_file(dest);
     }
 }
@@ -495,7 +497,7 @@ impl Game {
                             let _ = reply.send(result);
                         }
                         Req::Read(f) => f(&w),
-                        Req::Backup(dest, permit, done) => match store.as_ref().map(|st| st.detached_backup()) {
+                        Req::Backup(dest, permit, discard, done) => match store.as_ref().map(|st| st.detached_backup()) {
                             // Postgres: a consistent export on its own connection, off this thread.
                             Some(Some(job)) => {
                                 let (path, failed) = (dest.clone(), Arc::new(Mutex::new(Some(done))));
@@ -505,7 +507,7 @@ impl Game {
                                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&path)))
                                         .unwrap_or_else(|_| Err(af_store::StoreError::Db("backup: the copy panicked".into())))
                                         .map_err(|e| e.to_string());
-                                    finish_backup(&path, reply.lock().unwrap().take(), r);
+                                    finish_backup(&path, discard, reply.lock().unwrap().take(), r);
                                     drop(permit);
                                 });
                                 if let Err(e) = spawned
@@ -516,7 +518,7 @@ impl Game {
                             }
                             Some(None) => {
                                 let r = store.as_ref().unwrap().backup_to(&dest).map_err(|e| e.to_string());
-                                finish_backup(&dest, Some(done), r);
+                                finish_backup(&dest, discard, Some(done), r);
                                 drop(permit);
                             }
                             None => {
@@ -675,16 +677,17 @@ impl Game {
     /// `BACKUP_BUSY` while another backup runs.
     pub async fn backup(&self, dest: std::path::PathBuf) -> Result<u64, String> {
         let permit = self.backup_permit().ok_or_else(|| BACKUP_BUSY.to_string())?;
-        self.backup_with(dest, permit).await
+        self.backup_with(dest, permit, false).await
     }
 
     /// `backup` under a permit the caller already holds. `dest` must be a path no other backup
-    /// uses. If the caller stops waiting, the copy still finishes (under the permit) and its
-    /// file is removed.
-    pub async fn backup_with(&self, dest: std::path::PathBuf, permit: BackupPermit) -> Result<u64, String> {
+    /// uses. If the caller stops waiting, the copy still finishes (under the permit); its file is
+    /// then removed when `discard` is set (a download nobody will receive) and kept otherwise
+    /// (the `backup` action's file on the server).
+    pub async fn backup_with(&self, dest: std::path::PathBuf, permit: BackupPermit, discard: bool) -> Result<u64, String> {
         let (tx, rx) = oneshot::channel();
         self.tx
-            .send(Req::Backup(dest, permit, tx))
+            .send(Req::Backup(dest, permit, discard, tx))
             .await
             .map_err(|_| "engine not running".to_string())?;
         rx.await.map_err(|_| "engine stopped".to_string())?
