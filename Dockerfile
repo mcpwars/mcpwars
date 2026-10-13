@@ -2,6 +2,7 @@
 # DATABASE_URL is set (production on Render), otherwise in a redb file under /data.
 # Build:  docker build -t mcpwars .
 # Run:    docker run -p 8080:8080 -e DATABASE_URL=postgres://... -e AF_ADMIN_TOKEN=... mcpwars
+#         (add -e AF_CREATE_UNIVERSE=1 for the first start on an empty database only)
 #    or:  docker run -p 8080:8080 -v mcpwars-data:/data -e AF_ADMIN_TOKEN=... mcpwars
 
 # The build image names the exact toolchain `rust-toolchain.toml` pins; change both together.

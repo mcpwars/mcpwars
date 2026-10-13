@@ -329,6 +329,19 @@ pub fn writer_present(url: &str) -> Result<bool> {
     Ok(!got)
 }
 
+/// The af_ tables schema `schema` holds in the database at `url`, on a short connection of its
+/// own (no lock): lets a relaunch refuse before it asks the running server to hand over.
+pub fn schema_af_tables(url: &str, schema: &str) -> Result<Vec<String>> {
+    let mut c = connect(url)?;
+    Ok(c.query(
+        "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename LIKE 'af\\_%' ORDER BY tablename",
+        &[&schema],
+    )?
+    .iter()
+    .map(|r| r.get(0))
+    .collect())
+}
+
 /// Block until a successor asks for a handoff (true), or the listening
 /// connection fails (false).
 pub fn wait_for_handoff(url: &str) -> Result<bool> {

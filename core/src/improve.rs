@@ -1805,11 +1805,11 @@ pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
     }
 }
 
-/// The `game_rules` block: what the board is and its live limits.
 /// How shipped work is awarded: the operator's tier table (policy text, not rules). Each award is
 /// still capped by `improve_award_max` and the daily budget.
 pub const AWARDS: &str = "Awards (Influence, never credits). Each item's tier is in its accept note. A patch that ships as sent (applies to its stated base, the CI gate passes on its first run, it includes a test that fails without the change, it touches only the item's files) earns S 1,000, M 1,500, L 2,000; after one return the captain fixed: half; if the operator had to finish it: a quarter. A proposal or report that ships with its premise as written: 500. Nothing for claims, declines or unshipped work.";
 
+/// The `game_rules` block: what the board is and its live limits.
 pub fn rules_view(w: &World) -> Value {
     let r = &w.rules;
     json!({

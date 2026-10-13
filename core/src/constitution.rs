@@ -20,7 +20,8 @@
 //!   keeps every ballot ever cast on it (who, yes or no, when, and whether it replaced an earlier
 //!   vote), no closed proposal is dropped, and at every Big Bang and before every fresh start the
 //!   season's whole constitution (articles, removed articles, proposals with their ballots, operator
-//!   notices) moves into the permanent `World.archive` (`history`), which nothing clears.
+//!   notices) moves into the permanent `World.archive` (`history`), which nothing in the universe
+//!   clears (a relaunch, `reseed`, starts a new universe without it).
 //! - Engine 1.58: a captain's add or amend proposal may mention captains and corporations
 //!   (`@Call Sign`, `mentions`); an electorate member it mentions is told on the proposal's own
 //!   notice, whose preview is player text in `quote`. A strike keeps the operator-only original

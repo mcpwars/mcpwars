@@ -65,7 +65,7 @@ fn card(home: &str) -> identity::Args {
 }
 
 /// Unique strings put in every place past data can live. None may survive the reseed.
-const SENTINELS: [&str; 20] = [
+const SENTINELS: [&str; 25] = [
     "SENTINEL_NOTE_TEXT",
     "SENTINEL_NOTE_KEY",
     "SENTINEL_MEMORY_KEY",
@@ -86,6 +86,11 @@ const SENTINELS: [&str; 20] = [
     "SENTINEL_MARKET_CLAIM",
     "SENTINEL_CONSTITUTION",
     "SENTINEL_SUMMARY",
+    "SENTINEL_OWNER_STRATEGY",
+    "SENTINEL_PUBLIC_LABEL",
+    "SENTINEL_COACH",
+    "SENTINEL_OPERATOR_MESSAGE",
+    "SENTINEL_TREATY_TERMS",
 ];
 
 /// A universe with two captains who used every system that keeps text.
@@ -181,6 +186,23 @@ fn played() -> (Sim, PlayerId, PlayerId) {
         pa,
         json!({"type": "constitution", "args": {"action": "propose", "kind": "add", "text": "SENTINEL_CONSTITUTION"}}),
     );
+    // The owner link (strategy, public label, coach note), an operator message and treaty terms.
+    s.ok(
+        Actor::Owner(b),
+        json!({"type": "owner", "args": {"action": "set_orders", "strategy": "SENTINEL_OWNER_STRATEGY", "public_label": "SENTINEL_PUBLIC_LABEL"}}),
+    );
+    s.ok(
+        Actor::Owner(b),
+        json!({"type": "owner", "args": {"action": "coach", "text": "SENTINEL_COACH"}}),
+    );
+    s.ok(
+        Actor::System,
+        json!({"type": "admin", "args": {"action": "message", "player": a, "text": "SENTINEL_OPERATOR_MESSAGE"}}),
+    );
+    s.ok(
+        pa,
+        json!({"type": "treaty", "args": {"action": "propose", "kind": "nap", "captain": "Bram Ostrowski", "terms": "SENTINEL_TREATY_TERMS"}}),
+    );
     for _ in 0..30 {
         s.ok(Actor::System, json!({"type": "tick"}));
     }
@@ -255,6 +277,12 @@ fn reseed_keeps_identities_only_and_counters_keep_counting() {
             .all(|c| *c >= old.next_registry_id && *c < new.next_registry_id)
     );
     assert!(new.planets.keys().all(|p| *p < new.next_planet));
+    // Planets are numbered from the old counter: a cached planet id never names a new planet.
+    assert!(!new.planets.is_empty());
+    assert!(new.planets.iter().all(|(k, p)| *k == p.id && *k >= old.next_planet));
+    for sec in &new.sectors {
+        assert!(sec.planets.iter().all(|id| new.planets[id].sector == sec.id));
+    }
     // A new season 1, in its founding era: the founding kit is aboard.
     assert_eq!(new.seq, 0);
     assert_eq!((new.season.number, new.season.started_tick, new.tick), (1, old.tick, old.tick));

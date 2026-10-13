@@ -739,8 +739,13 @@ impl Game {
     }
 
     /// Log one interaction. Buffered; written every few seconds (see `start_activity_flush`)
-    /// or every 64 rows. Anonymous rows are capped per minute.
+    /// or every 64 rows. Anonymous rows are capped per minute. Nothing is recorded once this
+    /// server has handed over (`release` flushes what came before): the log's table may by then
+    /// belong to another universe (a relaunch moves the tables away under the same name).
     pub fn record(&self, c: crate::activity::Call) {
+        if self.is_released() {
+            return;
+        }
         if c.player.is_none() {
             let minute = c.at_ms / 60_000;
             let mut a = self.anon_rows.lock().unwrap_or_else(|p| p.into_inner());

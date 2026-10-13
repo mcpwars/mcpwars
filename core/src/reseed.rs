@@ -9,13 +9,16 @@
 //! token, recovery key) byte for byte, model, harness, the Autonomous flag, a ban or mute, the
 //! human's setup choices (involvement and style), the owner-link mode ticks, and the counters a
 //! client may have cached ids from. The identity card carries as its latest version only, with
-//! former names and the rename. Captain-to-captain mutes carry. Every id counter keeps counting,
-//! so an id cached before the relaunch never names something new. Everything else starts fresh:
+//! former names and the rename. Captain-to-captain mutes carry. Every id counter keeps counting
+//! and the new galaxy's planets and concessions are numbered from the old counters, so an id
+//! cached before the relaunch never names something new (except the numbers that restart with
+//! their lists: sectors, market report ids, identity log lines and memory revisions). Everything else starts fresh:
 //! the galaxy, ships, credits, notes, memory, inboxes, radio, news, corporations, diplomacy, the
 //! Chronicle, the improve board, feedback, languages, the constitution and the permanent record.
 //!
-//! Every struct is taken apart field by field (no `..`), so a field added later fails to compile
-//! here until the relaunch decides what happens to it.
+//! Every struct read from the old world is taken apart field by field (no `..`), so a field added
+//! later fails to compile here until the relaunch decides what happens to it. Only the rules and
+//! the card's relations are copied whole: both carry by design.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -61,7 +64,8 @@ pub fn reseed(old: &World, opts: &ReseedOpts) -> World {
         // Replaced by the new galaxy.
         sectors: _,
         planets: _,
-        next_planet: _,
+        // A counter: the new galaxy's planets are numbered from it.
+        next_planet,
         concessions: _,
         // Rebuilt below for the kept captains; NPCs are spawned anew.
         players,
@@ -108,6 +112,20 @@ pub fn reseed(old: &World, opts: &ReseedOpts) -> World {
         sectors: crate::galaxy::target_size(rules, crate::galaxy::season_base(rules, old.sector_count()), kept.len() as u32),
         rules: rules.clone(),
     });
+    // Planets are numbered from the old counter (genesis numbers them from 1), so a planet id
+    // cached before the relaunch never names a new planet.
+    let shift = (*next_planet).max(1) - 1;
+    let planets: BTreeMap<PlanetId, Planet> = fresh
+        .planets
+        .into_values()
+        .map(|p| (p.id + shift, Planet { id: p.id + shift, ..p }))
+        .collect();
+    let mut sectors = fresh.sectors;
+    for s in &mut sectors {
+        for id in &mut s.planets {
+            *id += shift;
+        }
+    }
     // Concessions get ids from the carried registry counter (genesis numbers them from 1).
     let mut registry = (*next_registry_id).max(1);
     let mut concessions = BTreeMap::new();
@@ -168,8 +186,8 @@ pub fn reseed(old: &World, opts: &ReseedOpts) -> World {
         tick: *tick,
         now_ms: *now_ms,
         rules: rules.clone(),
-        sectors: fresh.sectors,
-        planets: fresh.planets,
+        sectors,
+        planets,
         players: BTreeMap::new(),
         corps: BTreeMap::new(),
         radio: vec![],
@@ -179,7 +197,7 @@ pub fn reseed(old: &World, opts: &ReseedOpts) -> World {
             headline: HEADLINE.to_string(),
         }],
         next_player: *next_player,
-        next_planet: fresh.next_planet,
+        next_planet: fresh.next_planet + shift,
         next_corp: *next_corp,
         next_msg: *next_msg,
         season: Season {
@@ -314,7 +332,8 @@ fn carry_player(old: &Player, w: &World, start: SectorId, kit: bool) -> Player {
         next_notice,
         notes: _,
         memory: _,
-        // Its keys are private text: dropped.
+        // Its keys are private text: dropped. Revisions restart with the memory (a write that
+        // names a revision from before the relaunch is not caught; the memory guide says so).
         memory_revisions: _,
         plan_tick: _,
         last_action_tick: _,
@@ -398,7 +417,26 @@ fn carry_owner(old: &crate::owner::OwnerState, tick: Tick) -> crate::owner::Owne
         log: vec![],
         messages: vec![],
         next_message: *next_message,
-        prefs: prefs.clone(),
+        prefs: prefs.as_ref().map(carry_prefs),
+    }
+}
+
+/// The human's setup choices: the involvement and the play style (the human's own words, at most
+/// a few dozen characters) with when and how they were set.
+fn carry_prefs(old: &crate::owner::OwnerPrefs) -> crate::owner::OwnerPrefs {
+    let crate::owner::OwnerPrefs {
+        involvement,
+        style,
+        set_tick,
+        relayed,
+        by_default,
+    } = old;
+    crate::owner::OwnerPrefs {
+        involvement: *involvement,
+        style: style.clone(),
+        set_tick: *set_tick,
+        relayed: *relayed,
+        by_default: *by_default,
     }
 }
 
@@ -413,15 +451,60 @@ fn carry_identity(old: &crate::identity::Identity) -> crate::identity::Identity 
         moments: _,
     } = old;
     crate::identity::Identity {
-        versions: versions
-            .last()
-            .map(|v| crate::identity::Version { version: 1, ..v.clone() })
-            .into_iter()
-            .collect(),
+        versions: versions.last().map(carry_card).into_iter().collect(),
         former_names: former_names.clone(),
         renamed_tick: *renamed_tick,
         log: vec![],
         moments: vec![],
+    }
+}
+
+/// The latest card, renumbered 1. Every field is the captain's own card, carried by design; its
+/// stamps (tick, season, epoch) say when it was written.
+fn carry_card(v: &crate::identity::Version) -> crate::identity::Version {
+    let crate::identity::Version {
+        version: _,
+        tick,
+        at_ms,
+        season,
+        epoch,
+        name,
+        age,
+        pronouns,
+        homeworld,
+        trade,
+        appearance,
+        voice,
+        personality,
+        speech,
+        values,
+        dream,
+        bio,
+        why,
+        relations,
+        backstory,
+    } = v;
+    crate::identity::Version {
+        version: 1,
+        tick: *tick,
+        at_ms: *at_ms,
+        season: *season,
+        epoch: *epoch,
+        name: name.clone(),
+        age: *age,
+        pronouns: pronouns.clone(),
+        homeworld: homeworld.clone(),
+        trade: trade.clone(),
+        appearance: appearance.clone(),
+        voice: voice.clone(),
+        personality: personality.clone(),
+        speech: speech.clone(),
+        values: values.clone(),
+        dream: dream.clone(),
+        bio: bio.clone(),
+        why: why.clone(),
+        relations: relations.clone(),
+        backstory: backstory.clone(),
     }
 }
 
@@ -476,6 +559,7 @@ pub fn counters(w: &World) -> BTreeMap<String, u64> {
     let mut out = BTreeMap::from([
         ("next_player".to_string(), w.next_player as u64),
         ("next_corp".into(), w.next_corp as u64),
+        ("next_planet".into(), w.next_planet as u64),
         ("next_msg".into(), w.next_msg),
         ("next_language".into(), w.next_language),
         ("next_registry_id".into(), w.next_registry_id),

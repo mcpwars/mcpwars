@@ -722,6 +722,50 @@ fn reseed_audit(old: &af_core::World, new: &af_core::World, replayed: usize) -> 
     })
 }
 
+/// The reseed checks that need no lock (a snapshot read and a catalogue query), run before the
+/// running server is asked to hand over. The same checks run again under the lock.
+fn reseed_prechecks(db: &str, archive: &str, seed: Option<u64>, rollback: bool) -> anyhow::Result<()> {
+    let there = af_store::pg::schema_af_tables(db, archive)?;
+    if rollback {
+        let missing: Vec<&str> = af_store::pg::UNIVERSE_TABLES
+            .iter()
+            .copied()
+            .filter(|t| !there.iter().any(|h| h == t))
+            .collect();
+        anyhow::ensure!(
+            missing.is_empty(),
+            "schema {archive} holds no complete archived universe (missing {}); nothing was changed",
+            missing.join(", ")
+        );
+        return Ok(());
+    }
+    anyhow::ensure!(
+        there.is_empty(),
+        "schema {archive} already holds {}: choose another --archive-schema; nothing was changed",
+        there.join(", ")
+    );
+    let snap = af_store::Store::open_location(db, af_store::Access::Snapshot)?;
+    let base = snap.base()?;
+    anyhow::ensure!(
+        base.engine == af_core::ENGINE_VERSION,
+        "the universe is on engine {} but this build is {}: let a server of this build adopt it first; nothing was changed",
+        base.engine,
+        af_core::ENGINE_VERSION
+    );
+    let (old, _) = snap.load_world()?;
+    drop(snap);
+    let opts = seed
+        .map(|seed| af_core::reseed::ReseedOpts { seed })
+        .unwrap_or_else(|| af_core::reseed::ReseedOpts::for_world(&old));
+    let audit = reseed_audit(&old, &af_core::reseed::reseed(&old, &opts), 0);
+    anyhow::ensure!(
+        audit["counters_never_go_down"].as_bool().unwrap_or(false),
+        "an id counter would go down: {}; nothing was changed",
+        audit["counters_down"]
+    );
+    Ok(())
+}
+
 /// `af-server reseed` (see the subcommand's help).
 fn reseed(db: &str, archive: &str, seed: Option<u64>, dry_run: bool, wait_secs: u64, rollback: bool) -> anyhow::Result<()> {
     use af_core::reseed::{ReseedOpts, kept_ids};
@@ -754,6 +798,10 @@ fn reseed(db: &str, archive: &str, seed: Option<u64>, dry_run: bool, wait_secs: 
         anyhow::bail!("a reseed or rollback runs on Postgres only (a database file supports --dry-run)");
     }
     af_store::pg::valid_archive_schema(archive)?;
+    // Refuse what can be refused without the lock first: a refusal after the handover would cost
+    // captains a minute or two of `server_moving` for nothing.
+    reseed_prechecks(db, archive, seed, rollback)?;
+    lap("prechecks", &mut at);
     let store = take_writer_lock(db, wait_secs)?;
     lap("lock_wait", &mut at);
     if rollback {
@@ -828,8 +876,18 @@ fn reseed(db: &str, archive: &str, seed: Option<u64>, dry_run: bool, wait_secs: 
         Ok(n) => n,
         Err(e) => {
             eprintln!("the new universe failed its checks ({e}): moving the previous universe back");
-            match store.restore_relocated(archive, true) {
-                Ok(_) => eprintln!("the previous universe is back in place; nothing else changed"),
+            let restored = match store.restore_relocated(archive, true) {
+                Ok(_) => Ok(()),
+                Err(r) => {
+                    // Most likely the connection dropped (and the lock went with it): retry once on
+                    // a new connection that takes the lock again.
+                    eprintln!("restoring failed ({r}): retrying once on a new connection");
+                    drop(store);
+                    take_writer_lock(db, 60).and_then(|s| Ok(s.restore_relocated(archive, true).map(|_| ())?))
+                }
+            };
+            match restored {
+                Ok(()) => eprintln!("the previous universe is back in place; nothing else changed"),
                 Err(r) => eprintln!(
                     "RESTORE FAILED ({r}): the previous universe is still in schema {archive}; run `af-server reseed --rollback --archive-schema {archive}`"
                 ),
