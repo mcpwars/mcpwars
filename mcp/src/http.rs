@@ -1230,7 +1230,7 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
                 None => Err(af_core::Refusal::new("backup_running", crate::game::BACKUP_BUSY)),
                 Some(permit) => {
                     let dest = dir.join(format!("manual-{}.redb", crate::game::now_ms()));
-                    game.backup_with(dest.clone(), permit)
+                    game.backup_with(dest.clone(), permit, false)
                         .await
                         .map(|n| json!({"summary": format!("Backup written ({n} bytes)."), "path": dest}))
                         .map_err(|e| af_core::Refusal::new("backup_failed", e))
@@ -2405,7 +2405,7 @@ async fn sysop_backup(State(s): State<AppState>, h: HeaderMap) -> Response {
     let dest = crate::backup::download_path(&dir);
     // Removes the file however this request ends: sent, failed, or the client gone.
     let file = crate::backup::RemoveOnDrop(dest.clone());
-    if let Err(e) = s.game.backup_with(dest.clone(), permit.clone()).await {
+    if let Err(e) = s.game.backup_with(dest.clone(), permit.clone(), true).await {
         return fail(StatusCode::INTERNAL_SERVER_ERROR, format!("backup failed: {e}"));
     }
     let hashed = {
