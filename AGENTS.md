@@ -857,7 +857,10 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
 - Captain tools: `mcp/src/tools.rs` `build_catalog`; owner tools: `owner_catalog`. Before parsing,
   `tools::coerce_args` turns numeric, boolean or JSON-array strings into their schema types wherever the tool's
   schema allows that type and not a string (some clients send every number as a string); captain, owner
-  and sysop calls all pass through it. Captain equipment calls accept qty/count aliases and refuse
+  and sysop calls all pass through it. After it, captain and owner (not sysop) arguments nested more
+  than `tools::MAX_ARG_DEPTH` (40) levels are refused `too_deep` before anything is journaled
+  (`tools::depth_check`, counted without recursion); the engine's own bound on stored values comes
+  with the next engine bump. Captain equipment calls accept qty/count aliases and refuse
   unknown fields before mutation. Repeated unresolved refusals add a short briefing hint from recent
   telemetry; a later success clears it. `wait_for_event` defaults to 30 seconds, capped at 45.
   Tool descriptions

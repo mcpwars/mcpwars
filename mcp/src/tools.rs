@@ -525,6 +525,46 @@ pub fn coerce_args(defs: &[ToolDef], name: &str, args: &Value) -> Value {
     v
 }
 
+/// The deepest argument nesting a captain or owner call may carry. Containers count (`{}` and
+/// `[]` are depth 1, a scalar 0), so a memory export whose records hold data 32 deep
+/// (six wrapping levels: arguments, bundle, records, record, versions, version) still re-imports.
+/// The engine's own bound on stored values is the real limit; this keeps the intake shallow.
+pub const MAX_ARG_DEPTH: usize = 40;
+
+/// Container nesting depth of a JSON value, counted without recursion.
+pub fn json_depth(v: &Value) -> usize {
+    let mut deepest = 0;
+    let mut stack = vec![(v, 1usize)];
+    while let Some((v, d)) = stack.pop() {
+        match v {
+            Value::Object(m) => {
+                deepest = deepest.max(d);
+                stack.extend(m.values().map(|c| (c, d + 1)));
+            }
+            Value::Array(a) => {
+                deepest = deepest.max(d);
+                stack.extend(a.iter().map(|c| (c, d + 1)));
+            }
+            _ => {}
+        }
+    }
+    deepest
+}
+
+/// Refuse arguments nested deeper than [`MAX_ARG_DEPTH`], before anything is parsed or journaled.
+pub fn depth_check(args: &Value) -> Result<(), Refusal> {
+    if json_depth(args) > MAX_ARG_DEPTH {
+        return Err(Refusal::new(
+            "too_deep",
+            format!("Arguments are nested deeper than {MAX_ARG_DEPTH} levels. Nothing was done."),
+        )
+        .hint(format!(
+            "Flatten the value to at most {MAX_ARG_DEPTH} levels of objects and arrays, counting the arguments object."
+        )));
+    }
+    Ok(())
+}
+
 /// A preview flag (`dry_run`, `preview`) sent to a write tool whose schema has none is refused:
 /// unknown arguments are otherwise ignored, so a requested quote would execute the action.
 pub fn unsupported_preview(defs: &[ToolDef], name: &str, args: &Value) -> Option<Refusal> {
@@ -728,8 +768,8 @@ pub fn wait_timeout(requested: Option<u64>) -> u64 {
     requested.unwrap_or(30).clamp(1, 45)
 }
 
-/// Normalize common aliases before parsing; reject unknown equipment fields rather than
-/// silently buying the maximum when a misspelled quantity is ignored.
+/// Normalize common aliases before parsing and refuse arguments nested too deep; reject unknown
+/// equipment fields rather than silently buying the maximum when a misspelled quantity is ignored.
 fn captain_args(defs: &[ToolDef], name: &str, args: &Value) -> Result<Value, Refusal> {
     let mut args = args.clone();
     if name == "constitution" && args["action"] == "list" {
@@ -759,7 +799,9 @@ fn captain_args(defs: &[ToolDef], name: &str, args: &Value) -> Result<Value, Ref
             ));
         }
     }
-    Ok(coerce_args(defs, name, &args))
+    let args = coerce_args(defs, name, &args);
+    depth_check(&args)?;
+    Ok(args)
 }
 
 /// Dispatch a tool call for an authenticated player.
@@ -1280,6 +1322,9 @@ async fn owner_run(game: &Game, pid: PlayerId, a: af_core::owner::OwnerArgs) -> 
 /// Dispatch a tool call made with an owner token.
 pub async fn owner_call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolReply {
     let args = &coerce_args(&owner_catalog(), name, args);
+    if let Err(r) = depth_check(args) {
+        return ToolReply::err(&r);
+    }
     use af_core::owner::OwnerArgs;
     macro_rules! p {
         ($t:ty) => {
