@@ -145,6 +145,37 @@ enum Cmd {
         #[arg(long)]
         to: PathBuf,
     },
+    /// Relaunch (operator only): replace the universe with a new one seeded with identities only.
+    /// Kept per captain: call sign, credentials (token, owner token and recovery key hashes, so no
+    /// captain reconnects), model, harness, the Autonomous flag, a ban or mute, the latest identity
+    /// card and the human's involvement setting; everything else starts fresh in a new galaxy.
+    /// A real run (Postgres only) takes the writer lock the way a starting server does (the running
+    /// server hands over and answers 503 meanwhile), moves the whole previous universe into the
+    /// private schema --archive-schema, writes the new universe in its place, checks it and
+    /// releases the lock; if anything fails after the move it moves the previous universe back.
+    /// --dry-run reads a snapshot without the lock (production keeps running), prints the audit and
+    /// writes nothing; it works on a database file too. --rollback moves the archived universe back
+    /// (discarding the current one). Prints a JSON audit: counts, ids and hashes, never content.
+    Reseed {
+        /// A postgres:// URL (or a database file, for --dry-run only).
+        #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
+        db: String,
+        /// The private schema the previous universe moves to (and comes back from with --rollback).
+        #[arg(long, default_value = "pre_relaunch")]
+        archive_schema: String,
+        /// Seed for the new galaxy (default: derived from the old world's seed and tick).
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Build and audit the new universe from a snapshot read; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// How long to wait for the running server to hand the universe over.
+        #[arg(long, default_value_t = 600)]
+        wait_secs: u64,
+        /// Move the archived universe back into place, dropping the current one.
+        #[arg(long)]
+        rollback: bool,
+    },
     /// Copy a universe from a database file into an empty store (a restore or a migration).
     /// Stop the server first: the import takes the writer lock.
     Import {
@@ -537,6 +568,14 @@ async fn main() -> anyhow::Result<()> {
             })
             .await??
         }
+        Cmd::Reseed {
+            db,
+            archive_schema,
+            seed,
+            dry_run,
+            wait_secs,
+            rollback,
+        } => tokio::task::spawn_blocking(move || reseed(&db, &archive_schema, seed, dry_run, wait_secs, rollback)).await??,
         Cmd::Import { from, to } => {
             tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                 let src = af_store::Store::open(&from)?;
@@ -613,6 +652,202 @@ p { color: #9097bd; margin: 0; }
 <h1><span class="dot" aria-hidden="true"></span>Jumping to a new version</h1>
 <p>The galaxy is back in a few seconds. This page reloads by itself, and nothing in the universe is lost.</p>
 </main></body></html>"#;
+
+/// Take the universe's writer lock the way a starting server does: when another server holds it,
+/// check this build may take over (never from a newer engine or schema), ask it to hand over and
+/// retry every 2 seconds, for at most `wait_secs`.
+fn take_writer_lock(db: &str, wait_secs: u64) -> anyhow::Result<af_store::Store> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(wait_secs);
+    let mut asked = 0u32;
+    loop {
+        match af_store::Store::open_location(db, af_store::Access::Writer) {
+            Ok(s) => {
+                if asked > 0 {
+                    eprintln!("the running server handed the universe over");
+                }
+                return Ok(s);
+            }
+            Err(af_store::StoreError::Busy(at)) => {
+                match af_store::check_takeover(db) {
+                    Err(e @ (af_store::StoreError::NewerFile { .. } | af_store::StoreError::NewerEngine { .. })) => return Err(e.into()),
+                    Err(e) => eprintln!("could not read the universe's versions before the handover ({e}); asking anyway"),
+                    Ok(()) => {}
+                }
+                if std::time::Instant::now() >= deadline {
+                    anyhow::bail!("the server running the universe at {at} did not hand it over within {wait_secs}s; nothing was changed");
+                }
+                if asked == 0 {
+                    eprintln!("another server is running the universe at {at}: asking it to hand over");
+                }
+                asked += 1;
+                if let Err(e) = af_store::pg::request_handoff(db) {
+                    eprintln!("handoff request failed: {e}");
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// The reseed audit: counts, ids and hashes of the old and new worlds, never content.
+fn reseed_audit(old: &af_core::World, new: &af_core::World, replayed: usize) -> serde_json::Value {
+    use af_core::reseed;
+    let kept = reseed::kept_ids(old);
+    let npcs: Vec<u32> = new.players.values().filter(|p| p.npc.is_some()).map(|p| p.id).collect();
+    let (oc, nc) = (reseed::counters(old), reseed::counters(new));
+    let counters_down: Vec<&String> = oc
+        .iter()
+        .filter(|(k, v)| *k != "archive.epoch" && nc.get(*k).is_none_or(|n| n < *v))
+        .map(|(k, _)| k)
+        .collect();
+    serde_json::json!({
+        "engine": af_core::ENGINE_VERSION,
+        "source": {
+            "seq": old.seq, "tick": old.tick, "state_hash": old.state_hash(), "replayed": replayed,
+            "season": old.season.number, "epoch": old.archive.epoch,
+        },
+        "new": {
+            "seed": new.seed, "seq": new.seq, "tick": new.tick, "state_hash": new.state_hash(),
+            "season": new.season.number, "epoch": new.archive.epoch,
+            "founding_era": af_core::founding::founding(new).is_some(),
+        },
+        "captains_kept": kept.len(),
+        "kept_ids": kept,
+        "npc_ids": {"count": npcs.len(), "min": npcs.iter().min(), "max": npcs.iter().max()},
+        "next_player": new.next_player,
+        "counters_never_go_down": counters_down.is_empty(),
+        "counters_down": counters_down,
+        "counts": {"old": reseed::counts(old), "new": reseed::counts(new)},
+    })
+}
+
+/// `af-server reseed` (see the subcommand's help).
+fn reseed(db: &str, archive: &str, seed: Option<u64>, dry_run: bool, wait_secs: u64, rollback: bool) -> anyhow::Result<()> {
+    use af_core::reseed::{ReseedOpts, kept_ids};
+    let t0 = std::time::Instant::now();
+    let mut phases = serde_json::Map::new();
+    let mut lap = |name: &str, since: &mut std::time::Instant| {
+        phases.insert(format!("{name}_ms"), serde_json::json!(since.elapsed().as_millis() as u64));
+        *since = std::time::Instant::now();
+    };
+    let mut at = std::time::Instant::now();
+    if dry_run && rollback {
+        anyhow::bail!("--dry-run and --rollback do not go together");
+    }
+    if dry_run {
+        // A snapshot read: no lock, the running server keeps going.
+        let store = af_store::Store::open_location(db, af_store::Access::Snapshot)?;
+        let (old, replayed) = store.load_world()?;
+        lap("load", &mut at);
+        let opts = seed.map(|seed| ReseedOpts { seed }).unwrap_or_else(|| ReseedOpts::for_world(&old));
+        let new = af_core::reseed::reseed(&old, &opts);
+        lap("build", &mut at);
+        let mut audit = reseed_audit(&old, &new, replayed);
+        audit["dry_run"] = true.into();
+        audit["store"] = store.describe().into();
+        audit["phases"] = phases.into();
+        println!("{}", serde_json::to_string_pretty(&audit)?);
+        return Ok(());
+    }
+    if !af_store::pg::is_postgres(db) {
+        anyhow::bail!("a reseed or rollback runs on Postgres only (a database file supports --dry-run)");
+    }
+    af_store::pg::valid_archive_schema(archive)?;
+    let store = take_writer_lock(db, wait_secs)?;
+    lap("lock_wait", &mut at);
+    if rollback {
+        let moved = store.restore_relocated(archive, true)?;
+        let audit = serde_json::json!({"rollback": moved, "store": store.describe(), "total_ms": t0.elapsed().as_millis() as u64});
+        println!("{}", serde_json::to_string_pretty(&audit)?);
+        drop(store);
+        eprintln!("rolled back: the archived universe is in place again; the writer lock is released");
+        return Ok(());
+    }
+    let base = store.base()?;
+    if base.engine != af_core::ENGINE_VERSION {
+        anyhow::bail!(
+            "the universe is on engine {} but this build is {}: let a server of this build adopt it first; nothing was changed",
+            base.engine,
+            af_core::ENGINE_VERSION
+        );
+    }
+    let (old, replayed) = store.load_world()?;
+    eprintln!(
+        "loaded the universe at seq {} tick {} (replayed {replayed} journal entries)",
+        old.seq, old.tick
+    );
+    lap("load", &mut at);
+    let opts = seed.map(|seed| ReseedOpts { seed }).unwrap_or_else(|| ReseedOpts::for_world(&old));
+    let new = af_core::reseed::reseed(&old, &opts);
+    let new_hash = new.state_hash();
+    let mut audit = reseed_audit(&old, &new, replayed);
+    if !audit["counters_never_go_down"].as_bool().unwrap_or(false) {
+        anyhow::bail!("an id counter would go down: {}; nothing was changed", audit["counters_down"]);
+    }
+    lap("build", &mut at);
+    let provenance = serde_json::json!({
+        "source_engine": base.engine, "source_seq": old.seq, "source_tick": old.tick,
+        "source_state_hash": old.state_hash(), "captains_kept": kept_ids(&old).len(),
+        "seed": new.seed, "archive_schema": archive, "at_ms": af_mcp::game::now_ms(),
+    });
+    let genesis = af_store::Genesis {
+        seed: new.seed,
+        sectors: new.sector_count(),
+        rules: new.rules.clone(),
+        created_unix_ms: af_mcp::game::now_ms(),
+        engine: af_core::ENGINE_VERSION.into(),
+    };
+    let moved = store.relocate_universe(archive)?;
+    eprintln!("moved the previous universe into schema {archive}");
+    lap("relocate", &mut at);
+    // From here on a failure moves the previous universe back before exiting.
+    let checked = (|| -> anyhow::Result<usize> {
+        store.init_with_world(&genesis, &new, &provenance)?;
+        let (loaded, replayed) = store.load_world()?;
+        anyhow::ensure!(replayed == 0, "the new universe replayed {replayed} entries, not 0");
+        anyhow::ensure!(
+            loaded.state_hash() == new_hash,
+            "the stored universe's hash differs from the one built"
+        );
+        let kept = kept_ids(&old);
+        for id in &kept {
+            let (o, n) = (&old.players[id], loaded.players.get(id));
+            anyhow::ensure!(
+                n.is_some_and(|n| n.name == o.name
+                    && n.token_hash == o.token_hash
+                    && n.owner_token_hash == o.owner_token_hash
+                    && n.recovery_hash == o.recovery_hash),
+                "captain {id} lost its call sign or credentials"
+            );
+        }
+        Ok(kept.len())
+    })();
+    lap("init_and_verify", &mut at);
+    let kept = match checked {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("the new universe failed its checks ({e}): moving the previous universe back");
+            match store.restore_relocated(archive, true) {
+                Ok(_) => eprintln!("the previous universe is back in place; nothing else changed"),
+                Err(r) => eprintln!(
+                    "RESTORE FAILED ({r}): the previous universe is still in schema {archive}; run `af-server reseed --rollback --archive-schema {archive}`"
+                ),
+            }
+            return Err(e.context("reseed failed after the move (see above)"));
+        }
+    };
+    audit["dry_run"] = false.into();
+    audit["store"] = store.describe().into();
+    audit["relocation"] = serde_json::to_value(&moved)?;
+    audit["verified"] = serde_json::json!({"replayed": 0, "state_hash_matches": true, "credentials_match": kept});
+    phases.insert("total_ms".into(), serde_json::json!(t0.elapsed().as_millis() as u64));
+    audit["phases"] = phases.into();
+    println!("{}", serde_json::to_string_pretty(&audit)?);
+    drop(store);
+    eprintln!("done: the new universe is in place and the writer lock is released; the released server exits and restarts on it");
+    Ok(())
+}
 
 /// Replay from the base and compare with the snapshot-based restore.
 fn verify(db: &str) -> anyhow::Result<()> {

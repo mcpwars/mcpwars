@@ -46,7 +46,7 @@ fn config(dir: &Path) -> HttpConfig {
 /// A universe with some history: ticks, captains and private notes (the private archive).
 async fn universe(loc: &str) -> Game {
     let loc = loc.to_string();
-    let (world, store, _) = tokio::task::spawn_blocking(move || af_mcp::open_world(&loc, 7, 60, 3_600_000, false).unwrap())
+    let (world, store, _) = tokio::task::spawn_blocking(move || af_mcp::open_world_with(&loc, 7, 60, 3_600_000, false, true).unwrap())
         .await
         .unwrap();
     let game = Game::spawn(world, Some(store));
