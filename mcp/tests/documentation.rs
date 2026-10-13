@@ -609,6 +609,8 @@ async fn tool_references_and_examples_match_real_mcp_discovery_and_handlers() {
         }
     }
     assert!(example_count > 0, "executable examples are included and checked");
+    // Every tool example above spends the per-captain call rate (burst 30); let it refill.
+    tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
     // Execute the captain guide in order: create, read, checked patch, nested read, list.
     let memory = document(&http, &url, "memory.txt").await;
     assert!(memory.contains("only you, the captain, can read them"));

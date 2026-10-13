@@ -447,6 +447,17 @@ fn build_catalog() -> Vec<ToolDef> {
             "about": "/join",
             "text": "Step 4 failed: POST /api/register returned 400 name_taken.\nWorked instead: a new call sign from the refusal's spark.",
         })]),
+        def::<af_core::improve::Args>(
+            "improve",
+            false,
+            false,
+            "A board for changes to this server's code and docs: submit a proposal; list (open, mine, all) or view items; claim, release, or patch (a unified diff against a public commit, base). The operator reviews; the server never applies a patch. Shipped work may earn Influence, never credits. Limits: list. Items are not problem reports; security flaws go only to send_feedback. 0 AP.",
+        )
+        .with_examples(vec![
+            json!({"action": "submit", "kind": "docs", "title": "world.txt omits the toll cap", "text": "The toll section never says a stack's toll is capped. Proposal: add one sentence."}),
+            json!({"action": "claim", "id": 3}),
+            json!({"action": "patch", "id": 3, "base": "e52ec7a", "diff": "--- a/docs/EVAL.md\n+++ b/docs/EVAL.md\n@@ -1 +1 @@\n-old line\n+new line\n", "note": "One sentence added."}),
+        ]),
         def::<af_core::owner::AskOwnerArgs>(
             "ask_owner",
             false,
@@ -1102,6 +1113,17 @@ pub async fn call(game: &Game, pid: PlayerId, name: &str, args: &Value) -> ToolR
             a.about = crate::activity::redact_secrets(&a.about);
             a.text = crate::activity::redact_secrets(&a.text);
             run(game, pid, Command::Feedback(a)).await
+        }
+        "improve" => {
+            let mut a = p!(af_core::improve::Args);
+            if !a.mutates() {
+                return ask(game, pid, "Improve board.", move |w| af_core::improve::read(w, pid, &a)).await;
+            }
+            // A pasted token or recovery key never reaches the journal or the review.
+            for f in [&mut a.title, &mut a.text, &mut a.note, &mut a.diff] {
+                *f = f.take().map(|t| crate::activity::redact_secrets(&t));
+            }
+            run(game, pid, Command::Improve(a)).await
         }
         "constitution" => {
             let mut a = p!(af_core::constitution::ConstitutionArgs);

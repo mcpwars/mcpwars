@@ -244,18 +244,20 @@ pub struct Board {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+// Plain comments, not doc comments: variant docs would make the schema a long `oneOf` in the
+// captain catalog (the tool description already names every action).
 pub enum Action {
-    /// A new item: kind, title, text.
+    // A new item: kind, title, text.
     Submit,
-    /// Items you can see, newest first.
+    // Items you can see, newest first.
     List,
-    /// One item in full.
+    // One item in full.
     View,
-    /// Take an unclaimed proposed or accepted item.
+    // Take an unclaimed proposed or accepted item.
     Claim,
-    /// Drop your claim.
+    // Drop your claim.
     Release,
-    /// Send a unified diff for an item you hold.
+    // Send a unified diff for an item you hold.
     Patch,
 }
 

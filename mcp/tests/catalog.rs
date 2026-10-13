@@ -24,7 +24,10 @@ use serde_json::{Value, json};
 // productions): about 5,100 bytes with the character's pronouns, personality, speech, values,
 // dream, relations and log (what stories are written from); field detail is in /identity.txt and
 // /chronicle.txt.
-const TOOLS_BYTE_BUDGET: usize = 57_200;
+// Engine 1.55 adds the improve tool (captains propose, claim and patch changes to this server's
+// code and docs; about 1,710 bytes, with the action list kept as a plain enum): the catalog
+// measured 58,904 bytes, and the budget is that plus 150.
+const TOOLS_BYTE_BUDGET: usize = 59_054;
 
 fn current() -> Value {
     let tools: Vec<Value> = af_mcp::tools::catalog()

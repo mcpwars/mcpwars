@@ -356,6 +356,7 @@ pub fn router(game: Game, mut cfg: HttpConfig) -> Router {
         .route("/api/sysop/chronicle/page", get(sysop_chronicle_page))
         .route("/api/sysop/chronicle/production", get(sysop_chronicle_production))
         .route("/api/sysop/chronicle/bible", get(sysop_chronicle_bible))
+        .route("/api/sysop/improve", get(sysop_improve))
         .route("/api/public/chronicle/person", get(public_chronicle_person))
         .route("/api/sysop/history", get(sysop_history))
         .route("/api/sysop/history/season", get(sysop_history_season))
@@ -1041,6 +1042,48 @@ async fn admin_recipient(game: &Game, value: Option<&Value>) -> Result<Option<u3
         .ok_or_else(|| af_core::Refusal::new("unknown_player", "player did not resolve. Nothing was sent or changed."))
 }
 
+/// The body of the `improve` admin action as the journaled `improve::AdminArgs`: `decision` names
+/// the operation; `player` is a call sign or numeric id (omitted or null: none, which clears a
+/// claim with `assign`); numbers may arrive as strings.
+async fn improve_admin_args(game: &Game, b: &Value) -> Result<af_core::improve::AdminArgs, af_core::Refusal> {
+    use af_core::improve::{AdminArgs as A, Decision, Kind};
+    let bad = |m: &str| af_core::Refusal::new("invalid_args", format!("{m} Nothing was changed."));
+    let decision: Decision = serde_json::from_value(b["decision"].clone())
+        .map_err(|_| bad("decision is required: accept, post, promote_feedback, assign, return, decline, ship or award."))?;
+    let kind = match b.get("kind").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(serde_json::from_value::<Kind>(v.clone()).map_err(|_| bad("kind must be bug, docs, rules, feature or protocol."))?),
+    };
+    let player = match b.get("player").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => admin_recipient(game, Some(v)).await.map_err(|r| {
+            if r.code == "invalid_args" {
+                bad("player must be a call sign or a numeric id; omit it to clear a claim with assign.")
+            } else {
+                r
+            }
+        })?,
+    };
+    let int = |k: &str| {
+        b.get(k)
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+    };
+    let id = |k: &str| int(k).and_then(|n| u64::try_from(n).ok());
+    let text = |k: &str| b[k].as_str().map(String::from);
+    Ok(A {
+        decision,
+        id: id("id"),
+        player,
+        feedback: id("feedback"),
+        kind,
+        title: text("title"),
+        text: text("text"),
+        note: text("note"),
+        commit: text("commit"),
+        amount: int("amount"),
+    })
+}
+
 /// Sysop/admin actions share this dispatcher. Game mutations are journaled commands;
 /// pause, resume, snapshot and backup operate on the running process or storage.
 /// Returns None for an unknown action.
@@ -1576,6 +1619,15 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
             )
             .await
             .map(|o| json!({"summary": o.summary, "id": o.reply["id"], "status": o.reply["status"]})),
+        "improve" => {
+            let args = match improve_admin_args(game, &b).await {
+                Ok(a) => a,
+                Err(r) => return Some(Err(r)),
+            };
+            game.exec(Actor::System, Command::Admin(AdminArgs::Improve(args)))
+                .await
+                .map(|o| json!({"summary": o.summary, "result": o.reply}))
+        }
         "remove_player" => game
             .exec(
                 Actor::System,
@@ -2156,6 +2208,56 @@ async fn sysop_chronicle_bible(State(s): State<AppState>, Query(q): Query<Chroni
     sysop_guard!(s, h);
     let since = q.since_tick;
     Json(s.game.read(move |w| af_core::chronicle::story_bible(w, since)).await).into_response()
+}
+
+/// Query parameters of `GET /api/sysop/improve`.
+#[derive(Deserialize, Default)]
+pub struct ImproveQ {
+    /// Only items with this status: proposed, accepted, review, shipped or declined.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// One item in full.
+    #[serde(default)]
+    pub id: Option<u64>,
+}
+
+/// The operator's view of the improve board (`af_core::improve::operator_view`): the summary block,
+/// then every item (diff bodies included) and the award ledger, or one item with `id`. An unknown
+/// status is refused (400) and an unknown id is not found (404).
+pub async fn improve_view(game: &Game, q: ImproveQ) -> Result<Value, (StatusCode, af_core::Refusal)> {
+    const STATUSES: [&str; 5] = ["proposed", "accepted", "review", "shipped", "declined"];
+    let status = q
+        .status
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty() && s != "all");
+    if let Some(s) = &status
+        && !STATUSES.contains(&s.as_str())
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            af_core::Refusal::new("invalid_args", "status must be proposed, accepted, review, shipped or declined."),
+        ));
+    }
+    let v = game
+        .read(move |w| af_core::improve::operator_view(w, status.as_deref(), q.id))
+        .await;
+    if let Some(id) = q.id
+        && v["item"].is_null()
+    {
+        return Err((
+            StatusCode::NOT_FOUND,
+            af_core::Refusal::new("not_found", format!("No improve item #{id}.")),
+        ));
+    }
+    Ok(v)
+}
+
+async fn sysop_improve(State(s): State<AppState>, Query(q): Query<ImproveQ>, h: HeaderMap) -> Response {
+    sysop_guard!(s, h);
+    match improve_view(&s.game, q).await {
+        Ok(v) => Json(v).into_response(),
+        Err((code, r)) => (code, Json(json!({"error": r}))).into_response(),
+    }
 }
 
 async fn sysop_languages(State(s): State<AppState>, h: HeaderMap) -> Response {
