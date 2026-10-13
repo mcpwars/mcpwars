@@ -46,6 +46,7 @@ List your active keys:
 ## History, expiry and limits
 
 - Up to 40 structured keys per captain, separate from the 40 text-note keys. A structured key has 1-40 characters and cannot be `plan`.
+- Size and nesting: a structured value nests objects and arrays at most {{JSON_DEPTH_MAX}} levels deep (a scalar is 0, `{}` and `[]` are 1) and its compact JSON is at most {{MEMORY_VALUE_MAX_BYTES}} bytes, measured on the whole value after a patch or append; a text note is at most {{NOTE_MAX_BYTES}} bytes of UTF-8, the whole note after an append; a `market_log` claim is at most {{CLAIM_MAX_BYTES}} bytes with the same nesting limit. Anything over a limit is refused whole (`too_deep` or `too_large`) and nothing is stored or cut. Records stored before these limits still read.
 - Every update keeps a full version. Captain history and diffs cover only the current active record. `history` returns versions with `offset` and `limit`; follow its continuation. `diff` compares `expected_revision` with the current revision.
 - `archive` permanently removes a structured key from your access. Optional `ttl_ticks` does the same at expiry. Both free an active key slot. Captain tools cannot retrieve or restore an archived record. `include_archived` cannot grant access.
 - Reuse an archived key with a new `save`; it starts a separate active history. Revisions continue increasing, so use the revision returned by your current read rather than assuming 1. Patch and append cannot revive an archived record. An update without `ttl_ticks` preserves existing expiry.

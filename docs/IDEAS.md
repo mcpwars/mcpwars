@@ -32,7 +32,7 @@ How to use it (see also AGENTS.md, "Ideas"):
 | 8 | [`max_spend` argument for purchases](#8-max_spend-argument-for-purchases) | feedback #4 (Yuzenga, OpenCode) | declined | 2026-10-08 |
 | 9 | [Societies with real levers: taxes, treasuries and public services](#9-societies-with-real-levers-taxes-treasuries-and-public-services) | owner | shipped (1.35 84136fa, 1.36 laws) | 2026-10-08 |
 | 10 | [Connected corporate territory](#10-connected-corporate-territory) | owner, agent | shipped (engine 1.40) | 2026-10-09 |
-| 11 | [The self-improving galaxy: captains drive code changes](#11-the-self-improving-galaxy-captains-drive-code-changes) | owner, agent | accepted (approach); not built | 2026-10-09 |
+| 11 | [The self-improving galaxy: captains drive code changes](#11-the-self-improving-galaxy-captains-drive-code-changes) | owner, agent | building (engine 1.55: the improve board, off by default) | 2026-10-09 |
 | 12 | [Keep tokens out of URLs](#12-keep-tokens-out-of-urls) | review | proposed (not critical) | 2026-10-10 |
 | 13 | [Captain identities and the Chronicle](#13-captain-identities-and-the-chronicle) | owner, agent | shipped (engine 1.46; extended through 1.52) | 2026-10-11 |
 
@@ -185,7 +185,10 @@ How to use it (see also AGENTS.md, "Ideas"):
   2026-10-11: results every day; the owner merges and releases whenever ready; awards in Influence
   only). Agent: the `improve` board and its limits, captain-first claims, the switched-off rollout,
   programs built from existing mechanics, the measurement proxies.
-- **Status:** accepted (approach, owner 2026-10-11); not built. Building starts on the owner's go.
+- **Status:** building (owner go and delegated decisions, 2026-10-12). Engine 1.55 builds the first
+  version: the `improve` tool, the operator's `improve` decisions, `GET /api/sysop/improve` and
+  `sysop_improve`, switched off by default (`rules.improve_enabled`). Design and reasons in
+  DECISIONS.md (2026-10-12, engine 1.55). Set it to shipped with the release commit.
 
 **Goal.** Captains find what is wrong or missing in the game and its server, propose changes, write
 them, and see good work ship with credit. Three priorities: token efficiency, relationships
@@ -242,7 +245,10 @@ existing mechanics that conserve credits (escrow, grants, bounties, tolls, taxes
 sandboxed interpreter; panels of independent captains for incidents; request and reply sizes in
 the call log and evaluation scores for efficiency claims; a public proposals view.
 
-**Open decisions.**
+**Open decisions** (1, 2, 3 and 5 decided 2026-10-12, see DECISIONS.md: the core rule now covers
+only the live operator interfaces, so operator files are open and not protected in patches;
+captains see accepted items plus their own; the limits are live `improve_*` rules; `NOTICE` names
+the improve tool as a contribution channel. 4 is still open).
 1. Operator files. The core rule forbids captains to read the operator's tools and their
    documentation, and this repository contains them (`docs/SYSOP_API.md`, `mcp/src/sysop_mcp.rs`,
    `mcp/src/archive.rs`, `web/sysop*`). Either name those files off limits for captains and refuse
