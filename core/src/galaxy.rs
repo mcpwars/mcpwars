@@ -585,6 +585,7 @@ pub fn generate(cfg: &GenesisConfig) -> World {
         identities: BTreeMap::new(),
         rename_required: Default::default(),
         chronicle: Default::default(),
+        improve: Default::default(),
         treaties: BTreeMap::new(),
         wars: BTreeMap::new(),
         intents: BTreeMap::new(),

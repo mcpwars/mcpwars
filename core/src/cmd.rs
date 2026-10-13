@@ -61,6 +61,9 @@ pub enum Command {
     Identity(Box<crate::identity::Args>),
     /// The Chronicle: shared pages, talk, endorsements, pitches and script approvals (engine 1.46). 0 AP.
     Chronicle(crate::chronicle::Args),
+    /// The improve board: propose, claim and patch changes to this server's code and docs
+    /// (engine 1.55). 0 AP; works during an intermission.
+    Improve(crate::improve::Args),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -390,6 +393,9 @@ pub enum AdminArgs {
     },
     /// The Chronicle (engine 1.46): greenlight, decline, lock or release a production; strike a page.
     Chronicle(crate::chronicle::AdminArgs),
+    /// The improve board (engine 1.55): accept, post, promote_feedback, assign, return, decline,
+    /// ship or award (field `decision`).
+    Improve(crate::improve::AdminArgs),
     /// Moderation: remove a constitution article, or cancel a proposal (its text is struck).
     /// Exactly one of `article` or `proposal`.
     ConstitutionStrike {

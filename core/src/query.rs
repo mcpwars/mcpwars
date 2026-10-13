@@ -1478,6 +1478,7 @@ pub fn game_info(w: &World) -> Value {
                       "concession_bonus_bp": r.territory_concession_bonus_bp, "depot_citadel": r.territory_depot_citadel,
                       "depot_markup_bp": r.territory_depot_markup_bp},
         "founding_era": crate::founding::rules_view(w),
+        "improve": crate::improve::rules_view(w),
         "geography": {"fedspace": format!("sectors 1-{}: no combat, no deployments", r.fedspace_sectors), "stardock_sector": r.stardock_sector,
                       "colonists": "bought at Stardock (sector 1), 25 per hold"},
         "economy": {"commodities": ["fuel_ore", "organics", "equipment"], "base_prices": r.base_price,

@@ -892,6 +892,10 @@ pub struct World {
     /// The Chronicle (engine 1.46): the captains' shared wiki and productions. Never cleared.
     #[serde(default)]
     pub chronicle: crate::chronicle::Chronicle,
+    /// The improve board (engine 1.55): items, claims, patches and the award ledger. Never
+    /// cleared, not by a Big Bang nor a fresh start.
+    #[serde(default)]
+    pub improve: crate::improve::Board,
     // ---- diplomacy and the public registry ----
     #[serde(default)]
     pub treaties: BTreeMap<u64, Treaty>,
