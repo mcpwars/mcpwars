@@ -656,14 +656,153 @@ fn bad_diff(code: &str, msg: impl Into<String>) -> Refusal {
     Refusal::new(code, msg).hint("Send a unified diff (git diff) against a public commit, touching only allowed paths. Nothing was stored.")
 }
 
-fn diff_path(raw: &str) -> Option<String> {
-    let p = raw.split('\t').next().unwrap_or("").trim();
-    let p = p.strip_prefix('"').and_then(|p| p.strip_suffix('"')).unwrap_or(p);
-    if p.is_empty() || p == "/dev/null" {
-        return None;
+/// Longest file-header line a patch may carry, in bytes (git's PATH_MAX is 4,096).
+const HEADER_LINE_MAX: usize = 4_096;
+/// File modes a patch may not set: a symbolic link and a submodule (gitlink).
+const REFUSED_MODES: &[&str] = &["120000", "160000"];
+
+/// A git C-style quoted name (`"a/x\056y"`): the unquoted name and the rest of the line.
+/// `None` when the quotes do not close.
+fn unquote(s: &str) -> Option<(String, &str)> {
+    let body = s.strip_prefix('"')?;
+    let bytes = body.as_bytes();
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => return Some((String::from_utf8_lossy(&out).into_owned(), &body[i + 1..])),
+            b'\\' => {
+                let c = *bytes.get(i + 1)?;
+                i += 2;
+                match c {
+                    b'a' => out.push(7),
+                    b'b' => out.push(8),
+                    b'f' => out.push(12),
+                    b'n' => out.push(b'\n'),
+                    b'r' => out.push(b'\r'),
+                    b't' => out.push(b'\t'),
+                    b'v' => out.push(11),
+                    b'0'..=b'7' => {
+                        let mut v = u32::from(c - b'0');
+                        for _ in 0..2 {
+                            if let Some(d @ b'0'..=b'7') = bytes.get(i).copied() {
+                                v = v * 8 + u32::from(d - b'0');
+                                i += 1;
+                            }
+                        }
+                        out.push((v & 0xff) as u8);
+                    }
+                    other => out.push(other),
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
     }
-    let p = p.strip_prefix("a/").or_else(|| p.strip_prefix("b/")).unwrap_or(p);
-    Some(p.to_string())
+    None
+}
+
+/// The name a tool applying the patch with `-p1` would write: the first component dropped.
+fn strip_one(p: &str) -> &str {
+    p.split_once('/').map_or(p, |(_, rest)| rest)
+}
+
+/// Every reading of one name that `git apply -p1` or `patch -p1` could take: as written and
+/// with the first component dropped. `/dev/null` names nothing.
+fn readings(name: &str, out: &mut BTreeSet<String>) {
+    if name.is_empty() || name == "/dev/null" {
+        return;
+    }
+    out.insert(name.to_string());
+    out.insert(strip_one(name).to_string());
+}
+
+/// A `--- `, `+++ `, `*** ` or `Index: ` name: its shown name (`-p1`) and, in `seen`, every
+/// reading (quoted names unquoted; a trailing tab or a space before a timestamp ends the name).
+fn header_name(raw: &str, seen: &mut BTreeSet<String>) -> Res<Option<String>> {
+    let name = if raw.starts_with('"') {
+        unquote(raw)
+            .ok_or_else(|| bad_diff("invalid_path", "a quoted file name does not close."))?
+            .0
+    } else {
+        let before_tab = raw.split('\t').next().unwrap_or("");
+        // diff -u writes "name<space>timestamp"; git takes the name before the timestamp.
+        readings(before_tab.split(' ').next().unwrap_or("").trim(), seen);
+        before_tab.trim().to_string()
+    };
+    if name.is_empty() || name == "/dev/null" {
+        return Ok(None);
+    }
+    readings(&name, seen);
+    Ok(Some(strip_one(&name).to_string()))
+}
+
+/// A `diff --git` header's names: the shown names (`-p1`) and, in `seen`, every reading. An
+/// unquoted header with spaces is read at every space, as git searches it.
+fn git_header(rest: &str, seen: &mut BTreeSet<String>) -> Res<Vec<String>> {
+    let unclosed = || bad_diff("invalid_path", "a quoted file name does not close.");
+    let mut pairs: Vec<(String, String)> = vec![];
+    if rest.starts_with('"') {
+        let (a, after) = unquote(rest).ok_or_else(unclosed)?;
+        let after = after.strip_prefix(' ').unwrap_or(after);
+        let b = if after.starts_with('"') {
+            unquote(after).ok_or_else(unclosed)?.0
+        } else {
+            after.to_string()
+        };
+        pairs.push((a, b));
+    } else if let Some(at) = rest.find(" \"") {
+        let b = unquote(&rest[at + 1..]).ok_or_else(unclosed)?.0;
+        pairs.push((rest[..at].to_string(), b));
+    } else {
+        for (at, _) in rest.match_indices(' ') {
+            pairs.push((rest[..at].to_string(), rest[at + 1..].to_string()));
+        }
+        if pairs.is_empty() {
+            pairs.push((rest.to_string(), rest.to_string()));
+        }
+    }
+    for (a, b) in &pairs {
+        readings(a, seen);
+        readings(b, seen);
+    }
+    // The shown names: the split whose two names match after -p1 (git's rule for a header), else
+    // the a/ b/ split, else the first.
+    let pick = pairs
+        .iter()
+        .find(|(a, b)| strip_one(a) == strip_one(b))
+        .or_else(|| pairs.iter().find(|(a, b)| a.starts_with("a/") && b.starts_with("b/")))
+        .or(pairs.first());
+    Ok(pick
+        .map(|(a, b)| vec![strip_one(a).to_string(), strip_one(b).to_string()])
+        .unwrap_or_default())
+}
+
+/// Why a name may not be written, if it may not: absolute, `..` or `.git` components (any case,
+/// as on case-insensitive file systems), or control characters.
+fn invalid_path(f: &str) -> Option<String> {
+    let windows_root = f.len() > 1 && f.as_bytes()[1] == b':';
+    if f.starts_with('/') || f.starts_with('\\') || windows_root {
+        return Some(format!("{f} is an absolute path."));
+    }
+    if f.chars().any(char::is_control) {
+        return Some("a file name contains a control character.".into());
+    }
+    let dotgit = |c: &str| {
+        let c = c.trim_end_matches(['.', ' ']).to_ascii_lowercase();
+        c == ".git" || c.starts_with("git~")
+    };
+    if f.split(['/', '\\']).any(|c| c == ".." || dotgit(c)) {
+        return Some(format!("{f} leaves the repository or touches .git."));
+    }
+    None
+}
+
+/// A name as a file system resolves it: empty and `.` components dropped (`a//b`, `a/./b`).
+fn normal(f: &str) -> String {
+    f.split('/').filter(|c| !c.is_empty() && *c != ".").collect::<Vec<_>>().join("/")
 }
 
 /// Is a repository path protected? (Compared in lower case.)
@@ -697,28 +836,58 @@ pub fn check_diff(diff: &str, max_bytes: usize, max_files: usize) -> Res<DiffInf
     if diff.contains("GIT binary patch") || diff.contains("Subproject commit") || diff.lines().any(|l| l.starts_with("Binary files ")) {
         return Err(bad_diff("invalid_patch", "Binary patches and submodule changes are not accepted."));
     }
+    // Bidirectional controls make reviewed text read differently from what it does (CVE-2021-42574).
+    if diff.chars().any(|c| matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')) {
+        return Err(bad_diff(
+            "invalid_patch",
+            "diff contains a bidirectional control character (U+202A to U+202E or U+2066 to U+2069).",
+        ));
+    }
     let (mut minus, mut plus) = (false, false);
-    let mut files = BTreeSet::new();
+    // `files`: the names shown and counted; `seen`: every reading checked.
+    let (mut files, mut seen) = (BTreeSet::new(), BTreeSet::new());
     for line in diff.lines() {
         let line = line.strip_suffix('\r').unwrap_or(line);
+        let head = ["--- ", "+++ ", "*** ", "Index: ", "diff --git ", "rename ", "copy "]
+            .iter()
+            .any(|k| line.starts_with(k));
+        if head && line.len() > HEADER_LINE_MAX {
+            return Err(bad_diff(
+                "invalid_path",
+                format!("a file header line is longer than {HEADER_LINE_MAX} bytes."),
+            ));
+        }
+        if let Some(rest) = ["old mode ", "new mode ", "new file mode ", "deleted file mode ", "index "]
+            .iter()
+            .find_map(|k| line.strip_prefix(k))
+            && rest.split_whitespace().last().is_some_and(|m| REFUSED_MODES.contains(&m))
+        {
+            return Err(bad_diff("invalid_patch", "Symbolic links and submodules are not accepted."));
+        }
         if let Some(rest) = line.strip_prefix("--- ") {
             minus = true;
-            files.extend(diff_path(rest));
+            files.extend(header_name(rest, &mut seen)?);
         } else if let Some(rest) = line.strip_prefix("+++ ") {
             plus = true;
-            files.extend(diff_path(rest));
+            files.extend(header_name(rest, &mut seen)?);
+        } else if let Some(rest) = line.strip_prefix("*** ").or_else(|| line.strip_prefix("Index: ")) {
+            header_name(rest, &mut seen)?;
         } else if let Some(rest) = line.strip_prefix("diff --git ") {
-            if let Some(rest) = rest.strip_prefix("a/")
-                && let Some(at) = rest.find(" b/")
-            {
-                files.insert(rest[..at].to_string());
-                files.insert(rest[at + 3..].to_string());
-            }
+            files.extend(git_header(rest, &mut seen)?);
         } else if let Some(rest) = ["rename from ", "rename to ", "copy from ", "copy to "]
             .iter()
             .find_map(|k| line.strip_prefix(k))
         {
-            files.extend(diff_path(rest));
+            // git reads these names without dropping a component.
+            let name = if rest.starts_with('"') {
+                unquote(rest)
+                    .ok_or_else(|| bad_diff("invalid_path", "a quoted file name does not close."))?
+                    .0
+            } else {
+                rest.to_string()
+            };
+            seen.insert(name.clone());
+            files.insert(name);
         }
     }
     if !minus || !plus {
@@ -730,19 +899,17 @@ pub fn check_diff(diff: &str, max_bytes: usize, max_files: usize) -> Res<DiffInf
             format!("diff touches {} files; at most {max_files}.", files.len()),
         ));
     }
-    for f in &files {
-        let windows_root = f.len() > 1 && f.as_bytes()[1] == b':';
-        if f.starts_with('/') || f.starts_with('\\') || windows_root {
-            return Err(bad_diff("invalid_path", format!("{f} is an absolute path.")));
+    for f in files.iter().chain(&seen) {
+        if let Some(why) = invalid_path(f) {
+            return Err(bad_diff("invalid_path", why));
         }
-        if f.split(['/', '\\']).any(|c| c == ".." || c == ".git") {
-            return Err(bad_diff("invalid_path", format!("{f} leaves the repository or touches .git.")));
-        }
-        if protected(f) {
+    }
+    for f in files.iter().chain(&seen) {
+        if protected(&normal(f)) {
             return Err(bad_diff("protected_path", format!("{f} is protected: only the owner changes it.")));
         }
     }
-    let flagged = files.iter().filter(|f| flagged(f)).cloned().collect();
+    let flagged = files.iter().filter(|f| flagged(&normal(f))).cloned().collect();
     Ok(DiffInfo {
         files: files.into_iter().collect(),
         flagged,
