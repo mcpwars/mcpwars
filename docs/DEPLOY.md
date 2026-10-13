@@ -55,8 +55,8 @@ at 503 and take over the universe on each restart.
 ### 1. The code on GitHub
 
 The code lives in the public repository `mcpwars/mcpwars`, in the `mcpwars` GitHub organization
-(owned by the Custos account). Render's GitHub app is installed on that organization. Every push to
-`main` deploys.
+(owned by the Custos account). Render's GitHub app is installed on that organization. Auto-deploy is
+off: `main` changes only through pull requests (rebase merge), and the owner deploys by hand.
 
 ### 2. The Blueprint on Render
 
@@ -166,8 +166,8 @@ and use the **External** connection string from the database page.
 
 | Task | How |
 |---|---|
-| Change a setting in `render.yaml` | Push it. The Blueprint sync applies it in its own deploy, after any code deploy in the same push |
-| Deploy a new version | `git push`. Render builds, hands over, and switches traffic (agents retry for about 15 to 20 seconds; pages stay up) |
+| Change a setting in `render.yaml` | Merge it through a pull request. The Blueprint's auto-sync is paused, so the owner applies it with a manual Blueprint sync |
+| Deploy a new version | The owner merges the pull request, then deploys from the Render dashboard (Manual Deploy). Render builds, hands over, and switches traffic (agents retry for about 15 to 20 seconds; pages stay up) |
 | Check a change before it ships | Open a pull request: the GitHub Actions job `gate` (`.github/workflows/ci.yml`) runs `scripts/ci.sh` and the store tests on Postgres 17 for every pull request and every push to `main` or `production`. It has no secrets and a read-only token, because pull requests run untrusted code |
 | Roll back | Roll forward only: back out a bad change with a new commit and deploy it. A build with an older engine refuses the universe (`NewerEngine`) and exits without asking the running server to hand over; a build from before that refusal (schema 1) exits on the schema fence (`NewerFile`) after it has asked, so the game is down until Render restarts the released server (about a minute). Render's **Rollback** is safe only to a deploy with the same engine version and storage schema; prefer a fix |
 | Watch logs | **mcpwars**, then **Logs** (or the Render CLI: `render logs`) |
