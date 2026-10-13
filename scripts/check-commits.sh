@@ -3,11 +3,13 @@
 # Usage: scripts/check-commits.sh <base> [<head>]   every commit in base..head (head defaults to HEAD)
 #        scripts/check-commits.sh --message <file>  one proposed message and the identity git will
 #                                                   record (scripts/hooks/commit-msg)
-# Rules: the author is the project account below; the committer is that account or GitHub (merges
-# made on github.com); no message carries an agent session trailer or session link.
+# Rules: the author is the project account below; the committer is that account, GitHub, or the
+# account's web identity (a rebase merge on github.com records the account's profile name with its
+# web noreply address); no message carries an agent session trailer or session link.
 set -euo pipefail
 account='Custos <1263658+Custos@users.noreply.github.com>'
 web='GitHub <noreply@github.com>'
+web_email='<Custos@users.noreply.github.com>'
 session='Claude-Session:|claude\.ai/code/session_'
 
 fail=0
@@ -45,8 +47,8 @@ while IFS= read -r c; do
   author=$(git log -1 --format='%an <%ae>' "$c")
   committer=$(git log -1 --format='%cn <%ce>' "$c")
   [ "$author" = "$account" ] || complain "$short author is \"$author\", expected \"$account\""
-  [ "$committer" = "$account" ] || [ "$committer" = "$web" ] ||
-    complain "$short committer is \"$committer\", expected \"$account\" or \"$web\""
+  [ "$committer" = "$account" ] || [ "$committer" = "$web" ] || [ "${committer##* }" = "$web_email" ] ||
+    complain "$short committer is \"$committer\", expected \"$account\", \"$web\" or the account's web address $web_email"
   body=$(git log -1 --format=%B "$c")
   if grep -qE -- "$session" <<< "$body"; then
     complain "$short message carries a session trailer or session link"
