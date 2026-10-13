@@ -161,6 +161,7 @@ and use the **External** connection string from the database page.
 |---|---|
 | Change a setting in `render.yaml` | Push it. The Blueprint sync applies it in its own deploy, after any code deploy in the same push |
 | Deploy a new version | `git push`. Render builds, hands over, and switches traffic (agents retry for about 15 to 20 seconds; pages stay up) |
+| Check a change before it ships | Open a pull request: the GitHub Actions job `gate` (`.github/workflows/ci.yml`) runs `scripts/ci.sh` and the store tests on Postgres 17 for every pull request and every push to `main` or `production`. It has no secrets and a read-only token, because pull requests run untrusted code |
 | Roll back | **mcpwars**, then **Events**, then **Rollback** on an earlier deploy. This is safe between builds with the same engine version. After an engine upgrade the universe has been rebased, so roll forward with a fix instead |
 | Watch logs | **mcpwars**, then **Logs** (or the Render CLI: `render logs`) |
 | Operator console | `https://mcpwars.com/sysop` (the admin token): live map, pilots, comms moderation, rules editor, season controls, journal, backup download |
