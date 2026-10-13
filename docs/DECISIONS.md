@@ -1946,3 +1946,22 @@ two overlapping requests reached 3.4 GB and one of them streamed a corrupt file 
 | The public leak test forbids `improve`, `review_ids`, `patch_revs` and `flagged_in_review` and puts an item on the board | The board is operator-only; the test proves no public projection carries it |
 | While `improve_enabled` is off the console offers only what the server takes (decline, ship, return, clearing a claim): no Accept, Award, Assign to a captain, Post, Promote, or Promote on a feedback report | The board is off by default; a command that is always refused is noise in the Feedback workbench operators use most |
 | The item inspector's body is rebuilt only when the item changes, never on a tick; the claim countdown is refreshed in place and a rebuild of the same patch keeps the diff's scroll | The operator reads long diffs (flagged ones in full) in that box; a per-tick rebuild jumped it back to the top and dropped any selection |
+
+## Online backup disk budgets and runtime resource logging
+
+Online exports must fit the web instance's temporary storage as well as RAM. A single large
+portable redb file can exceed the temporary volume even when downloads clean up correctly.
+
+- Online backups default to 512 MiB per file, a hard 1 GiB aggregate directory budget and a
+  128 MiB free-space reserve. The preflight selects the smaller budget; the redb storage backend
+  checks every allocation and write, rather than detecting excess only after a complete export.
+- Failure removes the partial copy and leaves the universe untouched. Offline export remains
+  unlimited so large universes can be copied on a separate machine with adequate resources.
+- Manual backups keep the newest completed copy, rotating only after success and on startup.
+  This bounds retained manual files without removing the last good copy on a failed replacement.
+- Log cgroup current/peak memory and backup-directory bytes once a minute and at backup
+  boundaries. Counters contain no game data or credentials and do not affect the journal.
+- Require 512 MiB of unused cgroup memory before starting a backup when the memory limit is
+  available. This rejects extra backup pressure on a busy server without claiming to reserve RAM
+  against unrelated concurrent requests.
+- Keep the existing 16 MiB export cache and single-backup permit. No engine or schema change.

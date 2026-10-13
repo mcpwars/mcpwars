@@ -320,6 +320,11 @@ impl Store {
     /// consistent universe. A Postgres store reads in one repeatable-read
     /// transaction, so it is consistent whenever it runs.
     pub fn backup_to(&self, dest: &Path) -> Result<u64> {
+        self.backup_to_limited(dest, u64::MAX)
+    }
+
+    /// Online backups enforce a disk budget; offline exports may use the unlimited API.
+    pub fn backup_to_limited(&self, dest: &Path, max_bytes: u64) -> Result<u64> {
         match &self.loc {
             Location::File(path) => {
                 let tmp = dest.with_extension("partial");
@@ -331,7 +336,13 @@ impl Store {
                     #[cfg(unix)]
                     std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
                     let mut to = o.open(&tmp)?;
-                    let n = std::io::copy(&mut from, &mut to)?;
+                    let n = std::io::copy(&mut std::io::Read::take(std::io::Read::by_ref(&mut from), max_bytes), &mut to)?;
+                    let mut extra = [0u8; 1];
+                    if std::io::Read::read(&mut from, &mut extra)? != 0 {
+                        return Err(std::io::Error::other(
+                            "online backup exceeds its disk budget; export on a separate machine",
+                        ));
+                    }
                     to.sync_all()?;
                     std::fs::rename(&tmp, dest)?;
                     Ok(n)
@@ -341,7 +352,7 @@ impl Store {
                     StoreError::Db(format!("backup: {e}"))
                 })
             }
-            Location::Postgres(url) => export_pg(url, dest),
+            Location::Postgres(url) => export_pg(url, dest, max_bytes),
         }
     }
 
@@ -352,13 +363,27 @@ impl Store {
         Self::check_schema(Box::new(RedbBackend::create_export(&path)?), Location::File(path), true)
     }
 
+    /// Create a portable file whose allocation and writes cannot exceed `max_bytes`.
+    pub fn create_export_limited(path: impl AsRef<Path>, max_bytes: u64) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        Self::check_schema(
+            Box::new(RedbBackend::create_export_limited(&path, max_bytes)?),
+            Location::File(path),
+            true,
+        )
+    }
+
     /// A backup that can run off the writer's thread, if this store supports it.
     pub fn detached_backup(&self) -> Option<BackupJob> {
+        self.detached_backup_limited(u64::MAX)
+    }
+
+    pub fn detached_backup_limited(&self, max_bytes: u64) -> Option<BackupJob> {
         match &self.loc {
             Location::File(_) => None,
             Location::Postgres(url) => {
                 let url = url.clone();
-                Some(Box::new(move |dest: &Path| export_pg(&url, dest)))
+                Some(Box::new(move |dest: &Path| export_pg(&url, dest, max_bytes)))
             }
         }
     }
@@ -822,12 +847,12 @@ pub fn check_takeover(loc: &str) -> Result<()> {
 /// `Store::create_export`) and renamed only when complete. A failed export removes its partial
 /// file. Memory stays bounded: rows are copied a page at a time and only the latest snapshot
 /// row is held, never deserialized. Callers give each export its own `dest`.
-fn export(src: &Store, dest: &Path) -> Result<u64> {
+fn export(src: &Store, dest: &Path, max_bytes: u64) -> Result<u64> {
     let tmp = dest.with_extension("partial");
     let _ = std::fs::remove_file(&tmp);
     let io = |e: std::io::Error| StoreError::Db(format!("backup: {e}"));
     let copied = (|| -> Result<()> {
-        let dst = Store::create_export(&tmp)?;
+        let dst = Store::create_export_limited(&tmp, max_bytes)?;
         src.copy_into(&dst)?;
         Ok(())
     })();
@@ -844,9 +869,9 @@ fn export(src: &Store, dest: &Path) -> Result<u64> {
 
 /// Export a Postgres universe (one repeatable-read transaction, so consistent while the writer
 /// keeps going) to a portable redb file, atomically.
-fn export_pg(url: &str, dest: &Path) -> Result<u64> {
+fn export_pg(url: &str, dest: &Path, max_bytes: u64) -> Result<u64> {
     let src = Store::open_location(url, Access::Snapshot)?;
-    export(&src, dest)
+    export(&src, dest, max_bytes)
 }
 
 /// Every journaled entry was accepted when it was recorded, so a refusal on

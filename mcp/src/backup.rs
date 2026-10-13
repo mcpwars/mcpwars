@@ -46,7 +46,121 @@ pub fn prepare_dir(dir: &Path) -> std::io::Result<usize> {
             removed += 1;
         }
     }
+    rotate_manual(dir)?;
     Ok(removed)
+}
+
+/// Defaults leave room for retained files and other runtime users of a 2 GiB volume.
+pub const ONLINE_MAX_BYTES: u64 = 512 << 20;
+const DIRECTORY_MAX_BYTES: u64 = 1 << 30;
+const FREE_RESERVE_BYTES: u64 = 128 << 20;
+const MEMORY_RESERVE_BYTES: u64 = 512 << 20;
+
+/// Refuse before copying if the directory or filesystem has no safe budget. Run on a
+/// blocking worker under the backup permit. The store enforces the returned cap at every write.
+pub fn budget(dest: &Path) -> Result<u64, String> {
+    let dir = dest.parent().ok_or("backup has no parent directory")?;
+    memory_headroom(cgroup_bytes("memory.current"), cgroup_bytes("memory.max"))?;
+    let used = directory_bytes(dir).map_err(|e| format!("backup disk check: {e}"))?;
+    let configured = match std::env::var("AF_BACKUP_MAX_BYTES") {
+        Ok(v) => v
+            .parse::<u64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or("AF_BACKUP_MAX_BYTES must be a positive byte count")?,
+        Err(std::env::VarError::NotPresent) => ONLINE_MAX_BYTES,
+        Err(e) => return Err(format!("AF_BACKUP_MAX_BYTES: {e}")),
+    };
+    let mut cap = configured.min(DIRECTORY_MAX_BYTES.saturating_sub(used));
+    #[cfg(unix)]
+    {
+        let free = free_bytes(dir)?;
+        cap = cap.min(free.saturating_sub(FREE_RESERVE_BYTES));
+    }
+    if cap < 16 << 20 {
+        return Err("not enough safe disk space for an online backup; export on a separate machine".into());
+    }
+    tracing::info!(directory_bytes = used, max_bytes = cap, "online backup disk budget");
+    log_resources(dir);
+    Ok(cap)
+}
+
+fn directory_bytes(dir: &Path) -> std::io::Result<u64> {
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_file() {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    Ok(total)
+}
+
+#[cfg(unix)]
+fn free_bytes(dir: &Path) -> Result<u64, String> {
+    // POSIX df avoids platform-specific unsafe statvfs bindings. No shell or credentials.
+    let out = std::process::Command::new("df")
+        .args(["-Pk", "--"])
+        .arg(dir)
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|e| format!("backup free-space check: {e}"))?;
+    if !out.status.success() {
+        return Err("backup free-space check failed".into());
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .last()
+        .and_then(|line| line.split_whitespace().nth(3))
+        .and_then(|v| v.parse::<u64>().ok())
+        .and_then(|v| v.checked_mul(1024))
+        .ok_or_else(|| "backup free-space check returned no usable result".into())
+}
+
+/// Retain the newest completed manual backup. A failed new backup never removes the last good one.
+pub fn rotate_manual(dir: &Path) -> std::io::Result<()> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("manual-") && name.ends_with(".redb") && entry.file_type()?.is_file() {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    paths.pop();
+    for path in paths {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn cgroup_bytes(name: &str) -> Option<u64> {
+    std::fs::read_to_string(format!("/sys/fs/cgroup/{name}"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+fn memory_headroom(current: Option<u64>, limit: Option<u64>) -> Result<(), String> {
+    if let (Some(current), Some(limit)) = (current, limit)
+        && limit.saturating_sub(current) < MEMORY_RESERVE_BYTES
+    {
+        return Err("not enough memory headroom for an online backup (512 MiB required); export on a separate machine".into());
+    }
+    Ok(())
+}
+
+/// Operational counters only: no game data or credentials. Linux supplies cgroup RAM.
+pub fn log_resources(dir: &Path) {
+    tracing::info!(
+        memory_current_bytes = ?cgroup_bytes("memory.current"),
+        memory_limit_bytes = ?cgroup_bytes("memory.max"),
+        memory_peak_bytes = ?cgroup_bytes("memory.peak"),
+        backup_directory_bytes = ?directory_bytes(dir).ok(),
+        "runtime resources"
+    );
 }
 
 /// A path for one download's backup, used by no other request.
@@ -91,6 +205,50 @@ impl Drop for RemoveOnDrop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_requires_memory_headroom_when_a_limit_is_known() {
+        assert!(memory_headroom(Some(1600 << 20), Some(2048 << 20)).is_err());
+        assert!(memory_headroom(Some(1536 << 20), Some(2048 << 20)).is_ok());
+        assert!(memory_headroom(Some(2200 << 20), Some(2048 << 20)).is_err());
+        assert!(memory_headroom(None, Some(2048 << 20)).is_ok());
+        assert!(memory_headroom(Some(1600 << 20), None).is_ok());
+    }
+
+    #[test]
+    fn manual_retention_preserves_newest_and_other_files() {
+        let dir = std::env::temp_dir().join(format!("af-backup-retention-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        prepare_dir(&dir).unwrap();
+        for name in [
+            "manual-100.redb",
+            "manual-200.redb",
+            "auto-100.redb",
+            "download-100.redb",
+            "manual-300.partial",
+        ] {
+            std::fs::write(dir.join(name), b"backup").unwrap();
+        }
+        rotate_manual(&dir).unwrap();
+        assert!(!dir.join("manual-100.redb").exists());
+        for name in ["manual-200.redb", "auto-100.redb", "download-100.redb", "manual-300.partial"] {
+            assert!(dir.join(name).exists());
+        }
+        assert_eq!(directory_bytes(&dir).unwrap(), 24);
+        #[cfg(unix)]
+        assert!(free_bytes(&dir).unwrap() > 0);
+        // Sparse files exercise the aggregate budget without consuming a GiB of disk.
+        std::fs::File::create(dir.join("unrelated"))
+            .unwrap()
+            .set_len(DIRECTORY_MAX_BYTES)
+            .unwrap();
+        assert!(
+            budget(&dir.join("download-next.redb"))
+                .unwrap_err()
+                .contains("not enough safe disk")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn prepare_dir_removes_leftovers_but_not_backups() {

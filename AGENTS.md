@@ -200,7 +200,13 @@ omniscient sysop view).
   (mode 0600, redb page cache `EXPORT_CACHE_BYTES`, 16 MiB: redb's default 1 GiB cache kept the
   written copy resident and restarted production); `copy_into` copies a page at a time. The
   download sends `Content-Length` and `X-Backup-SHA256` and removes its file (`mcp/src/backup.rs`);
-  startup removes leftovers in the backup directory.
+  startup removes stale leftovers in the backup directory and retains the newest completed manual
+  backup. Online backups default to 512 MiB (`AF_BACKUP_MAX_BYTES`, positive bytes), with a hard
+  1 GiB aggregate directory budget and 128 MiB filesystem reserve. Where a cgroup memory limit
+  is available, a backup requires 512 MiB of unused memory before it starts. The export storage backend
+  refuses allocation or writes beyond its budget and removes failed partial files. Large universes
+  must be exported off the web instance; offline `export` is not capped. Runtime cgroup memory and
+  backup-directory usage are logged every minute and at backup boundaries.
 - **Stored state is read without serde_json's 128-level limit:** every read of snapshots, the
   replay base, journal entries and private archive rows goes through `af_store::from_slice_deep`
   (serde_json feature `unbounded_depth`), which refuses only beyond `MAX_STORED_DEPTH` (512) after

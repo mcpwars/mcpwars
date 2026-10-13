@@ -823,3 +823,38 @@ fn reverse_journal_pages_are_exclusive_and_survive_reopening() {
         assert!(store.journal_page(Some(0), 100).unwrap().is_empty());
     }
 }
+
+#[test]
+fn online_backup_limit_removes_partial_and_preserves_source() {
+    for loc in locations("backup_limit") {
+        let store = loc.open();
+        let mut world = store.init(&genesis(ENGINE_VERSION)).unwrap();
+        play(&store, &mut world, 2);
+        store.save_snapshot(&world).unwrap();
+        let backup = std::env::temp_dir().join(format!("af-store-limit-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&backup);
+        let job = store.detached_backup_limited(1024);
+        let result = match job {
+            Some(job) => job(&backup),
+            None => store.backup_to_limited(&backup, 1024),
+        };
+        assert!(result.is_err());
+        assert!(!backup.exists());
+        assert!(!backup.with_extension("partial").exists());
+        assert_eq!(store.load_world().unwrap().0.state_hash(), world.state_hash());
+        // A later normal backup still works and replays exactly.
+        match store.detached_backup_limited(64 << 20) {
+            Some(job) => {
+                job(&backup).unwrap();
+            }
+            None => {
+                store.backup_to_limited(&backup, 64 << 20).unwrap();
+            }
+        }
+        assert_eq!(
+            Store::open(&backup).unwrap().load_world().unwrap().0.state_hash(),
+            world.state_hash()
+        );
+        std::fs::remove_file(backup).unwrap();
+    }
+}

@@ -247,6 +247,17 @@ async fn main() -> anyhow::Result<()> {
                 0 => {}
                 n => tracing::info!("removed {n} leftover backup files from {}", backup_dir.display()),
             }
+            {
+                let dir = backup_dir.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(Duration::from_secs(60));
+                    loop {
+                        interval.tick().await;
+                        let dir = dir.clone();
+                        let _ = tokio::task::spawn_blocking(move || af_mcp::backup::log_resources(&dir)).await;
+                    }
+                });
+            }
             if backup_every_mins > 0 {
                 let (g, dir) = (game.clone(), backup_dir.clone());
                 tokio::spawn(async move {
