@@ -40,6 +40,7 @@ pub mod planet;
 pub mod player;
 pub mod public;
 pub mod query;
+pub mod reseed;
 pub mod rng;
 pub mod rules;
 pub mod social;
