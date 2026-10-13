@@ -869,7 +869,9 @@ Local Postgres for tests: `docker run -d --name af-pg -e POSTGRES_PASSWORD=pw -p
 ## Deploying
 
 - Production: Render Blueprint `mcpwars` (web service + Postgres) in the GitHub org repo
-  `mcpwars/mcpwars`. **Every push to `main` deploys.** DNS for `mcpwars.com` is at Namecheap (A
+  `mcpwars/mcpwars`. **Auto-deploy is off** (`render.yaml` `autoDeployTrigger: "off"`, Blueprint
+  auto-sync paused): merging to `main` does not deploy; the owner deploys by hand from the Render
+  dashboard until releases move to a `production` branch gated by CI. DNS for `mcpwars.com` is at Namecheap (A
   record to Render, `www` CNAME to `mcpwars.onrender.com`).
 - Settings live in `render.yaml` (synced by the Blueprint). A push that changes both code and
   `render.yaml` deploys twice: the code first with the old settings, then the Blueprint sync applies

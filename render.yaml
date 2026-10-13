@@ -12,7 +12,7 @@ services:
     numInstances: 1
     healthCheckPath: /healthz
     maxShutdownDelaySeconds: 60
-    autoDeployTrigger: commit
+    autoDeployTrigger: "off"
     # Render adds www.mcpwars.com automatically and redirects it to the apex.
     domains:
       - mcpwars.com

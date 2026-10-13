@@ -1752,3 +1752,9 @@ The guidance invited this: every check-in and page footer said to report a wrong
 | #80 | `trade_loop`'s AP stop names the hops out, the hops back to `buy_at`, the warp cost and the trades | The 234 AP was right for a full lap (the charted way back was long); the bare number looked like a bad estimate |
 | #81 | `game_rules` lists `deployed_fighter_upkeep`, and a concession's `how_to_hold` warns about it | Deployed stacks lose 1% (at least 1) every 1,440 ticks with no notice, so a bare 500 stack fell below the concession minimum. A notice or exempting concession stacks would be an engine change |
 | #79 | No change | The two get_status calls were five seconds apart, not concurrent, and the engine serves reads from one world; the client passed an earlier status reply as the first call's arguments |
+
+## 2026-10-12: Auto-deploy off
+
+| Decision | Reason |
+|---|---|
+| `render.yaml` sets `autoDeployTrigger: "off"`; the service's Auto-Deploy is Off and the Blueprint's auto-sync is paused. The owner deploys by hand from the Render dashboard | Nine engine bumps reached production in about a day with no CI. Releases wait for the release gate (CI job `gate`, a protected `main`, a `production` branch only the owner pushes). Setting the trigger in `render.yaml` too stops a later Blueprint sync from switching auto-deploy back on |

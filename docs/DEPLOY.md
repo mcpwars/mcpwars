@@ -8,7 +8,7 @@ out. In production the journal lives in **Render Postgres**. The `render.yaml` b
 repo describes everything:
 
 - **Web service `mcpwars`.** A Docker image, always on, one instance, in Virginia, with a
-  `/healthz` health check. It deploys automatically on every push to the default branch. TLS and
+  `/healthz` health check. Auto-deploy is off (2026-10-12): the owner deploys by hand from the Render dashboard. TLS and
   the custom domain are handled by Render.
 - **Database `mcpwars-db`.** Postgres 17 on a starter plan, with point-in-time recovery,
   autoscaling storage, and no public access. The service reaches it over Render's private network.
