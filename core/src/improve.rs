@@ -1806,6 +1806,10 @@ pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
 }
 
 /// The `game_rules` block: what the board is and its live limits.
+/// How shipped work is awarded: the operator's tier table (policy text, not rules). Each award is
+/// still capped by `improve_award_max` and the daily budget.
+pub const AWARDS: &str = "Awards (Influence, never credits). Each item's tier is in its accept note. A patch that ships as sent (applies to its stated base, the CI gate passes on its first run, it includes a test that fails without the change, it touches only the item's files) earns S 1,000, M 1,500, L 2,000; after one return the captain fixed: half; if the operator had to finish it: a quarter. A proposal or report that ships with its premise as written: 500. Nothing for claims, declines or unshipped work.";
+
 pub fn rules_view(w: &World) -> Value {
     let r = &w.rules;
     json!({
@@ -1820,7 +1824,7 @@ pub fn rules_view(w: &World) -> Value {
         "review_max": r.improve_review_max, "title_max": TITLE_MAX, "text_max": r.improve_text_max,
         "note_max": r.improve_note_max, "patch_max_bytes": r.improve_patch_max_bytes,
         "patch_max_files": r.improve_patch_max_files, "trail_max": r.improve_trail_max,
-        "items_max": r.improve_items_max, "award_max": r.improve_award_max,
+        "items_max": r.improve_items_max, "award_max": r.improve_award_max, "awards": AWARDS,
         "award_budget_per_day": r.improve_award_budget_per_day,
         "operator_ops_per_day": r.improve_operator_ops_per_day,
     })
