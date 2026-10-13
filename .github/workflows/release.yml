@@ -1,0 +1,70 @@
+# The release: every main commit whose gate passed moves the production branch, which Render
+# deploys. It runs after the ci workflow succeeds on a push to main in this repository (or by
+# hand for the current main). No checkout and no secrets: the only write is a fast-forward of
+# production through the API, which the production-release ruleset checks again (gate passed on
+# the commit, no force push, no deletion). Then it waits for /version to show the commit.
+name: release
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Fast-forward production
+        id: ff
+        run: |
+          set -eu
+          sha=${RUN_SHA:-$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)}
+          case "$sha" in *[!0-9a-f]* | "") echo "::error::not a commit SHA"; exit 1 ;; esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          # Where production stands relative to this commit: ahead means this commit is newer.
+          status=$(gh api "repos/$REPO/compare/production...$sha" --jq .status)
+          case "$status" in
+            ahead) ;;
+            identical) echo "production is already at $sha"; exit 0 ;;
+            behind) echo "production is already past $sha (a newer commit was released)"; exit 0 ;;
+            *) echo "::error::production and $sha have diverged ($status); nothing was released"; exit 1 ;;
+          esac
+          gh api -X PATCH "repos/$REPO/git/refs/heads/production" -f sha="$sha" -F force=false >/dev/null
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "production -> $sha"
+
+      - name: Wait for the deploy
+        if: steps.ff.outputs.released == 'true'
+        env:
+          SHA: ${{ steps.ff.outputs.sha }}
+        run: |
+          set -u
+          for i in $(seq 1 75); do
+            v=$(curl -fsS --max-time 10 https://mcpwars.com/version || true)
+            case "$v" in *"$SHA"*) echo "$v"; exit 0 ;; esac
+            sleep 20
+          done
+          echo "::error::https://mcpwars.com/version did not show $SHA within 25 minutes"
+          exit 1

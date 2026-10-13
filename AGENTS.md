@@ -27,8 +27,8 @@ and rules versions with `af-engine-` / `af-rules-`. Keep those identifiers; the 
 - **Keep secrets out of the repo and out of exported traces** (tokens, API keys, admin keys).
 - **No paid model experiments without an explicit budget** from the owner.
 - **Agents stop at the pull request.** They commit on branches, push branches and open pull
-  requests; they never push or merge `main` or `production`. Only the owner merges and releases
-  (see How work ships).
+  requests; they never push `main` or `production`. A merge to `main` releases itself once `gate`
+  passes (see How work ships), so merging is releasing.
 - Reports to the owner are short and decision-led: what is done, what they must do, what they must decide.
 
 ### Working with the owner
@@ -80,40 +80,41 @@ included.
 ## How work ships
 
 `main` is the reviewed code; the `production` branch is what runs on mcpwars.com. Agents do steps
-1 to 4; the owner does the rest.
+1 to 4; merging (step 5) releases automatically.
 
 1. **Branch** from `origin/main` (a worktree per task is easiest). Never commit on `main`.
 2. **Commit as Custos**, with no session line (Identity above), staging only your own paths.
    `scripts/ci.sh` passes before every commit; the hooks run the tree and commit checks.
 3. **Push the branch and open a pull request** to `main`. Its description says what it ships: the
    change, the checks and rehearsals run, any engine, schema, rules or `render.yaml` change, and
-   what the owner must decide. Then wait for the owner's go.
+   what the owner must decide.
 4. **The gate.** The CI job `gate` runs on the pull request (see Deploying). Fix a red gate on the
    branch.
-5. **The owner merges** with a rebase merge, the only method allowed (squash and merge commits
-   are off; the branch is deleted on merge). The ruleset `main-gate` protects `main`: changes
-   only through pull requests (no approvals required), linear history, no force pushes, no
-   deletion, `gate` must pass, no bypass. Merging deploys no code.
-6. **The owner releases** a `main` commit:
-   `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production`. The machine-wide pre-push hook
+5. **Merge** with a rebase merge, the only method allowed (squash and merge commits are off; the
+   branch is deleted on merge). The ruleset `main-gate` protects `main`: changes only through pull
+   requests (no approvals required), linear history, no force pushes, no deletion, `gate` must
+   pass, no bypass. **Merging is releasing:** everything below is automatic.
+6. **The release workflow** (`.github/workflows/release.yml`) runs when `gate` passes on the new
+   `main` commit and fast-forwards `production` to it through the API. It skips a commit
+   production is already at or past, fails on diverged history, and can be run by hand
+   (`gh workflow run release`) to release the current `main`. The ruleset `production-release`
+   refuses any update unless `gate` has passed on that commit, and refuses force pushes and
+   deletion. A manual release still works:
+   `OWNER_RELEASE=1 git push origin <sha>:refs/heads/production` (the machine-wide pre-push hook
    refuses a push to `production` without that variable, any commit not by Custos or carrying a
-   session line, and a push of the archive to any other URL. The ruleset `production-release`
-   refuses a push unless `gate` has already passed on that commit, and refuses force pushes and
-   deletion: release a `main` commit whose `gate` run is green.
+   session line, and a push of the archive to any other URL).
 7. **Render deploys** `production` (Auto-Deploy "After CI Checks Pass"): it builds, the old
-   server hands over and traffic switches (see Persistence). Render may start before the new
-   `gate` run on `production` finishes (it did on the first release), so the real gate is the
-   `production-release` ruleset in step 6.
+   server hands over and traffic switches (see Persistence).
    Never write `[skip render]` in a commit message: on the released commit it skips the deploy.
-8. **Check it is live:** `curl -s https://mcpwars.com/version`; `commit` must be the released SHA.
+8. **Check it is live:** the release workflow waits until `https://mcpwars.com/version` shows the
+   released commit and fails (GitHub notifies the owner) if it does not within 25 minutes.
 
 Three things need more than this:
 - **A `render.yaml` change is a release.** The Blueprint's auto-sync reads `render.yaml` from
-  `main`, so a change (`AF_RULES_PATCH` included) takes effect when it merges, not at release,
-  and an environment change makes Render redeploy the code already on `production`. Rehearse it
-  and get the owner's go before it merges.
+  `main`, so a change (`AF_RULES_PATCH` included) takes effect when it merges, and an
+  environment change makes Render redeploy. Rehearse it and get the owner's go before it merges.
 - **An `ENGINE_VERSION` or storage schema bump** is rehearsed on a verified production backup
-  before release (see Deploying).
+  before it merges, because merging releases it (see Deploying).
 - **Roll forward only.** Never use Render's Rollback or release an older commit: since Release #1
   (2026-10-12) the database is at storage schema 2, and older builds refuse the universe (see
   Persistence). Back out a bad change with a new commit through this flow.
@@ -130,6 +131,7 @@ Three things need more than this:
 | `docs/` | `DECISIONS.md` (every design decision with reasons; append to it), `IDEAS.md` (future ideas with their source and status), `DEPLOY.md` (production runbook), `SYSOP_API.md`, `EVAL.md` |
 | `scripts/` | `ci.sh` (merge gate), `check-public-tree.sh` and `check-commits.sh` (run by `ci.sh` and by `hooks/`), `docker-entrypoint.sh`, `pilot-cli.sh` (wrapper to run kimi/agy/grok as pilots) |
 | `.github/workflows/ci.yml` | The `gate` job: `scripts/ci.sh` and the store tests on a Postgres 17 service, on every pull request and push to `main` or `production` |
+| `.github/workflows/release.yml` | The release: after `gate` passes on a `main` commit, fast-forward `production` to it and wait for `/version` to show it |
 | `eval/` | Evaluation scenarios, baselines and example traces (`eval/runs/` is git-ignored) |
 | `Dockerfile`, `render.yaml` | Production image and the Render Blueprint |
 | `LICENSE`, `LICENSES/`, `NOTICE` | Agent Licence 1.0 (source-available, holder Talebly, Inc.); `NOTICE` names the channels and terms. Keep the 1.0 text unchanged |
