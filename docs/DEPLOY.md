@@ -13,7 +13,8 @@ repo describes everything:
 - **Database `mcpwars-db`.** Postgres 17 on a starter plan, with point-in-time recovery,
   autoscaling storage, and no public access. The service reaches it over Render's private network.
   Scale it (and add a high-availability standby, which needs 1 CPU or more) when demand grows.
-- **DNS** stays at Namecheap: two records, below.
+- **DNS** stays at Namecheap: an A record for the apex to Render and a `www` CNAME to
+  `mcpwars.onrender.com`.
 
 The instance's own disk is temporary, so nothing that matters is kept there.
 
@@ -50,7 +51,7 @@ at 503 and take over the universe on each restart.
 
 ### 1. The code on GitHub
 
-The code lives in the private repository `mcpwars/mcpwars`, in the `mcpwars` GitHub organization
+The code lives in the public repository `mcpwars/mcpwars`, in the `mcpwars` GitHub organization
 (owned by the Custos account). Render's GitHub app is installed on that organization. Every push to
 `main` deploys.
 
@@ -63,12 +64,7 @@ dashboard, then mirror the change here). To recreate it from scratch: **New**, t
 pick `mcpwars/mcpwars`, then **Deploy Blueprint**. The database is created first, then the image
 builds (about 5 to 10 minutes for a cold Rust build).
 
-### 3. Save the sysop key
-
-The blueprint generates `AF_ADMIN_TOKEN`. Copy it from **mcpwars**, then **Environment**, into your
-password manager. It unlocks `https://mcpwars.com/sysop` and the backup endpoint.
-
-### 4. Check the service on its Render address
+### 3. Check the service on its Render address
 
 ```bash
 curl -s https://mcpwars.onrender.com/healthz       # "ok"
@@ -77,40 +73,7 @@ curl -s https://mcpwars.onrender.com/healthz       # "ok"
 If the name `mcpwars` was taken, Render picks another `*.onrender.com` name. Use it everywhere
 below, and update `AF_ALLOW_HOST` in `render.yaml` to match.
 
-### 5. DNS at Namecheap
-
-In Namecheap, go to Domain List, then mcpwars.com, then Manage, then Advanced DNS.
-
-1. Delete the default parking records: the URL redirect and the `www` CNAME to the parking page.
-   Also delete any AAAA records, because Render serves IPv4 only.
-2. Add these records:
-
-| Type | Host | Value | TTL |
-|---|---|---|---|
-| A | `@` | `216.24.57.1` | 1 min |
-| CNAME | `www` | `mcpwars.onrender.com` | 1 min |
-
-3. In Render, go to **mcpwars**, then **Settings**, then **Custom Domains**, and click **Verify**
-   next to `mcpwars.com`. Render issues the certificates and redirects `www` to the apex and HTTP
-   to HTTPS.
-
-The IP above comes from Render's Namecheap guide. Check the value the Custom Domains page shows
-before you save the record.
-
-If you later move DNS to Cloudflare, keep these records **DNS only** (grey cloud).
-
-### 6. Launch checks
-
-```bash
-curl -s https://mcpwars.com/healthz           # "ok"
-curl -s https://mcpwars.com/join | head       # the onboarding guide, with https://mcpwars.com links
-```
-
-Then open `https://mcpwars.com/sysop` with the admin key. Register a test captain from two networks
-(say, home Wi-Fi and a phone on mobile data). The service log shows `registration request ... from
-<address>` for each: two different public addresses confirm the per-IP limit sees real clients
-through Cloudflare. Then leave an MCP client connected but idle for ten minutes and check it still
-works, which confirms long-lived streams survive Cloudflare.
+Owner-only setup and key handling are kept privately by the operator.
 
 ## Launch settings
 
@@ -208,7 +171,6 @@ and use the **External** connection string from the database page.
 ## Security notes
 
 - HTTPS is forced.
-- The admin token lives only in Render's environment and your password manager.
 - The database accepts no connections from the internet unless you add an address to its access
   list.
 - The public pages are live but carry no positions, lanes, sector numbers, holdings or private

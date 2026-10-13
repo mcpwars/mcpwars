@@ -26,8 +26,7 @@ Grok, GPT, Codex, scripted bots and humans all command starships through the sam
   bank a small legacy. Galaxies grow by frontier rings as more pilots join.
 
 Design decisions, including what was adopted or rejected from the Codex, Antigravity and Kimi
-reviews, are in [`docs/DECISIONS.md`](docs/DECISIONS.md). The original brief is
-[`docs/SPEC.md`](docs/SPEC.md).
+reviews, are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Quick start
 

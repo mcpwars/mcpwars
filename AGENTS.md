@@ -25,12 +25,11 @@ and rules versions with `af-engine-` / `af-rules-`. Keep those identifiers; the 
   `Command`; replaying the journal must reproduce the world hash exactly.
 - **Keep secrets out of the repo and out of exported traces** (tokens, API keys, admin keys).
 - **No paid model experiments without an explicit budget** from the owner.
-- The owner grants standing permission to commit, push and deploy project work they request.
-  Any prior owner permission to push or deploy remains valid until explicitly revoked or
-  superseded; do not ask for the same permission again. Pushing `main` deploys production (see
-  Deploying). Explain what will ship, complete the required checks and rehearsals, then proceed
-  within the authorized scope. This permission does not turn a design discussion into a build
-  request or authorize unrelated work.
+- **Agents commit on branches, push branches and open pull requests.** They never push `main` or
+  `production`; only the owner merges and releases. Pushing `main` deploys production (see
+  Deploying) until releases move to the `production` branch. In each pull request, explain what
+  it ships (the change, the checks and rehearsals run, any engine or rules change), then wait for
+  the owner's go.
 - Reports to the owner are short and decision-led: what is done, what they must do, what they must decide.
 
 ### Working with the owner
@@ -64,7 +63,8 @@ included.
   link to it from public docs, and never put research context, held-out evaluations, local
   machine paths or anyone's personal name here.
 - **Identity:** commit to every `mcpwars/*` repository as `Custos
-  <1263658+Custos@users.noreply.github.com>`, never under a personal name or email.
+  <1263658+Custos@users.noreply.github.com>`, never under a personal name or email, and no
+  Claude-Session line or session link.
 - **The archive is not a working copy.** A checkout or worktree whose `origin` is
   `mcpwars-archive` is for reading history. Never push its branches or history to this
   repository and never cherry-pick from it; port what is needed by hand onto `main`.
@@ -80,7 +80,7 @@ included.
 | `mcp/` (`af-mcp`, binary `af-server`) | The server: engine actor, MCP tools (Streamable HTTP and stdio), REST, spectator and sysop HTTP, the onboarding guide, CLI subcommands |
 | `harness/` (`af-harness`) | Scripted bots, the balance simulator, the LLM orchestrator for live demos, evaluation mode |
 | `web/` | Static pages and assets, embedded into the binary at compile time (rebuild after editing) |
-| `docs/` | `SPEC.md` (original spec), `DECISIONS.md` (every design decision with reasons; append to it), `IDEAS.md` (future ideas with their source and status), `DEPLOY.md` (production runbook), `SYSOP_API.md`, `EVAL.md` |
+| `docs/` | `DECISIONS.md` (every design decision with reasons; append to it), `IDEAS.md` (future ideas with their source and status), `DEPLOY.md` (production runbook), `SYSOP_API.md`, `EVAL.md` |
 | `scripts/` | `ci.sh` (merge gate), `docker-entrypoint.sh`, `pilot-cli.sh` (wrapper to run kimi/agy/grok as pilots) |
 | `eval/` | Evaluation scenarios, baselines and example traces (`eval/runs/` is git-ignored) |
 | `Dockerfile`, `render.yaml` | Production image and the Render Blueprint |

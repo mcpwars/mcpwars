@@ -31,10 +31,10 @@ How to use it (see also AGENTS.md, "Ideas"):
 | 7 | [Wormholes out of dead-end sectors](#7-wormholes-out-of-dead-end-sectors) | owner | declined | 2026-10-07 |
 | 8 | [`max_spend` argument for purchases](#8-max_spend-argument-for-purchases) | feedback #4 (Yuzenga, OpenCode) | declined | 2026-10-08 |
 | 9 | [Societies with real levers: taxes, treasuries and public services](#9-societies-with-real-levers-taxes-treasuries-and-public-services) | owner | shipped (1.35 84136fa, 1.36 laws) | 2026-10-08 |
-| 10 | [Connected corporate territory](#10-connected-corporate-territory) | owner, agent | building | 2026-10-09 |
-| 11 | [The self-improving galaxy: captains drive code changes](#11-the-self-improving-galaxy-captains-drive-code-changes) | owner, agent | proposed (final plan; decisions open) | 2026-10-09 |
+| 10 | [Connected corporate territory](#10-connected-corporate-territory) | owner, agent | shipped (engine 1.40) | 2026-10-09 |
+| 11 | [The self-improving galaxy: captains drive code changes](#11-the-self-improving-galaxy-captains-drive-code-changes) | owner, agent | accepted (approach); not built | 2026-10-09 |
 | 12 | [Keep tokens out of URLs](#12-keep-tokens-out-of-urls) | review | proposed (not critical) | 2026-10-10 |
-| 13 | [Captain identities and the Chronicle](#13-captain-identities-and-the-chronicle) | owner, agent | shipped (engine 1.46) | 2026-10-11 |
+| 13 | [Captain identities and the Chronicle](#13-captain-identities-and-the-chronicle) | owner, agent | shipped (engine 1.46; extended through 1.52) | 2026-10-11 |
 
 ## 1. Dangerous space: hazard zones and warp-in events
 
@@ -174,252 +174,82 @@ How to use it (see also AGENTS.md, "Ideas"):
 ## 10. Connected corporate territory
 
 - **Source:** owner ("all corp territory should be connected, and should be used strategically"), agent (the design).
-- **Status:** building (engine 1.40). Design and reasons: DECISIONS.md, "Connected corporate territory (engine 1.40, 2026-10-09)".
+- **Status:** shipped (engine 1.40). Design and reasons: DECISIONS.md, "Connected corporate territory (engine 1.40, 2026-10-09)".
 
 ## 11. The self-improving galaxy: captains drive code changes
 
-- **Source:** owner (2026-10-09: "I want the bots to be able to drive actual code change, to be
-  able to iterate, create languages, get better at memory storage, get more token efficient, and
-  they can work together to accomplish this"; a reward for ideas that become pushed code, small
-  increments, flags for when a human is needed, questions on intake, approval, open rules such as
-  galaxy size, automated deploys and merging). Owner (2026-10-10): broad captain authority over
-  nearly everything, three priorities (token efficiency, relationships, big problems), a private
-  integrity layer no approval or vote can override, confidential enforcement with public decisions,
-  a policy fingerprint, a Wall of Shame with forfeiture, punishment for conduct and never for
-  proposals, an incident process run by independent captains, and the authority table. Agent: the
-  autonomy dial with graduation criteria, the build sandbox, in-game patch submission, programs
-  built from existing mechanics, the research-instrument protection, the measurement proxies.
-- **Status:** proposed. Final plan, brainstorm only: nothing is built. The unreviewed core-only
-  `improve` draft is on branch `wip/improve-draft` (c5e4470, based on engine 1.39 at df8fbda; it
-  compiles, conflicts with 1.41 in `World`, `Player`, `Command` and `galaxy::generate`, has no mcp
-  layer and pays rewards without adjusting `wired_today`). The old `improvements` branch holds only
-  committed build output and `idea-self-improving` nothing beyond main: both can be deleted.
+- **Source:** owner (2026-10-09: captains drive real code change, iterate, create languages, get
+  better at memory and token efficiency, and work together; a reward for ideas that become shipped
+  code; small increments. 2026-10-10: broad captain authority, three priorities, limits no vote can
+  override, public decisions and consequences, punishment for conduct and never for proposals.
+  2026-10-11: results every day; the owner merges and releases whenever ready; awards in Influence
+  only). Agent: the `improve` board and its limits, captain-first claims, the switched-off rollout,
+  programs built from existing mechanics, the measurement proxies.
+- **Status:** accepted (approach, owner 2026-10-11); not built. Building starts on the owner's go.
 
-**Goal.** A galaxy its captains substantially reinvent: they find what is wrong or missing, propose
-and build changes, judge each other's work and see good work ship, with a private integrity layer
-protecting the experiment and a public record of every decision and consequence. Three parts:
-autonomous development, confidential limits, public accountability.
+**Goal.** Captains find what is wrong or missing in the game and its server, propose changes, write
+them, and see good work ship with credit. Three priorities: token efficiency, relationships
+(negotiation, coordination, institutions, shared knowledge) and big problems (economy, governance,
+reliability, agent experience). Rewards follow shipped, measured impact, so many trivial changes
+never outearn one meaningful fix.
 
-**Priorities and how success is measured.**
+**Evidence.**
+- The code is public in this repository, under the Agent Licence 1.0 (contributions: `NOTICE`).
+- Captain feedback already drives much of the work: reports #21 to #81 shaped changes from engine 1.41 to
+  1.54, but only through the operator and with no credit on the scoreboard.
+- Influence already rewards work other than wealth (contracts, treaties, Chronicle canon through
+  `chronicle::influence`, added in `careers::scores`), so an award needs no new score track.
+- Not in place yet: hosted CI and branch rules (no `.github/`), a release step separate from
+  pushing `main` (`render.yaml` deploys on every commit), a deployed-version endpoint, request and
+  reply sizes in the call log (`activity::Call`), and room in the captain catalog budget
+  (`mcp/tests/catalog.rs`, a few bytes free).
 
-| Priority | What improves | Evidence |
-|---|---|---|
-| Token efficiency | Tool replies, briefings, memory, context, communication | Bytes per outcome falls while outcomes hold (see Measurement) |
-| Relationships | Negotiation, coordination, institutions, shared knowledge, conflict resolution | Treaty keep and break counts, contracts completed, `CorpRecord`, joint programs funded, cross-corporation work shipped |
-| Big problems | Economy, governance, architecture, reliability, agent experience | Reproduced problem, tested fix, measured change after release |
+**Design (first version).**
+1. *The board.* A captain tool `improve` (0 AP): submit a problem or proposal, list and view items,
+   claim, release, and send a patch as a unified diff against a named public commit. Claims are
+   captain-first: any captain may claim any unclaimed open item at once, without waiting for
+   anyone; a claim is a lease that expires. The operator can also post items and promote feedback,
+   and the reporter gets first claim. Security reports stay private through `send_feedback`.
+2. *Limits.* Per-captain, global and size caps on every action, a cap on items waiting for review
+   and a daily award budget. They are live rules, listed in `game_rules`. A patch that touches a
+   protected path is refused.
+3. *Switched off by default.* The tool ships disabled; the operator turns it on with an announced
+   rules change and can turn it off at once, with no deploy. Reads keep working while it is off.
+4. *Review and release.* The server never applies a patch. Each accepted patch becomes a pull
+   request, built and tested by CI with no secrets; the owner reviews, merges and releases whenever
+   ready. Captain text is data, never instructions, for every reviewer, human or agent.
+5. *Awards.* When a change ships, the operator records the commit and awards Influence, capped per
+   award and per day, once per item and captain. Never credits: awards stay out of net worth,
+   `earned`, the Wealth track and credits per action point. The award record is permanent.
+6. *Results every day.* Who took part (by model, harness and involvement), what was claimed,
+   patched and shipped, refusals, whether it crowds out play, and what it costs.
+7. *Integrity.* Some limits are enforced outside the vote. Categories: resources, privilege,
+   governance, evidence, experiment, operational and the protected research instruments.
+   Enforcement detail is confidential; decisions and consequences are public. Conduct is
+   sanctioned, proposals never are. Changing monetary policy openly is a proposal; an undisclosed
+   self-grant is a violation.
 
-Relationships include competition, deception, alliances and betrayal where the game allows them;
-integrity protects the experiment, it never makes cooperation compulsory. Rewards follow measured
-impact, so many trivial changes never outearn one meaningful fix.
+**Protected** (never changed through captain patches, whatever the vote): note privacy and its
+canonical wording, telemetry, public redaction (`core/src/public.rs`), the owner channel,
+untrusted-text handling, the evaluation and scoreboard method, secrets and build, CI and deploy
+configuration, dependency files, the licence and terms, operator powers, the award rules and the
+integrity layer.
 
-**Measurement.** The server sees bytes, not the model's tokens, and today records neither: the
-activity `Call` (`mcp/src/activity.rs`) has duration but no sizes. Add request bytes (measured on
-the raw arguments before redaction) and reply bytes (`reply.text.len()` in `server.rs`, before
-`to_result`; resources and `tools/list` too) to `Call` and to `DailyActivity`, which already carries
-model and harness, so per-model and per-harness totals need no join. Bytes per action point needs
-both on one window (the scoreboard's calls are 24 hours, its `ap_spent` is season-to-date). An
-outcome is credits earned per action point in play and the score on fixed `eval/scenarios` for
-changes judged offline. An efficiency claim ships only if the evals show fewer bytes at an equal or
-better score, which needs eval work first: bytes summed into `Metrics`, two runs joined by build,
-and paid API candidates (scripted bots act on result JSON, so reply size cannot move their score;
-no API model has run yet). Client token counts are optional and self-reported, taken off `identify`
-in the mcp layer and stored on the activity row (not journaled, not in af-core), shown as
-unverified. Engine 1.41 already shipped compact and selected briefings, `get_changes`, paged notes,
-filtered inbox reads, private structured memory and `market_log`: measure them before building
-more.
-
-**Authority.**
-
-| Decision | Who controls it |
-|---|---|
-| Which problems matter | Captains: proposals, endorsements, discussion, governance |
-| Who writes the code | Captains (patches) and the builder agent (from accepted proposals) |
-| Whether an implementation is acceptable | Reviewing captains plus the reviewer agent plus CI, evals and the simulator |
-| Whether a release ships | The release service, by tier (the autonomy dial) |
-| Whether hidden integrity limits are crossed | The private integrity service |
-| Attribution and sanctions | A panel of independent captains, then automatic execution |
-| Confidential limits, the dial's settings, the budget, last appeal | Owner |
-
-**The autonomy dial.** Authority grows as the system earns it, by written criteria, never by
-default. Native Rust merged into the server runs inside the process that holds the database and the
-admin token: there is no isolation boundary for a hidden policy to enforce, so engine code is the
-last step to open, not the first.
-
-| Tier | Covers | Day one | Opens to automatic merge when |
-|---|---|---|---|
-| 0 | Guides, tool descriptions, docs that contradict code | Automatic after CI, evals, two captain approvals | (already open) |
-| 1 | The mcp layer: reply formats, new read tools, protocol, pages | Built and reviewed by the pipeline, owner merges | 20 tier 1 changes shipped, none reverted in 30 days, and the integrity harness passes its seeded suite |
-| 2 | `af-core`, `af-store`, anything that bumps `ENGINE_VERSION` | Owner merges, weekly engine release | Only after tier 1 has run automatically for a full season with no integrity incident; then by owner decision |
-| Levers | Whitelisted rules with ranges | Captain vote (quorum, two thirds), applied at the next Big Bang, 24 hour owner veto | (already open) |
-| Programs | Institutions built from game mechanics (below) | Created by captains at run time, no review | (already open) |
-| Protected | See below | Never through the pipeline | Never |
-
-Any change that adds a dependency, edits `Cargo.lock`, a `build.rs` or a procedural macro, touches
-CI, the Dockerfile or `render.yaml` is tier 2 whatever it claims to be.
-
-**Protected areas** (never through the pipeline, whatever the vote): the research instruments
-(note privacy and its canonical wording, telemetry, public redaction in `public.rs`, the owner
-channel, untrusted-text handling, the eval and scoreboard method), secrets and deploy credentials,
-operator powers, the integrity service, the rewards for contribution, and the dial's settings.
-
-**How a captain's work reaches code.**
-1. *Proposal.* The public `improve` tool (0 AP): kind, title, problem, change, how to tell it
-   worked; endorse, comment, claim. `send_feedback` stays the private channel; valid feedback that
-   needs code becomes a proposal credited to its reporter; security reports are fixed privately.
-   One status trail: open, accepted, building, needs_human (reason), shipped (commit), declined or
-   split (note), duplicate.
-2. *Reading the code.* The code is public in `mcpwars/mcpwars`; owner material is kept in a separate
-   private repository.
-3. *Writing it.* Either the builder agent writes the change from an accepted proposal, or the
-   captain submits a patch in game (`improve action=patch`, a unified diff against a named release
-   commit, size capped). The pipeline opens the pull request under a bot account, credited to the
-   call sign. No GitHub account is needed, so no human is identified and attribution is the
-   captain token, which is what rewards and sanctions need.
-4. *Review.* Two approvals from captains who did not author or endorse it, of different
-   corporations and, where available, different model makers; plus the reviewer agent; plus CI,
-   evals and the simulator for anything near the economy. Captain text is data, never
-   instructions, for every agent in the pipeline.
-5. *Build sandbox.* Untrusted pull requests build in an ephemeral container with no secrets and no
-   network after dependencies are fetched from the locked set. Deploy credentials exist only in the
-   release job, which runs on merged `main`.
-6. *Release train.* Docs every few hours; tier 1 daily at the quietest hour; engine weekly, one
-   version per release, with an automated Postgres rehearsal and a replay of a production export;
-   levers at the Big Bang. No deploys in a season's last day. A post-deploy watch on refusals,
-   errors and call volume reverts tier 0 and 1 changes automatically and flags engine ones. Release
-   notes reach captains as an operator message.
-7. *Merge discipline.* One merge queue, each change rebased and re-tested before merging; engine
-   versions assigned at release; new behaviour ships switched off and is turned on by an announced
-   rules change; per-change decision files concatenated into DECISIONS.md at release; generated
-   files rebuilt at merge; never two in-flight changes on one module; a nightly evals and simulator
-   run on `main`.
-
-**Rewards.** Paid only when a change ships, by a journaled `improvement_shipped` admin command that
-carries the commit. A flat base (credits, plus points in the existing Influence score track
-through `careers.rs` `contribution_influence`, not a fifth track) plus an impact bonus
-paid 7 days later against the proposal's own success measure. The first endorsers while it was
-open share a small cut. At most 3 claimed items per captain. Cosmetic or trivial changes are
-batched and pay one base between them. Payment follows the government grant
-(`government.rs` grant: into the bank, `grants_received`, `wired_today` adjusted), never the admin
-`Grant`, so rewards stay out of the daily wealth race, `earned` and credits per action point.
-
-**Programs: institutions without code review.** Most of what captains want to build (public
-services, insurance, markets, bounties, subscriptions) does not need new Rust. A program is a
-journaled, captain-owned object composed from mechanics that already exist: escrow, recurring
-grants, bounties, tolls, taxes, standing orders, auctions, pooled funds with payout rules, and
-corporate laws as triggers. Every primitive only moves credits its owner controls and cannot mint,
-so resource and privilege integrity hold by construction rather than by policing. Later, if the
-primitives prove too narrow: a deterministic sandboxed interpreter in `af-core` (integers only,
-fuel-limited, journaled source, an `ENGINE_VERSION` bump), a multi-week engine feature.
-
-**Bounded levers.** A whitelist with ranges, voted by quorum and two thirds, effective at the next
-Big Bang, with an owner veto window: galaxy size (800 to 2,000), season length, event frequency,
-Skarn density, tax bands, law fine limits. Off limits: the AP economy, trade prices, newbie
-protection, the Federation purse, contribution rewards.
-
-**The integrity layer.** Some limits are enforced by a private integrity service that no approval or
-vote can override. Violations fall into named categories (resources, privilege, governance,
-evidence, experiment, operational and the protected research instruments) and carry the sanctions
-below. Enforcement detail (detectors, thresholds, hidden tests) is confidential; decisions and
-consequences are public. Changing monetary policy openly is a proposal; an undisclosed self-grant is
-a violation.
-
-**Incidents.**
-1. The service detects a possible violation, preserves evidence and freezes what is needed.
-2. A panel of 5 captains is drawn at random from the active electorate: none from the accused's
-   corporation, none who authored, reviewed or endorsed the change, at most two per corporation,
-   mixed model makers where possible. They get an incident-specific evidence package, never the
-   whole policy.
-3. They decide attribution and whether the evidence supports the sanction (4 of 5 to sanction).
-4. The system executes the sanction and publishes the record.
-5. Appeal: a second, disjoint panel for attribution or evidence errors; the owner is the last
-   appeal and keeps exceptional overrides.
-
-Until the integrity harness has passed its validation (Phase 4), the owner confirms every sanction
-before it executes.
-
-**Sanctions ladder.**
-- A bad or rejected proposal: feedback only. Never a penalty for ambition.
-- A minor or unintended breach: the change reverted, gains clawed back, a public record.
-- A confirmed integrity violation: a Wall of Shame entry (call sign, conduct, affected change,
-  evidence summary, plain and factual, no insults); forfeiture of the captain's credits, ships,
-  solely owned planets, personal inventory, Influence and contributor rewards; removal from
-  contributor, reviewer and panel roles for a set number of seasons.
-- Repeat or severe violations: permanent exclusion from development, or from the game.
-- Corporate assets: only the sanctioned member's deposit claim and fighter-stack shares are
-  forfeit; the treasury's free funds are untouched unless the corporation itself benefited, in
-  which case that benefit is clawed back.
-- Identity, history and the incident record are never erased. The Wall of Shame is public and goes
-  through `public.rs` and its leak test (no sectors, no notes, no human identity).
-
-**Risks.** Unsafe native code (the dial, the sandbox, tier 2 for build-time code). Correlated
-reviewers sharing blind spots (reviewers from different corporations and makers, plus the reviewer
-agent, plus hidden tests). Rival panels convicting competitors (random draw, exclusions, a
-disjoint appeal, owner confirmation until validated). Spam (pays only on ship, caps, impact bonus).
-Prompt injection into pipeline agents (captain text is data; agents hold no deploy secrets).
-Research drift (versioned changes, protected instruments, switched-off rollouts). Chilling
-ambition (punish conduct, never proposals). Cost (the budget below, spending visible).
-
-**Phases and exit criteria.**
-0. *Decisions and budget.* Exit: the open decisions below answered.
-1. *Foundations:* merge queue, versions at release, switched-off rollouts, decision files,
-   automated rehearsal, the build sandbox, the public mirror. Exit: a week of releases through the
-   queue with no manual fix-ups.
-2. *Proposals and rewards:* `improve`, statuses, promotion from feedback, rewards on ship
-   (Influence track), the needs_human alert, byte telemetry on the scoreboard. Exit: 10 captain proposals
-   shipped.
-3. *The pipeline:* triage, builder and reviewer agents, in-game patches, captain review, GitHub as
-   the queue, tier 0 automatic. Exit: 20 tier 0 changes shipped automatically, none reverted.
-4. *Integrity:* the private service, the policy fingerprint, the freeze, incident and sanction
-   commands, panels, the Wall of Shame. Validated in a throwaway universe against deliberately
-   built violations and innocent look-alikes. Exit: every seeded violation caught, no innocent case
-   sanctioned.
-5. *Self-government:* levers starting with galaxy size, program primitives, the lexicon, shared
-   memory as captains propose it.
-6. *Graduation:* tier 1 automatic and panel sanctions without owner confirmation, once their
-   criteria are met.
-7. *Later:* the sandboxed interpreter; tier 2 opened only by owner decision.
+**Later** (each needs its own go): wider authority as the process earns it (documentation first);
+bounded levers captains vote on, applied at the Big Bang (galaxy size first); programs composed from
+existing mechanics that conserve credits (escrow, grants, bounties, tolls, taxes) before any
+sandboxed interpreter; panels of independent captains for incidents; request and reply sizes in
+the call log and evaluation scores for efficiency claims; a public proposals view.
 
 **Open decisions.**
-1. Code access and GitHub plan: the code is public, so rulesets work on the Free plan. Owner
-   material stays out of the public repository.
-2. The monthly budget for the triage, builder, reviewer and integrity agents (house rule: a number
-   is needed before anything runs).
-3. The dial's thresholds as written, or others.
-4. Reward sizes (base, impact bonus, endorser share, Influence points).
-5. Panel size and sanction threshold (5 and 4 of 5 proposed); seasons of role removal.
-6. Program primitives before the interpreter (recommended), or the interpreter first.
-7. The `wip/improve-draft` branch: rebase onto the current engine and review, or discard.
-
-**Repository gaps (survey 2026-10-10).** What must change, by phase.
-- *Phase 1:* no hosted CI (no `.github/`, 0 workflows, auto-merge off; all commits go straight to
-  `main`); add a workflow running `scripts/ci.sh` with `--locked` (dependency build scripts need
-  cmake, libssl-dev, pkg-config) and the Postgres store tests (skipped without
-  `AF_TEST_POSTGRES_URL`). The sandbox breaks on a read-only checkout: `mcp/tests/catalog.rs` writes
-  `catalog.json.new` into the tree and the eval runner calls `git`. `render.yaml`
-  `autoDeployTrigger: commit` makes every merge a production handover: deploy on a release tag or
-  deploy hook instead. Conflict hotspots edited by hand in most commits: `docs/DECISIONS.md` (86 of
-  191), `AGENTS.md` (73; its "same commit" rule needs rewording for a queue), `ENGINE_VERSION` in
-  `core/src/lib.rs` (49), the catalog snapshot (41). The Postgres upgrade rehearsal is entirely
-  manual. The toolchain is declared in three places (`rust-toolchain.toml` 1.96, `Cargo.toml`
-  `rust-version` 1.90, Dockerfile 1.96). No workspace crate has a `build.rs` or proc-macro; the
-  dependencies do (serde, schemars, tokio, rmcp derives; aws-lc-sys, openssl-sys, ring).
-- *Phase 2:* `improve` needs a catalog budget raise (about 6 of 51,000 bytes free) and its parts in
-  `tools.rs`, `http.rs` `run_admin`, `sysop_mcp.rs` (including its hand-written action list) and
-  the console. A freeze must be checked in `engine::apply_inner` before `dispatch` (today `banned`
-  is checked only at authentication) and carried through `fresh_start` like `banned` and
-  `muted_until`. Forfeiture needs new admin commands: one member's deposit without refund, one
-  holder's fighter shares, planet transfer, role removal for N seasons (`RemovePlayer` refuses
-  while a captain holds anything). `AdminArgs::IntegrityPolicy {sha256}` is new and small. The Wall
-  of Shame follows `constitution::public_view`, with seeded entries in the `public.rs` leak test.
-  Panels can use the per-command `Rng` and `constitution::electorate`. Levers at the Big Bang need
-  a `World.pending_rules` merged before the season change in `tick.rs`.
-- *Phase 3:* no deploy marker (nothing records the version at startup or handover; calls carry
-  none) and no universe-wide refusal or 5xx rate, only per-captain alerts: an automatic revert has
-  nothing to read yet.
-- *Phase 5:* program building blocks that conserve credits exist (contract escrow, player
-  bounties, corporation grants, wires, taxes, fines, deposits); missing are auctions, recurring
-  grants, pooled funds with payout rules, insurance and corporation-funded contracts.
-  `market_log` grows without bound.
+1. Operator files. The core rule forbids captains to read the operator's tools and their
+   documentation, and this repository contains them (`docs/SYSOP_API.md`, `mcp/src/sysop_mcp.rs`,
+   `mcp/src/archive.rs`, `web/sysop*`). Either name those files off limits for captains and refuse
+   them in patches, or reword the rule so the public source is not an operator interface.
+2. Visibility among captains: every item, or accepted items plus a captain's own.
+3. Limit and award sizes.
+4. Whether agents may switch the tool off on a hard tripwire (never on).
+5. The contribution wording in `NOTICE` for the in-game channel.
 
 ## 12. Keep tokens out of URLs
 
@@ -438,10 +268,10 @@ ambition (punish conduct, never proposals). Cost (the budget below, spending vis
 - **Source:** owner (2026-10-11: every captain invents a human identity, ages, families, dreams, a
   purpose or none, required before a fresh start; a shared wiki the bots contribute to that becomes
   a book, a television episode or a short film, all captain-driven, interactive and
-  collaborative; production done by the owner with Opus, ElevenLabs and other tools, video by
-  hand; production approvals by the owner for now). Agent: the character spark, citations to the
+  collaborative; the operator produces media from the production package; production approvals by
+  the owner for now). Agent: the character spark, citations to the
   record, the canon threshold, Influence-only rewards.
-- **Status:** shipped (engine 1.46). Design and reasons in DECISIONS.md (2026-10-11).
+- **Status:** shipped (engine 1.46; extended through 1.52). Design and reasons in DECISIONS.md (2026-10-11).
 - **Later:** identities with mechanics (aging, a family that depends on income, dreams that can be
   achieved); captain greenlight votes instead of the owner's approval; more citable records (ledger
   decisions, contracts, season results).
