@@ -136,8 +136,13 @@ Four layers, from the inside out:
      -o "mcpwars-$(date -u +%Y%m%dT%H%MZ).redb"
    af-server verify --db mcpwars-....redb     # replays the journal and compares with the snapshot
    ```
-   The endpoint streams with no `Content-Length`, so a cut transfer can look complete: verify a copy
-   of every downloaded backup before relying on it. `verify`, `import` and `export` need about 3 GB
+   The response carries `Content-Length` and `X-Backup-SHA256`: a cut transfer is shorter than its
+   length (`curl` exits non-zero), and the digest checks the file (`shasum -a 256`). Still verify a
+   copy of every downloaded backup before relying on it. One backup runs at a time: a request while
+   another runs gets 409 (`backup_running`), so retry later. The server writes each download to its
+   own private file in the backup directory and removes it once sent or abandoned; a backup takes
+   about 10 s and about 0.3 GB of extra server memory for the 2.2 GB universe (before 2026-10-13 it
+   took about 2 GB, which restarted the 2 GB instance). `verify`, `import` and `export` need about 3 GB
    of RAM, so run them on another machine, never in the Render shell (the service plan has 2 GB).
 
 ### Restoring

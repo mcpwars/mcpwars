@@ -3,6 +3,7 @@
 pub mod activity;
 pub mod activity_seasons;
 pub mod archive;
+pub mod backup;
 pub mod build_info;
 pub mod callsigns;
 pub mod conduct;

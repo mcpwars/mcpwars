@@ -1914,3 +1914,21 @@ improve board in `af-core` and the engine's own bounds on stored captain values.
 | The improve board's `identity_required` refusal carries `identity::missing_hint`, the same hint the AP gate gives | Its own hint asked for an identity even when the missing step was the mandatory rename, which that hint never mentions |
 | The memory guide states the 1.55 bounds (depth, memory value, note and claim bytes; refused whole) from the `bounds` constants | Captains met `too_deep` and `too_large` with no page that named the limits; numbers come from placeholders, never copied values |
 | IDEAS #11 is `building` with its decided open questions | The board is built on `feat/improve`; the index still said "not built" |
+
+## 2026-10-13: Online backups that fit the server
+
+`GET /api/sysop/backup` restarted production: the export held about 1.7 to 2.2 GB of extra memory
+on a 2 GB instance. Measured locally on a restored copy of production (2.2 GB as redb, 240k
+journal entries): the server went from about 0.4 to 2.6 GB during one backup and stayed there;
+two overlapping requests reached 3.4 GB and one of them streamed a corrupt file with HTTP 200.
+
+| Decision | Reason |
+|---|---|
+| Backup and export files are opened with a 16 MiB redb page cache (`EXPORT_CACHE_BYTES`, `Store::create_export`) | redb's default cache is 1 GiB and a commit moves the pages it wrote into it, so the whole written copy (up to 1 GiB, plus allocator overhead) stayed resident. A small cache also bounds redb's write buffer (half the cache), which spills to the file. Measured on the same copy: 375 to 685 MB, 10.8 s, `verify` passes |
+| Private archive rows are copied 500 at a time (journal pages stay 5,000) | A 5,000-row archive page was about 38 MB raw and about 3.5 times that once re-encoded; smaller pages keep each step small. The redb file format is unchanged (its archive tables still store JSON with byte arrays as numbers; shrinking that is a format change) |
+| One backup at a time per server (`Game::backup_permit`), shared by the download, the `backup` action and automatic backups; the next gets 409 `backup_running` (the action a `backup_running` refusal, an automatic backup is skipped) | Each backup holds a copy in flight, and two at once shared one temporary file. The permit is held by the copy job until it finishes, even when the requester has gone, and by the download until it is sent, so a new backup never starts beside a running one |
+| Each download writes its own file (`download-<ms>-<pid>-<n>.redb`), removed once sent, failed or abandoned (unlinked as soon as it is opened for sending on Unix); a finished copy nobody waits for is removed; startup removes the old fixed-name files and stale leftovers | The fixed `download.redb` and `download.partial` were shared by overlapping requests and never removed (2.2 GB on disk, 4.2 GB during the next backup) |
+| The download sends `Content-Length` and `X-Backup-SHA256` (computed from the finished file before sending) and `Cache-Control: no-store` | Without a length a cut transfer looked like a complete download; the digest lets the operator check the file. Hashing 2.2 GB adds about a second |
+| Backup files are created mode 0600 and a backup directory the server creates is mode 0700 | A backup holds the private archive |
+| A failed or panicking copy is a JSON error, never a dead process | The copy runs on its own thread under `catch_unwind`; a thread that cannot start is an error reply |
+| The redb file-store backup still copies the file on the engine thread | Production runs on Postgres; that path is unchanged apart from the private mode and removing its partial file on failure |

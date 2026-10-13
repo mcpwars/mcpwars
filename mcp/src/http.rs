@@ -1226,13 +1226,16 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
             Ok(json!({"snapshot": true}))
         }
         "backup" => match &cfg.backup_dir {
-            Some(dir) => {
-                let dest = dir.join(format!("manual-{}.redb", crate::game::now_ms()));
-                game.backup(dest.clone())
-                    .await
-                    .map(|n| json!({"summary": format!("Backup written ({n} bytes)."), "path": dest}))
-                    .map_err(|e| af_core::Refusal::new("backup_failed", e))
-            }
+            Some(dir) => match game.backup_permit() {
+                None => Err(af_core::Refusal::new("backup_running", crate::game::BACKUP_BUSY)),
+                Some(permit) => {
+                    let dest = dir.join(format!("manual-{}.redb", crate::game::now_ms()));
+                    game.backup_with(dest.clone(), permit)
+                        .await
+                        .map(|n| json!({"summary": format!("Backup written ({n} bytes)."), "path": dest}))
+                        .map_err(|e| af_core::Refusal::new("backup_failed", e))
+                }
+            },
             None => Err(af_core::Refusal::new(
                 "not_configured",
                 "Backups are not configured on this server.",
@@ -2380,34 +2383,67 @@ async fn sysop_action(
     }
 }
 
-/// Download a fresh consistent copy of the universe database (for offsite backups).
+/// Header carrying the downloaded backup's SHA-256 (lowercase hex).
+pub const BACKUP_SHA256_HEADER: &str = "x-backup-sha256";
+
+/// Download a fresh consistent copy of the universe database (for offsite backups). One backup
+/// runs at a time (409 otherwise); each request writes its own file, sends it with its length and
+/// SHA-256 so a cut transfer is detectable, and removes it once sent or abandoned.
 async fn sysop_backup(State(s): State<AppState>, h: HeaderMap) -> Response {
     sysop_guard!(s, h);
+    let fail = |code: StatusCode, msg: String| (code, Json(json!({"error": msg}))).into_response();
     let Some(dir) = s.cfg.backup_dir.clone() else {
+        return fail(StatusCode::NOT_FOUND, "backups are not configured on this server".into());
+    };
+    let Some(permit) = s.game.backup_permit() else {
         return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "backups are not configured on this server"})),
+            StatusCode::CONFLICT,
+            Json(json!({"error": crate::game::BACKUP_BUSY, "code": "backup_running"})),
         )
             .into_response();
     };
-    let dest = dir.join("download.redb");
-    if let Err(e) = s.game.backup(dest.clone()).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response();
+    let dest = crate::backup::download_path(&dir);
+    // Removes the file however this request ends: sent, failed, or the client gone.
+    let file = crate::backup::RemoveOnDrop(dest.clone());
+    if let Err(e) = s.game.backup_with(dest.clone(), permit.clone()).await {
+        return fail(StatusCode::INTERNAL_SERVER_ERROR, format!("backup failed: {e}"));
     }
-    match tokio::fs::File::open(&dest).await {
-        Ok(f) => (
-            [
-                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-                (
-                    header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"mcpwars-{}.redb\"", crate::game::now_ms()),
-                ),
-            ],
-            axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(f)),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    }
+    let hashed = {
+        let dest = dest.clone();
+        tokio::task::spawn_blocking(move || crate::backup::digest(&dest)).await
+    };
+    let (len, sha) = match hashed {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return fail(StatusCode::INTERNAL_SERVER_ERROR, format!("backup failed: {e}")),
+        Err(e) => return fail(StatusCode::INTERNAL_SERVER_ERROR, format!("backup failed: {e}")),
+    };
+    let f = match tokio::fs::File::open(&dest).await {
+        Ok(f) => f,
+        Err(e) => return fail(StatusCode::INTERNAL_SERVER_ERROR, format!("backup failed: {e}")),
+    };
+    // On Unix the open file outlives its name: unlink it now, so even a killed process leaves
+    // nothing behind. Elsewhere the guard removes it after the stream.
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(&dest);
+    // The stream keeps the permit (no second backup while this one is sent) and the guard.
+    let body = tokio_util::io::ReaderStream::new(f).map(move |chunk| {
+        let _held = (&permit, &file);
+        chunk
+    });
+    (
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, len.to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"mcpwars-{}.redb\"", crate::game::now_ms()),
+            ),
+        ],
+        [(axum::http::HeaderName::from_static(BACKUP_SHA256_HEADER), sha)],
+        axum::body::Body::from_stream(body),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
