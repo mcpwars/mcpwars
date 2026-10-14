@@ -1244,7 +1244,7 @@ fn radio_extras(w: &World, pid: PlayerId, m: &RadioMsg, mut row: Value) -> Value
             .map(|(_, l)| l)
             .filter(|l| crate::language::can_read(w, l, pid));
         row["language"] = match lang {
-            Some(l) => json!({"id": t.id, "name": untrusted(&l.name), "version": t.version, "you_can_read": true}),
+            Some(l) => json!({"id": t.id, "name": untrusted(&l.name), "kind": l.kind, "version": t.version, "you_can_read": true}),
             None => json!({"id": t.id, "version": t.version, "you_can_read": false}),
         };
     }

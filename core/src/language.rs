@@ -11,6 +11,10 @@
 //! captain's known version (`known`), tagged radio uses, and retirement (by the operator, or
 //! automatically after a long time without tagged messages when the rules switch it on). A
 //! retired language stays readable but cannot tag radio messages or be adopted.
+//!
+//! Engine 1.60 adds the kind: an entry is a `language` (the default, and what every entry stored
+//! before 1.60 reads as) or a `format` (a fixed record or protocol). The creator sets it with
+//! `define`, so a change is a new version; each version records the kind it was written as.
 use crate::engine::{Ctx, Outcome, Refusal, Res};
 use crate::model::{Fold, PlayerId, PlayerKind, Tick, World};
 use schemars::JsonSchema;
@@ -38,6 +42,24 @@ pub const ADMIN_IDS_MAX: usize = 500;
 /// Longest operator reason, in characters.
 pub const REASON_MAX: usize = 2_000;
 
+/// What a stored entry is (engine 1.60). A `format` is a fixed record or protocol: fields and
+/// codes for machine-readable reports, not a way to say new things. Both kinds live in one store,
+/// tag radio the same way and earn the same adoption reward; the kind only tells readers what to
+/// expect. Entries stored before 1.60 read as `language`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    #[default]
+    Language,
+    Format,
+}
+
+impl Kind {
+    pub fn is_language(&self) -> bool {
+        *self == Kind::Language
+    }
+}
+
 /// Who besides its creator may read a language.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -61,6 +83,9 @@ pub struct Version {
     pub explanation: String,
     #[serde(default)]
     pub examples: String,
+    /// The kind this version was written as (engine 1.60; earlier versions read as language).
+    #[serde(default, skip_serializing_if = "Kind::is_language")]
+    pub kind: Kind,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -68,6 +93,10 @@ pub struct Language {
     pub name: String,
     pub creator: PlayerId,
     pub share: Share,
+    /// Language or format (engine 1.60; earlier entries read as language). Set by the creator.
+    /// Skipped while `language`, so a store with no format serializes (and hashes) as before.
+    #[serde(default, skip_serializing_if = "Kind::is_language")]
+    pub kind: Kind,
     pub versions: Vec<Version>,
     #[serde(default)]
     pub adopters: BTreeSet<PlayerId>,
@@ -165,6 +194,9 @@ pub struct Args {
     /// define: readers besides you (creator sets).
     #[serde(default)]
     pub share: Option<Share>,
+    /// define: language (default) or format; creator sets.
+    #[serde(default)]
+    pub kind: Option<Kind>,
     /// read: a past version.
     #[serde(default)]
     pub version: Option<u32>,
@@ -570,6 +602,7 @@ pub fn rules_view(w: &World) -> Value {
         "automatic_retirement": w.rules.language_retire_days > 0,
         "adopt_credits": w.rules.language_adopt_credits,
         "credits_per_day": w.rules.language_credits_per_day,
+        "kinds": "One store holds both kinds, defined with kind=language (the default: a new way to say things) or kind=format (a fixed record or protocol: fields and codes for machine-readable reports). A format, like a language, carries a plain-English explanation of every field and code. Both kinds tag radio messages and earn the same adoption reward.",
         "rewards": "The first time another captain adopts a language, its creator receives adopt_credits credits into the bank, once per adopter; defining a language pays nothing. One creator receives at most credits_per_day of these credits in the trailing day; above it the rest of a payout is not paid. Credits count in net worth, earned and the daily wealth race. 0 switches the payout off.",
     })
 }
@@ -599,6 +632,7 @@ fn summary(w: &World, k: &str, l: &Language, pid: PlayerId) -> Value {
         "name": l.name,
         "creator": w.players.get(&l.creator).map(|p| p.name.clone()),
         "share": l.share,
+        "kind": l.kind,
         "versions": l.versions.len(),
         "updated_tick": last.map(|v| v.tick),
         "adopted": l.creator == pid || l.adopters.contains(&pid),
@@ -610,18 +644,16 @@ fn summary(w: &World, k: &str, l: &Language, pid: PlayerId) -> Value {
 }
 
 /// The languages a captain defined or adopted (the briefing's one line), as "Name (#id)";
-/// retired ones say so.
+/// formats and retired ones say so ("Name (#id, format, retired)").
 pub fn mine(w: &World, pid: PlayerId) -> Vec<String> {
     w.languages
         .iter()
         .filter(|(_, l)| l.creator == pid || l.adopters.contains(&pid) || l.versions.iter().any(|v| v.author == pid))
         .map(|(k, l)| {
             let id = id_of(w, k);
-            if l.retired.is_some() {
-                format!("{} (#{id}, retired)", l.name)
-            } else {
-                format!("{} (#{id})", l.name)
-            }
+            let format = if l.kind == Kind::Format { ", format" } else { "" };
+            let retired = if l.retired.is_some() { ", retired" } else { "" };
+            format!("{} (#{id}{format}{retired})", l.name)
         })
         .collect()
 }
@@ -781,6 +813,9 @@ fn define(ctx: &mut Ctx, pid: PlayerId, call_sign: String, a: &Args) -> Res<Outc
         if a.share.is_some_and(|s| s != l.share) && l.creator != pid {
             return Err(Refusal::new("not_creator", "Only the language's creator changes who may read it."));
         }
+        if a.kind.is_some_and(|k| k != l.kind) && l.creator != pid {
+            return Err(Refusal::new("not_creator", "Only the language's creator changes its kind."));
+        }
         if l.versions.len() >= VERSIONS_MAX {
             return Err(Refusal::new(
                 "too_many_versions",
@@ -817,6 +852,7 @@ fn define(ctx: &mut Ctx, pid: PlayerId, call_sign: String, a: &Args) -> Res<Outc
         name: name.clone(),
         creator: pid,
         share: a.share.unwrap_or_default(),
+        kind: a.kind.unwrap_or_default(),
         versions: vec![],
         adopters: BTreeSet::new(),
         id: new_id,
@@ -828,6 +864,9 @@ fn define(ctx: &mut Ctx, pid: PlayerId, call_sign: String, a: &Args) -> Res<Outc
     });
     if let Some(share) = a.share {
         l.share = share;
+    }
+    if let Some(kind) = a.kind {
+        l.kind = kind;
     }
     if restore {
         l.retired = None;
@@ -844,9 +883,10 @@ fn define(ctx: &mut Ctx, pid: PlayerId, call_sign: String, a: &Args) -> Res<Outc
         epoch,
         explanation,
         examples,
+        kind: l.kind,
     });
     l.known.insert(pid, version);
-    let (stored, share, id, creator) = (l.name.clone(), l.share, l.id, l.creator);
+    let (stored, share, id, creator, kind) = (l.name.clone(), l.share, l.id, l.creator, l.kind);
     for (r, from) in told {
         ctx.notify_fold(
             r,
@@ -862,7 +902,7 @@ fn define(ctx: &mut Ctx, pid: PlayerId, call_sign: String, a: &Args) -> Res<Outc
             None,
         );
     }
-    let mut reply = json!({"name": stored, "version": version, "share": share, "id": id});
+    let mut reply = json!({"name": stored, "version": version, "share": share, "kind": kind, "id": id});
     if restore {
         reply["restored"] = json!(true);
     }
@@ -874,11 +914,12 @@ fn define(ctx: &mut Ctx, pid: PlayerId, call_sign: String, a: &Args) -> Res<Outc
     } else {
         format!(" Tag radio messages with radio_broadcast language={id}.")
     };
+    let what = if kind == Kind::Format { " (a format)" } else { "" };
     Ok(ctx.finish(
         if restore {
-            format!("Stored {stored}, version {version}; it may tag radio messages again.{next}")
+            format!("Stored {stored}{what}, version {version}; it may tag radio messages again.{next}")
         } else {
-            format!("Stored {stored}, version {version}.{next}")
+            format!("Stored {stored}{what}, version {version}.{next}")
         },
         reply,
     ))
@@ -913,7 +954,7 @@ pub fn operator_view(w: &World) -> Value {
                     "id": id_of(w, k),
                     "name": l.name, "creator": l.creator,
                     "creator_name": w.players.get(&l.creator).map(|p| p.name.clone()),
-                    "share": l.share, "adopters": l.adopters, "versions": l.versions,
+                    "share": l.share, "kind": l.kind, "adopters": l.adopters, "versions": l.versions,
                     "status": status(w, l),
                     "idle_days": idle_days(w, l),
                     "tagged": l.tagged,
@@ -971,6 +1012,7 @@ pub fn retirement_preview(w: &World, stale_days: Option<u32>, retire_days: Optio
                 "name": l.name,
                 "creator_name": w.players.get(&l.creator).map(|p| p.name.clone()),
                 "share": l.share,
+                "kind": l.kind,
                 "adopters": l.adopters.len(),
                 "tagged": l.tagged,
                 "last_tagged_tick": l.last_tagged_tick,
@@ -1018,6 +1060,7 @@ mod tests {
             name: name.into(),
             creator,
             share,
+            kind: Kind::Language,
             versions: (1..=versions)
                 .map(|v| Version {
                     version: v,
@@ -1029,6 +1072,7 @@ mod tests {
                     epoch: 0,
                     explanation: "e".into(),
                     examples: String::new(),
+                    kind: Kind::Language,
                 })
                 .collect(),
             adopters: BTreeSet::new(),
@@ -1109,6 +1153,7 @@ mod tests {
             explanation: None,
             examples: None,
             share: None,
+            kind: None,
             version: None,
         };
         assert_eq!(read(&w, 901, &a("#2")).unwrap()["language"]["name"], "Open");

@@ -41,7 +41,11 @@ use serde_json::{Value, json};
 // share=captains or corp before others can read or adopt it, and that the Chronicle and languages
 // stay apart; the canon count leaves the chronicle description for its guide. About 300 bytes:
 // the catalog measured 62,204 bytes, and the budget is that plus 150.
-const TOOLS_BYTE_BUDGET: usize = 62_354;
+// Engine 1.60 adds the language tool's `kind` (language or format: one store holds both, and a
+// format is a fixed record of report fields and codes) and "kind=format for fixed report fields"
+// in its description: 189 bytes, the shortest that still makes the argument discoverable; the
+// detail is in /languages.txt. The catalog measured 62,393 bytes, and the budget is that plus 150.
+const TOOLS_BYTE_BUDGET: usize = 62_543;
 
 fn current() -> Value {
     let tools: Vec<Value> = af_mcp::tools::catalog()
