@@ -2523,6 +2523,25 @@
     renderLanguages();
   }
   $("lg-refresh").addEventListener("click", loadLanguages);
+  // A language link (a radio message's tag) opens this workbench on that language: the card is
+  // marked, its latest version opened and scrolled into view once the list holds it. The jump
+  // goes on the back stack like any inspector link, so the back button and Esc return.
+  let lgFocus = null, lgMarked = null;
+  function openLanguage(id) {
+    lgFocus = lgMarked = id;
+    setMode("languages");
+    lgSig = "";
+    renderLanguages();
+  }
+  function applyLgFocus() {
+    if (lgFocus === null || mode !== "languages") return;
+    const card = $("lg-list").querySelector(`[data-lang-id="${lgFocus}"]`);
+    if (!card) { if (lgData) lgFocus = null; return; }
+    lgFocus = null;
+    const latest = card.querySelector("details[data-version]");
+    if (latest) latest.open = true;
+    card.scrollIntoView({ block: "start" });
+  }
   // The retirement preview (engine 1.58): what automatic retirement would do with the rules'
   // thresholds or these overrides. Fetched only on request; nothing changes until the operator
   // retires the selected candidates through the journaled `language` action.
@@ -2653,6 +2672,7 @@
     $("lg-count").textContent = rows.length ? fmt(rows.length) : "";
     const cards = rows.map((l) => {
       const card = el("section", "lg-card");
+      if (isNum(l.id)) { card.dataset.langId = String(l.id); if (l.id === lgMarked) card.classList.add("focus"); }
       const vs = l.versions || [];
       card.append(el("h3", "sec-h", `${l.name} · ${l.creator_name || `#${l.creator}`} · ${l.share} · ${vs.length} version${vs.length === 1 ? "" : "s"}${(l.adopters || []).length ? ` · ${l.adopters.length} adopter${l.adopters.length === 1 ? "" : "s"}` : ""}${isNum(l.id) ? ` · #${l.id}` : ""}${l.status ? ` · ${l.status}` : ""}`));
       if (isNum(l.id) && (isNum(l.tagged) || l.retired)) {
@@ -2693,6 +2713,7 @@
     scroller.scrollLeft = left;
     const restored = anchor && refreshed.find((d) => d.dataset.version === anchor.dataset.version);
     if (restored && scroller.clientHeight) scroller.scrollTop += restored.getBoundingClientRect().top - anchorTop;
+    applyLgFocus();
   }
 
   // ======================================================================
@@ -7004,7 +7025,8 @@
       b.append(section("Message", el("blockquote", "", m.text)));
       const mn = m.mentions || {};
       const names = [...(mn.captains || []).map((c) => c.name), ...(mn.corps || []).map((c) => `corp:${c.name}`)];
-      const lang = m.language ? `${m.language.name || ""} · #${m.language.id} · v${m.language.version}` : undefined;
+      const langText = m.language ? `${m.language.name || ""} · #${m.language.id} · v${m.language.version}` : undefined;
+      const lang = m.language && isNum(m.language.id) ? link(langText, () => openLanguage(m.language.id)) : langText;
       b.append(section("Details", facts([["From", from ? captainLink(m.from) : m.from], ["Model", m.from_model || "–", { t: 1 }], ["Channel", m.channel, { t: 1 }], ["To", m.channel === "private" ? (m.to_id === 0 ? "sysop" : captainLink(m.to)) : m.corp || "everyone"], ["Tick", fmt(m.tick)], ["Sent", stamp(sentAt(m)), { t: 1 }],
         ["Mentions", names.length ? names.join(", ") : undefined, { t: 1 }], ["Language", lang, { t: 1 }]])));
     });
