@@ -1888,8 +1888,8 @@ pub fn tier(i: &Item) -> Option<&'static str> {
 }
 
 /// The briefing's `improve` block (engine 1.59), or None while the board is switched off: how
-/// many items the captain could claim now, its own active claim, and (full briefing only) up to
-/// `BRIEFING_ITEMS` of them, newest first, with the live reward.
+/// many items the captain could claim now, its own active claim, up to `BRIEFING_ITEMS` of them
+/// newest first, and the live reward (a short line in the compact briefing).
 pub fn briefing(w: &World, pid: PlayerId, compact: bool) -> Option<Value> {
     let r = &w.rules;
     if !r.improve_enabled {
@@ -1911,30 +1911,32 @@ pub fn briefing(w: &World, pid: PlayerId, compact: bool) -> Option<Value> {
             json!({"id": i.id, "expires_tick": i.claim.as_ref().map(|c| c.expires_tick)})
         }
     });
-    let mut v = json!({"claimable": open.len(), "your_claim": yours});
-    if !compact {
-        v["items"] = json!(
-            open.iter()
-                .take(BRIEFING_ITEMS)
-                .map(|i| {
-                    let mut row = json!({"id": i.id, "title": crate::query::untrusted(&i.title)});
-                    if let Some(t) = tier(i) {
-                        row["tier"] = json!(t);
-                    }
-                    row
-                })
-                .collect::<Vec<_>>()
-        );
-        let rate = r.improve_credits_per_influence;
-        v["reward"] = json!(if rate > 0 {
-            format!(
-                "A shipped patch pays Influence and {rate} credits per Influence point (S/M/L tiers): improve action=list; game_rules improve.awards. How: /improve.txt. A subagent can do it between check-ins."
-            )
+    let items: Vec<Value> = open
+        .iter()
+        .take(BRIEFING_ITEMS)
+        .map(|i| {
+            let mut row = json!({"id": i.id, "title": crate::query::untrusted(&i.title)});
+            if let Some(t) = tier(i) {
+                row["tier"] = json!(t);
+            }
+            row
+        })
+        .collect();
+    let rate = r.improve_credits_per_influence;
+    let reward = if compact {
+        if rate > 0 {
+            format!("shipped patch: S/M/L Influence + {rate} credits/Influence; improve action=list; /improve.txt")
         } else {
-            "A shipped patch pays Influence (S/M/L tiers): improve action=list; game_rules improve.awards. How: /improve.txt. A subagent can do it between check-ins.".to_string()
-        });
-    }
-    Some(v)
+            "shipped patch: S/M/L Influence; improve action=list; /improve.txt".to_string()
+        }
+    } else if rate > 0 {
+        format!(
+            "A shipped patch pays Influence and {rate} credits per Influence point (S/M/L tiers): improve action=list; game_rules improve.awards. How: /improve.txt. A subagent can do it between check-ins."
+        )
+    } else {
+        "A shipped patch pays Influence (S/M/L tiers): improve action=list; game_rules improve.awards. How: /improve.txt. A subagent can do it between check-ins.".to_string()
+    };
+    Some(json!({"claimable": open.len(), "your_claim": yours, "items": items, "reward": reward}))
 }
 
 /// The `game_rules` block: what the board is and its live limits.
