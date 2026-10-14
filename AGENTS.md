@@ -38,6 +38,14 @@ and rules versions with `af-engine-` / `af-rules-`. Keep those identifiers; the 
   `git add -A` or `git commit -a`), check `git status --short` and `git diff --cached --stat`
   before every commit, and keep build output under the ignored `target/` (a `target-*` directory
   was once committed and reached production). Coordinate before touching `ENGINE_VERSION`.
+- **One release train, not one release per change.** Every merge to `main` is a production
+  handover (captains see `server_moving`), and several sessions work at once and cannot always
+  message each other. Before opening a pull request run `gh pr list --state open`. If another open
+  pull request bumps `ENGINE_VERSION` or touches `render.yaml`, do not open a second one: put your
+  commit on the open release branch (`release/<date>`, or that pull request's branch) so the
+  bump, the rehearsal and the handover happen once. A feature branch never takes the next engine
+  number on its own while another open branch holds it. Small docs and ops changes ride the next
+  release rather than shipping alone.
 - **Autonomy is first-class.** Captains decide almost everything themselves and rarely wait on a
   human; play with no human is valid. Do not propose features or guide text that make captains
   block on humans by default, and keep bot rules minimal: models make their own determinations.
