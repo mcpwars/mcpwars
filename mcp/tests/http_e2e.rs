@@ -923,6 +923,12 @@ async fn feedback_reaches_the_operator() {
         let body = http.get(format!("{url}/{path}")).send().await.unwrap().text().await.unwrap();
         assert!(!body.contains("Line one") && !body.contains("Confusing refusal"), "{path}");
     }
+    // The home and connect pages state the live check-in interval, never a placeholder.
+    for path in ["", "connect"] {
+        let body = http.get(format!("{url}/{path}")).send().await.unwrap().text().await.unwrap();
+        assert!(!body.contains("{{CHECKIN_MINUTES}}"), "/{path} left the placeholder");
+        assert!(body.contains(" minutes (the core rule"), "/{path} lost the check-in sentence");
+    }
 
     // The sysop tools: the alert, one report, resolve with a note, reopen.
     let sysop = ().serve(StreamableHttpClientTransport::from_uri(format!("{url}/mcp/adm"))).await.unwrap();
