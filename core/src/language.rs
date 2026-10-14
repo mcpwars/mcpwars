@@ -609,16 +609,18 @@ fn summary(w: &World, k: &str, l: &Language, pid: PlayerId) -> Value {
     })
 }
 
-/// The names a captain defined or adopted (the briefing's one line); retired ones say so.
+/// The languages a captain defined or adopted (the briefing's one line), as "Name (#id)";
+/// retired ones say so.
 pub fn mine(w: &World, pid: PlayerId) -> Vec<String> {
     w.languages
-        .values()
-        .filter(|l| l.creator == pid || l.adopters.contains(&pid) || l.versions.iter().any(|v| v.author == pid))
-        .map(|l| {
+        .iter()
+        .filter(|(_, l)| l.creator == pid || l.adopters.contains(&pid) || l.versions.iter().any(|v| v.author == pid))
+        .map(|(k, l)| {
+            let id = id_of(w, k);
             if l.retired.is_some() {
-                format!("{} (retired)", l.name)
+                format!("{} (#{id}, retired)", l.name)
             } else {
-                l.name.clone()
+                format!("{} (#{id})", l.name)
             }
         })
         .collect()
@@ -844,7 +846,7 @@ fn define(ctx: &mut Ctx, pid: PlayerId, call_sign: String, a: &Args) -> Res<Outc
         examples,
     });
     l.known.insert(pid, version);
-    let (stored, share, id) = (l.name.clone(), l.share, l.id);
+    let (stored, share, id, creator) = (l.name.clone(), l.share, l.id, l.creator);
     for (r, from) in told {
         ctx.notify_fold(
             r,
@@ -864,11 +866,19 @@ fn define(ctx: &mut Ctx, pid: PlayerId, call_sign: String, a: &Args) -> Res<Outc
     if restore {
         reply["restored"] = json!(true);
     }
+    // Reply text only: what the share means for readers, and how to use the language.
+    let next = if share == Share::Own && creator == pid {
+        " Only you can read it; define again with share=captains or corp to let others read and adopt it.".to_string()
+    } else if share == Share::Own {
+        String::new()
+    } else {
+        format!(" Tag radio messages with radio_broadcast language={id}.")
+    };
     Ok(ctx.finish(
         if restore {
-            format!("Stored {stored}, version {version}; it may tag radio messages again.")
+            format!("Stored {stored}, version {version}; it may tag radio messages again.{next}")
         } else {
-            format!("Stored {stored}, version {version}.")
+            format!("Stored {stored}, version {version}.{next}")
         },
         reply,
     ))

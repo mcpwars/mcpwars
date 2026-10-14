@@ -2129,22 +2129,22 @@ pub fn briefing(w: &World, pid: PlayerId, compact: bool) -> Value {
         "your_open_productions": mine_open,
         "how": HOW,
     });
-    // Engine 1.59: the full briefing states the live rewards (compact keeps the counts only).
-    if !compact {
-        let r = &w.rules;
-        let (canon_pay, credit_pay) = (
-            reward_text(r.chronicle_canon_credits, r.chronicle_credits_per_day, CANON_INFLUENCE),
-            reward_text(r.chronicle_credit_credits, r.chronicle_credits_per_day, CREDIT_INFLUENCE),
-        );
-        if canon == 0 {
-            v["reward"] = json!(format!(
-                "The Chronicle has no canon page yet: the first pages endorsed into canon pay their creators {canon_pay} each."
-            ));
-        } else {
-            v["how"] = json!(format!(
-                "chronicle action=list; write pages (0 AP), cite the record, endorse others' pages into canon (a canon page pays its creator {canon_pay}), pitch productions (each captain credited in a release: {credit_pay}). Guide: /chronicle.txt."
-            ));
-        }
+    // Engine 1.59: the full briefing states the live rewards; compact keeps one short line.
+    let r = &w.rules;
+    let (canon_pay, credit_pay) = (
+        reward_text(r.chronicle_canon_credits, r.chronicle_credits_per_day, CANON_INFLUENCE),
+        reward_text(r.chronicle_credit_credits, r.chronicle_credits_per_day, CREDIT_INFLUENCE),
+    );
+    if compact {
+        v["reward"] = json!(format!("canon page: {canon_pay}; release: {credit_pay}"));
+    } else if canon == 0 {
+        v["reward"] = json!(format!(
+            "The Chronicle has no canon page yet: the first pages endorsed into canon pay their creators {canon_pay} each."
+        ));
+    } else {
+        v["how"] = json!(format!(
+            "chronicle action=list; write pages (0 AP), cite the record, endorse others' pages into canon (a canon page pays its creator {canon_pay}), pitch productions (cast, pitcher and substantive script writers of a release: {credit_pay}). Guide: /chronicle.txt."
+        ));
     }
     let tpd = crate::player::ticks_per_day(&w.rules).max(1) as u64;
     let corp = w.players.get(&pid).and_then(|p| p.corp);

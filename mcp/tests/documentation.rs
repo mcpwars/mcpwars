@@ -1373,3 +1373,92 @@ fn society_reward_sentences_follow_the_live_rules() {
         assert!(!doc.contains("{{"), "every placeholder is filled");
     }
 }
+
+/// The improve board guide (14 October audit): served, indexed and in the sitemap, with every
+/// limit from the live rules and no award amount typed into it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_improve_guide_is_served_indexed_and_follows_the_live_rules() {
+    let (url, _game) = start(Rules::default()).await;
+    let http = reqwest::Client::new();
+    let page = document(&http, &url, "improve.txt").await;
+    assert!(page.starts_with("# MCP Wars: the improve board"));
+    for expected in [
+        "https://github.com/mcpwars/mcpwars",
+        &format!("[/version]({url}/version)"),
+        "git checkout <base>",
+        "skip its pull-request and push steps",
+        "Edit, but do not commit",
+        af_core::improve::PROTECTED_TEXT,
+        "A change to docs or message text only needs none.",
+        "AF_ACCEPT=1 cargo test -p af-mcp --test catalog",
+        "git add -N <each new file>",
+        "git -C ../check apply --check ../item.patch",
+        "jq -Rs . < ../item.patch",
+        "bad_hunk",
+        "https://raw.githubusercontent.com/mcpwars/mcpwars/<base>/<path>",
+        "`@@ -a,b +c,d @@`",
+        "It is still one captain.",
+        "`improve.awards` in `game_rules`",
+        "for 240 ticks (4 hours)",
+        "at most 16384 bytes and touches at most 8 files",
+        "The board is closed right now",
+        "at most 2000 Influence an award",
+        " and 25 credits per Influence point",
+    ] {
+        assert!(page.contains(expected), "improve.txt is missing {expected}");
+    }
+    for amount in ["1,000", "1,500", "2,000", "1000 Influence", "500"] {
+        assert!(!page.contains(amount), "improve.txt types an award amount: {amount}");
+    }
+    let llms = document(&http, &url, "llms.txt").await;
+    assert!(
+        markdown_links(&llms).iter().any(|link| link == "/improve.txt"),
+        "llms.txt links /improve.txt"
+    );
+    let society = document(&http, &url, "society.txt").await;
+    assert!(
+        markdown_links(&society).iter().any(|link| link == "/improve.txt"),
+        "society.txt links /improve.txt"
+    );
+    assert!(society.contains("## Work in parallel") && society.contains("It is still one captain."));
+    for path in ["chronicle.txt", "languages.txt"] {
+        let text = document(&http, &url, path).await;
+        assert!(
+            text.contains("a subagent of your own harness") && text.contains("your token never goes to another service"),
+            "{path} invites a subagent within the credential rules"
+        );
+    }
+    let sitemap = http.get(format!("{url}/sitemap.xml")).send().await.unwrap().text().await.unwrap();
+    assert!(sitemap.contains("/improve.txt"), "{sitemap}");
+
+    let mut ctx = af_mcp::documentation::DocContext::fixture("http://127.0.0.1:1");
+    ctx.rules.improve_enabled = true;
+    ctx.rules.improve_claim_ticks = 120;
+    ctx.rules.improve_patch_max_bytes = 9_000;
+    ctx.rules.improve_patch_max_files = 3;
+    ctx.rules.improve_award_max = 1_200;
+    ctx.rules.improve_credits_per_influence = 0;
+    let page = af_mcp::documentation::render("improve.txt", &ctx).unwrap();
+    for expected in [
+        "The board is open.",
+        "for 120 ticks (2 hours)",
+        "at most 9000 bytes and touches at most 3 files",
+        "earns Influence (no credits right now), at most 1200 Influence an award",
+    ] {
+        assert!(page.contains(expected), "improve.txt with live rules is missing {expected}");
+    }
+    assert!(!page.contains("{{"), "every placeholder is filled");
+}
+
+/// The world guide states that improve credits have no per-captain daily cap.
+#[test]
+fn the_world_guide_says_improve_credits_have_no_daily_cap() {
+    let mut ctx = af_mcp::documentation::DocContext::fixture("http://127.0.0.1:1");
+    ctx.rules.improve_enabled = true;
+    let world = af_mcp::documentation::render("world.txt", &ctx).unwrap();
+    assert!(
+        world.contains("an improve award 25 credits per Influence point, with no daily cap per captain"),
+        "{world}"
+    );
+    assert!(world.contains("Chronicle and language credits have daily caps per captain"));
+}

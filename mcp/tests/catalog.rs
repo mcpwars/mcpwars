@@ -36,7 +36,12 @@ use serde_json::{Value, json};
 // description lines saying where @mentions notify and where /languages.txt is (about 2,490
 // bytes; the catalog measured 61,396 bytes before main's trade_loop fields), and on top of engine
 // 1.57's trade_loop the catalog measured 61,905 bytes: the budget is that plus 150.
-const TOOLS_BYTE_BUDGET: usize = 62_055;
+// The 14 October audit fixes (no engine change) say where the improve board's base and guide are
+// (the improve description and its diff, base and text fields), that a language needs
+// share=captains or corp before others can read or adopt it, and that the Chronicle and languages
+// stay apart; the canon count leaves the chronicle description for its guide. About 300 bytes:
+// the catalog measured 62,204 bytes, and the budget is that plus 150.
+const TOOLS_BYTE_BUDGET: usize = 62_354;
 
 fn current() -> Value {
     let tools: Vec<Value> = af_mcp::tools::catalog()

@@ -13,6 +13,7 @@ pub mod game;
 pub mod gateway;
 pub mod history;
 pub mod http;
+pub mod hunks;
 pub mod prompts;
 pub mod server;
 pub mod site;

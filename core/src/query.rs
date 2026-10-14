@@ -495,9 +495,9 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
         }
         if let Some(comms) = o.get_mut("comms").and_then(Value::as_object_mut) {
             comms.retain(|k, _| ["nudge", "new_captains", "welcome", "languages", "mentions"].contains(&k.as_str()));
-            // The language invitation is prose: the compact briefing leaves it out.
-            if comms.get("languages").is_some_and(|l| l.get("invite").is_some()) {
-                comms.remove("languages");
+            // The language invitation is prose: the compact briefing keeps one short line.
+            if let Some(invite) = comms.get_mut("languages").and_then(|l| l.get_mut("invite")) {
+                *invite = json!(compact_language_invite(&w.rules));
             }
             comms.insert(
                 "complete".into(),
@@ -707,6 +707,18 @@ fn ap_advice(w: &World, p: &Player, compact: bool) -> Value {
     ))
 }
 
+/// The compact briefing's language invitation: the call and the guide, with the live amount.
+fn compact_language_invite(r: &crate::rules::Rules) -> String {
+    if r.language_adopt_credits > 0 && r.language_credits_per_day > 0 {
+        format!(
+            "language action=define share=captains; {} credits per adopter; /languages.txt",
+            r.language_adopt_credits
+        )
+    } else {
+        "language action=define share=captains; /languages.txt".to_string()
+    }
+}
+
 /// Who else is out there and whether this captain has spoken today: comms are part of the game.
 fn comms_view(w: &World, p: &Player) -> Value {
     let day = crate::player::ticks_per_day(&w.rules) as u64;
@@ -746,15 +758,15 @@ fn comms_view(w: &World, p: &Player) -> Value {
         // Engine 1.59: one invitation line while the captain keeps no language.
         let credits = w.rules.language_adopt_credits;
         v["languages"] = json!({"invite": if credits > 0 && w.rules.language_credits_per_day > 0 {
-            format!("Invent a language with language action=define; you earn {credits} credits each time another captain adopts it. Guide: /languages.txt.")
+            format!("Invent a language (language action=define, share=captains so others can read it) and tag radio messages with it; you earn {credits} credits the first time each other captain adopts it. Guide: /languages.txt.")
         } else {
-            "Invent a language with language action=define; other captains may adopt it. Guide: /languages.txt.".to_string()
+            "Invent a language (language action=define, share=captains so others can read it) and tag radio messages with it; other captains may adopt it. Guide: /languages.txt.".to_string()
         }});
     } else {
         v["languages"] = json!({"yours": languages, "read": "If you cannot read something, call language action=read name=<name>."});
         if !unfamiliar.is_empty() {
             v["languages"]["unfamiliar"] = json!({
-                "note": "Unread messages use language versions you do not know. language action=read id=<id>; language action=adopt id=<id> marks the latest version known.",
+                "note": unfamiliar_note(&unfamiliar),
                 "languages": unfamiliar,
             });
         }
@@ -1241,6 +1253,21 @@ fn radio_extras(w: &World, pid: PlayerId, m: &RadioMsg, mut row: Value) -> Value
 
 /// Unread radio from others tagged with a language version the captain does not know (or a
 /// language it cannot read): up to three languages, newest first. Retired languages are skipped.
+/// What to do about unfamiliar language rows, by the statuses present: a version you do not know
+/// (`unfamiliar`), or a language you cannot read at all (`not_shared`).
+pub const UNFAMILIAR_NOTE: &str = "Unread messages use a language version you do not know: language action=read id=<id> explains it; language action=adopt id=<id> marks it known (reading an explanation does not).";
+pub const NOT_SHARED_NOTE: &str =
+    "You cannot read this language: ask its speaker to share it, or work it out and define your own under a new name.";
+
+fn unfamiliar_note(rows: &[Value]) -> String {
+    let has = |status: &str| rows.iter().any(|r| r["status"] == status);
+    match (has("unfamiliar"), has("not_shared")) {
+        (true, true) => format!("{UNFAMILIAR_NOTE} Rows with status not_shared: {NOT_SHARED_NOTE}"),
+        (false, true) => NOT_SHARED_NOTE.to_string(),
+        _ => UNFAMILIAR_NOTE.to_string(),
+    }
+}
+
 fn unfamiliar_languages(w: &World, p: &Player) -> Vec<Value> {
     struct Group {
         status: &'static str,

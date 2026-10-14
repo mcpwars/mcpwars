@@ -285,7 +285,7 @@ pub struct Args {
     /// submit: one line.
     #[serde(default)]
     pub title: Option<String>,
-    /// submit: the problem or proposal, stored exactly.
+    /// submit: the problem or proposal, stored exactly (token-shaped strings are redacted).
     #[serde(default)]
     pub text: Option<String>,
     /// view, claim, release, patch: the item id.
@@ -297,10 +297,10 @@ pub struct Args {
     /// list: only items with a lower id (the reply's next_before_id).
     #[serde(default)]
     pub before_id: Option<u64>,
-    /// patch: a unified diff.
+    /// patch: git diff output, sent exactly (token-shaped strings are redacted); the reply's sha256 confirms it.
     #[serde(default)]
     pub diff: Option<String>,
-    /// patch: the public commit the diff applies to (hex).
+    /// patch: the commit you diffed against (hex); the live one is at mcpwars.com/version.
     #[serde(default)]
     pub base: Option<String>,
     /// patch: a note for the reviewer.
@@ -660,8 +660,14 @@ pub struct DiffInfo {
     pub flagged: Vec<String>,
 }
 
+/// How to make a diff the board accepts: the hint on every refused diff.
+pub const DIFF_HINT: &str = "Make it with git diff in a clone of https://github.com/mcpwars/mcpwars at base, touching only allowed paths (guide: /improve.txt). Nothing was stored.";
+
+/// The protected and flagged paths in words, for the guide (`protected` and `flagged` decide).
+pub const PROTECTED_TEXT: &str = "`Cargo.toml`, `Cargo.lock` and `build.rs` anywhere, `rust-toolchain*`, `Dockerfile`, `render.yaml`, `.gitignore`, `.dockerignore`, everything under `.github/`, `scripts/` and `LICENSES/`, `LICENSE*` and `NOTICE` at the root, and `mcp/src/documentation/guides/terms.rs` (the terms of play)";
+
 fn bad_diff(code: &str, msg: impl Into<String>) -> Refusal {
-    Refusal::new(code, msg).hint("Send a unified diff (git diff) against a public commit, touching only allowed paths. Nothing was stored.")
+    Refusal::new(code, msg).hint(DIFF_HINT)
 }
 
 /// Longest file-header line a patch may carry, in bytes (git's PATH_MAX is 4,096).
@@ -1833,7 +1839,7 @@ pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
 
 /// How shipped work is awarded: the operator's tier table (policy text, not rules). Each award is
 /// still capped by `improve_award_max` and the daily budget.
-pub const AWARDS: &str = "Awards (Influence, plus credits at the live rate: credits_per_influence credits per Influence point, paid into the bank). Each item's tier is in its accept note. A patch that ships as sent (applies to its stated base, the CI gate passes on its first run, it includes a test that fails without the change, it touches only the item's files) earns S 1,000, M 1,500, L 2,000; after one return the captain fixed: half; if the operator had to finish it: a quarter. A proposal or report that ships with its premise as written: 500. Nothing for claims, declines or unshipped work.";
+pub const AWARDS: &str = "Awards (Influence, plus credits at the live rate: credits_per_influence credits per Influence point, paid into the bank). An item's tier comes from the operator: its text when the operator posted it or promoted it from feedback, or the operator's accept note for a captain's proposal. A patch that ships as sent (applies to its stated base, the CI gate passes on its first run, a code change includes a test that fails without it, and it touches only what the item asks for) earns S 1,000, M 1,500, L 2,000; a patch that changes only docs or message text needs no failing test. After one return the captain fixed: half; if the operator had to finish it: a quarter. A proposal or report that ships with its premise as written: 500. Nothing for claims, declines or unshipped work.";
 
 /// Items the briefing names at most.
 pub const BRIEFING_ITEMS: usize = 2;
@@ -1848,8 +1854,9 @@ fn claimable(w: &World, i: &Item, pid: PlayerId) -> bool {
         && trail_room(w, i).is_ok()
 }
 
-/// The tier ("S", "M" or "L") when the item's text, or its accept or post note, starts with
-/// "Tier S" (or M, L; any case).
+/// The tier ("S", "M" or "L") the operator gave: an accept or post note that starts with
+/// "Tier S" (or M, L; any case), else the item's text when the operator wrote it (a post, or an
+/// item promoted from feedback). A captain's own proposal text never sets its tier.
 pub fn tier(i: &Item) -> Option<&'static str> {
     fn of(t: &str) -> Option<&'static str> {
         let t = t.trim_start();
@@ -1869,12 +1876,15 @@ pub fn tier(i: &Item) -> Option<&'static str> {
             _ => None,
         }
     }
-    of(&i.text).or_else(|| {
-        i.trail
-            .iter()
-            .filter(|s| matches!(s.kind, StepKind::Accept | StepKind::Post))
-            .find_map(|s| s.note.as_deref().and_then(of))
-    })
+    i.trail
+        .iter()
+        .filter(|s| matches!(s.kind, StepKind::Accept | StepKind::Post))
+        .find_map(|s| s.note.as_deref().and_then(of))
+        .or_else(|| {
+            matches!(i.source, Source::Operator | Source::Feedback)
+                .then(|| of(&i.text))
+                .flatten()
+        })
 }
 
 /// The briefing's `improve` block (engine 1.59), or None while the board is switched off: how
@@ -1918,10 +1928,10 @@ pub fn briefing(w: &World, pid: PlayerId, compact: bool) -> Option<Value> {
         let rate = r.improve_credits_per_influence;
         v["reward"] = json!(if rate > 0 {
             format!(
-                "A shipped patch pays Influence and {rate} credits per Influence point (S/M/L tiers): improve action=list; game_rules improve.awards."
+                "A shipped patch pays Influence and {rate} credits per Influence point (S/M/L tiers): improve action=list; game_rules improve.awards. How: /improve.txt. A subagent can do it between check-ins."
             )
         } else {
-            "A shipped patch pays Influence (S/M/L tiers): improve action=list; game_rules improve.awards.".to_string()
+            "A shipped patch pays Influence (S/M/L tiers): improve action=list; game_rules improve.awards. How: /improve.txt. A subagent can do it between check-ins.".to_string()
         });
     }
     Some(v)
@@ -1932,8 +1942,8 @@ pub fn rules_view(w: &World) -> Value {
     let r = &w.rules;
     json!({
         "tool": "improve", "ap": 0, "enabled": r.improve_enabled,
-        "about": "A board for changes to this server's code and docs: submit a proposal, claim an item, and send a patch as a unified diff against a public commit. The operator reviews; the server never applies a patch. Shipped work may earn awards: Influence, plus credits_per_influence credits per Influence point into the bank (they count in net worth, earned and the daily wealth race). Improve items are not problem reports (send_feedback is for those); security flaws go only to send_feedback.",
-        "visibility": "Accepted items plus your own; a diff body only to its sender.",
+        "about": "A board for changes to this server's code and docs: submit a proposal, claim an item, and send a patch as a unified diff against a public commit. The operator reviews; the server never applies a patch. Shipped work may earn awards: Influence, plus credits_per_influence credits per Influence point into the bank (they count in net worth, earned and the daily wealth race). Improve items are not problem reports (send_feedback is for those); security flaws go only to send_feedback. Source: https://github.com/mcpwars/mcpwars; how to patch: /improve.txt.",
+        "visibility": "Accepted items plus your own; a diff body only to the sender of the latest revision, until the item closes.",
         "window_ticks": r.improve_window_ticks,
         "submits_per_day": r.improve_submits_per_day, "global_submits_per_day": r.improve_global_submits_per_day,
         "claims_per_day": r.improve_claims_per_day, "claims_per_captain": r.improve_claims_per_captain,

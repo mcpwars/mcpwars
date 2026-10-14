@@ -92,3 +92,37 @@ fn ordinary_patches_still_pass() {
     let d = "diff --git a/docs/a.md b/docs/b.md\nsimilarity index 100%\nrename from docs/a.md\nrename to docs/b.md\n--- a/docs/x.md\n+++ b/docs/x.md\n@@ -1 +1 @@\n-a\n+b\n";
     assert_eq!(code(d), "ok [\"docs/a.md\", \"docs/b.md\", \"docs/x.md\"]");
 }
+
+/// The guide's list of protected paths (`PROTECTED_TEXT`) names only paths `protected` refuses,
+/// and the flagged files it names are allowed but flagged.
+#[test]
+fn the_protected_text_matches_the_checks() {
+    use af_core::improve::{PROTECTED_TEXT, flagged, protected};
+    for path in [
+        "Cargo.toml",
+        "core/Cargo.toml",
+        "Cargo.lock",
+        "mcp/build.rs",
+        "rust-toolchain.toml",
+        "Dockerfile",
+        "render.yaml",
+        ".gitignore",
+        ".dockerignore",
+        ".github/workflows/ci.yml",
+        "scripts/ci.sh",
+        "LICENSES/x.txt",
+        "LICENSE",
+        "NOTICE",
+        "mcp/src/documentation/guides/terms.rs",
+    ] {
+        assert!(protected(path), "{path}");
+        let name = path.rsplit('/').next().unwrap();
+        let named = [path, name, "rust-toolchain*", "LICENSE*", ".github/", "scripts/", "LICENSES/"]
+            .iter()
+            .any(|p| PROTECTED_TEXT.contains(&format!("`{p}`")));
+        assert!(named, "PROTECTED_TEXT does not name {path}");
+    }
+    for path in ["AGENTS.md", "CLAUDE.md"] {
+        assert!(!protected(path) && flagged(path), "{path}");
+    }
+}
