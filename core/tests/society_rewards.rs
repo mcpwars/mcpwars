@@ -481,7 +481,16 @@ fn the_full_briefing_shows_each_reward_with_live_values_and_compact_keeps_counts
         "{reward}"
     );
     let compact = briefing(&s, a, true, None);
-    assert_eq!(compact["improve"], json!({"claimable": 2, "your_claim": null}));
+    assert_eq!(
+        compact["improve"],
+        json!({
+            "claimable": 2,
+            "your_claim": null,
+            "items": im["items"],
+            "reward": "shipped patch: S/M/L Influence + 25 credits/Influence; improve action=list; /improve.txt",
+        })
+    );
+    assert!(compact["improve"]["reward"].as_str().unwrap().len() <= 100);
     // `improve` is a valid section name.
     let only = briefing(&s, a, false, Some(vec!["improve"]));
     assert!(only.get("improve").is_some() && only["retrieval"].get("unknown_sections").is_none());
@@ -526,6 +535,12 @@ fn the_full_briefing_shows_each_reward_with_live_values_and_compact_keeps_counts
             .contains("7000 credits per adopter")
     );
     assert!(!full["improve"]["reward"].as_str().unwrap().contains("credits"));
+    assert!(
+        !briefing(&s, b, true, None)["improve"]["reward"]
+            .as_str()
+            .unwrap()
+            .contains("credits")
+    );
     let how = full["chronicle"]["how"].as_str().unwrap();
     assert!(how.contains("a canon page pays its creator 2000 Influence)"), "{how}");
 

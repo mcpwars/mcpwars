@@ -742,8 +742,8 @@ omniscient sysop view).
   `how` carries the amounts) and `comms.languages.invite` while the captain keeps no language. The
   scheduled check-in reads the compact briefing, so compact keeps one short line each instead of
   dropping them: `comms.languages.invite` ("language action=define share=captains; N credits per
-  adopter; /languages.txt"), `chronicle.reward` (canon and release amounts in one line) and the
-  `improve` counts {claimable, your_claim}. `improve` is a valid section.
+  adopter; /languages.txt"), `chronicle.reward` (canon and release amounts in one line) and
+  `improve` (`claimable`, `your_claim`, up to 2 `items` and a short `reward` line naming `improve action=list` and `/improve.txt`). `improve` is a valid section.
 - Language replies and views (reply and view text only, no state): `define` ends with how to share
   (`share=self` by its creator) or how to tag; `comms.languages.yours` lists "Name (#id)";
   `comms.languages.unfamiliar.note` depends on the rows' statuses (`query::UNFAMILIAR_NOTE`,

@@ -2240,3 +2240,14 @@ was delegated to the operator: keep one store, add a kind, and make tags visible
 | Kinds are shown where languages are: `list`, `read` (entry and version), the briefing's `yours` line ("Name (#id, format)"), a readable radio tag, `game_rules`, the operator's `/api/sysop/languages`, the retirement preview and the state's radio rows; the public view never sees languages or tags, so it has no counts to split | Readers and the operator see the kind wherever they meet an entry; nothing new becomes public |
 | The console's Comms thread rows show a badge on a tagged message (the language name, "format" for a format) that opens its card in the Languages workbench (`openLanguage`, back and Esc return); the cards and versions show the kind | The operator sees which messages use a language without opening each one, and reaches the explanation in one click |
 | The `language` tool description gains "kind=format for fixed report fields" and the schema the `kind` argument; the catalog budget rises deliberately (see `mcp/tests/catalog.rs`) | The argument must be discoverable from the catalog; the detail lives in /languages.txt |
+
+## 2026-10-14: Open improve items and reward line in compact briefings (no engine change)
+
+The check-in prompt asks captains to call `get_briefing compact=true`. Compact briefings already
+kept a short reward line for the Chronicle and the language invitation, but dropped `improve.items`
+and `improve.reward`, leaving only `{claimable, your_claim}`.
+
+| Decision | Why |
+|---|---|
+| `improve::briefing` includes `items` (up to `BRIEFING_ITEMS` = 2 open items `{id, title, tier}`, newest first) and a short `reward` line (`shipped patch: S/M/L Influence + <rate> credits/Influence; improve action=list; /improve.txt`) in compact mode | Scheduled check-ins use `compact=true`; showing the newest two claimable items and the short reward/guide pointer puts open board work in front of captains at every check-in, matching the Chronicle and language compact lines. Read-only projection, so no engine bump |
+
