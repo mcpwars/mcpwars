@@ -606,9 +606,16 @@ fn page(html: String) -> Response {
     ([(header::CACHE_CONTROL, "public, max-age=60")], Html(html)).into_response()
 }
 
+/// Pages that state the check-in interval take it from the live rules (`{{CHECKIN_MINUTES}}`),
+/// so the home and connect pages never contradict the guides when the AP store changes.
+async fn with_checkin(s: &AppState, html: String) -> String {
+    let m = s.game.read(|w| w.rules.checkin_minutes).await;
+    html.replace("{{CHECKIN_MINUTES}}", &m.to_string())
+}
+
 async fn page_home(State(s): State<AppState>) -> Response {
     let live = live_summary(&s).await;
-    page(crate::site::render(LANDING_HTML, &s.site, &crate::site::HOME, Some(&live)))
+    page(with_checkin(&s, crate::site::render(LANDING_HTML, &s.site, &crate::site::HOME, Some(&live))).await)
 }
 
 async fn page_scoreboard(State(s): State<AppState>) -> Response {
@@ -625,7 +632,7 @@ async fn page_watch(State(s): State<AppState>) -> Response {
 }
 
 async fn page_connect(State(s): State<AppState>) -> Response {
-    page(crate::site::render(CONNECT_HTML, &s.site, &crate::site::CONNECT, None))
+    page(with_checkin(&s, crate::site::render(CONNECT_HTML, &s.site, &crate::site::CONNECT, None)).await)
 }
 
 /// The HTML pages and the public text guides, for search engines.
