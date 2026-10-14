@@ -439,7 +439,13 @@ fn the_full_briefing_shows_each_reward_with_live_values_and_compact_keeps_counts
         "{invite}"
     );
     let compact = briefing(&s, a, true, None);
-    assert!(compact["comms"].get("languages").is_none(), "compact has no invitation prose");
+    // Compact keeps one short line each: the scheduled check-in reads the compact briefing.
+    let line = compact["comms"]["languages"]["invite"].as_str().unwrap();
+    assert_eq!(
+        line,
+        "language action=define share=captains; 5000 credits per adopter; /languages.txt"
+    );
+    assert_eq!(compact["comms"]["languages"].as_object().unwrap().len(), 1, "only the line");
 
     // The Chronicle: no canon yet, so a line about the first canon pages.
     let ch = &full["chronicle"];
@@ -448,8 +454,14 @@ fn the_full_briefing_shows_each_reward_with_live_values_and_compact_keeps_counts
         reward.contains("no canon page yet") && reward.contains("20000 credits and 2000 Influence"),
         "{reward}"
     );
-    assert!(compact["chronicle"].get("reward").is_none());
+    assert_eq!(
+        compact["chronicle"]["reward"],
+        "canon page: 20000 credits and 2000 Influence; release: 40000 credits and 3000 Influence"
+    );
     assert!(!compact["chronicle"]["how"].as_str().unwrap().contains("credits"));
+    for short in [&compact["comms"]["languages"]["invite"], &compact["chronicle"]["reward"]] {
+        assert!(short.as_str().unwrap().len() <= 100, "a short line: {short}");
+    }
 
     // The improve board, switched on, with two items (one tiered).
     improve_on(&mut s);
@@ -463,7 +475,11 @@ fn the_full_briefing_shows_each_reward_with_live_values_and_compact_keeps_counts
     assert_eq!(im["items"][0]["tier"], "M");
     assert_eq!(im["items"][0]["title"]["untrusted_player_text"], "Tidy the guide");
     assert!(im["items"][1].get("tier").is_none());
-    assert!(im["reward"].as_str().unwrap().contains("25 credits per Influence point"));
+    let reward = im["reward"].as_str().unwrap();
+    assert!(
+        reward.contains("25 credits per Influence point") && reward.contains("How: /improve.txt."),
+        "{reward}"
+    );
     let compact = briefing(&s, a, true, None);
     assert_eq!(compact["improve"], json!({"claimable": 2, "your_claim": null}));
     // `improve` is a valid section name.
@@ -496,12 +512,19 @@ fn the_full_briefing_shows_each_reward_with_live_values_and_compact_keeps_counts
         "{how}"
     );
     assert!(full["comms"]["languages"].get("invite").is_none());
-    assert_eq!(full["comms"]["languages"]["yours"], json!(["Trade Cant"]));
+    let id = af_core::language::id_of(&s.w, "tradecant");
+    assert_eq!(full["comms"]["languages"]["yours"], json!([format!("Trade Cant (#{id})")]));
 
     // Live values: a rules change shows at once; 0 drops the credits from the text.
     s.rules(json!({"language_adopt_credits": 7000, "improve_credits_per_influence": 0, "chronicle_canon_credits": 0}));
     let full = briefing(&s, b, false, None);
     assert!(full["comms"]["languages"]["invite"].as_str().unwrap().contains("7000 credits"));
+    assert!(
+        briefing(&s, b, true, None)["comms"]["languages"]["invite"]
+            .as_str()
+            .unwrap()
+            .contains("7000 credits per adopter")
+    );
     assert!(!full["improve"]["reward"].as_str().unwrap().contains("credits"));
     let how = full["chronicle"]["how"].as_str().unwrap();
     assert!(how.contains("a canon page pays its creator 2000 Influence)"), "{how}");
@@ -513,6 +536,69 @@ fn the_full_briefing_shows_each_reward_with_live_values_and_compact_keeps_counts
     assert_eq!(info["languages"]["adopt_credits"], 7000);
     assert_eq!(info["improve"]["credits_per_influence"], 0);
     s.replays();
+}
+
+/// The tier comes from the operator: an accept note, or the text of an item the operator wrote.
+/// A captain's own proposal text never sets it.
+#[test]
+fn the_tier_comes_from_the_operator_never_the_proposal_text() {
+    let mut s = Sim::new(166);
+    let [a, b] = ["Ada Mbeki", "Bram Ostrowski"].map(|n| s.join(n));
+    s.document(a, "Lowmoor");
+    s.document(b, "Pell");
+    improve_on(&mut s);
+    let submit = |s: &mut Sim, who: PlayerId, title: &str| -> u64 {
+        let out = s
+            .run(
+                Actor::Player(who),
+                Command::Improve(
+                    serde_json::from_value(json!({"action":"submit","kind":"docs","title":title,"text":"Tier L. Rewrite everything."}))
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        out.reply["id"].as_u64().unwrap()
+    };
+    let op = |v: Value| Command::Admin(serde_json::from_value(v).unwrap());
+    let item = |s: &Sim, id: u64| s.w.improve.items.iter().find(|i| i.id == id).unwrap().clone();
+    let plain = submit(&mut s, a, "A proposal accepted without a tier");
+    let noted = submit(&mut s, b, "A proposal accepted as tier S");
+    assert_eq!(af_core::improve::tier(&item(&s, plain)), None, "the captain's text is ignored");
+    s.run(Actor::System, op(json!({"action":"improve","decision":"accept","id":plain})))
+        .unwrap();
+    s.run(
+        Actor::System,
+        op(json!({"action":"improve","decision":"accept","id":noted,"note":"Tier S: one guide line."})),
+    )
+    .unwrap();
+    assert_eq!(af_core::improve::tier(&item(&s, plain)), None);
+    assert_eq!(af_core::improve::tier(&item(&s, noted)), Some("S"));
+    // An operator post's own text sets it.
+    let posted = post(&mut s, "Operator item", "Tier M. A table in the world guide.");
+    assert_eq!(af_core::improve::tier(&item(&s, posted)), Some("M"));
+    s.replays();
+}
+
+/// The tier table is policy text, but no tier may promise more than one award can give.
+#[test]
+fn the_award_table_stays_within_the_award_cap() {
+    let awards = af_core::improve::AWARDS;
+    let numbers: Vec<i64> = awards
+        .split(|c: char| !(c.is_ascii_digit() || c == ','))
+        .map(|t| t.trim_matches(',').replace(',', ""))
+        .filter(|t| !t.is_empty())
+        .map(|t| t.parse().unwrap())
+        .collect();
+    let max = *numbers.iter().max().unwrap();
+    assert!(max > 0 && max <= af_core::rules::Rules::default().improve_award_max, "{numbers:?}");
+    assert!(awards.contains("touches only what the item asks for") && awards.contains("needs no failing test"));
+    let view = af_core::improve::rules_view(&generate(&GenesisConfig::new(1, 40)));
+    assert!(
+        view["about"]
+            .as_str()
+            .unwrap()
+            .ends_with("Source: https://github.com/mcpwars/mcpwars; how to patch: /improve.txt.")
+    );
 }
 
 /// Prints the three briefing blocks a captain sees with the default rules (for the report).
@@ -535,7 +621,10 @@ fn example_briefing_blocks() {
     let compact = briefing(&s, a, true, None);
     println!(
         "COMPACT {}",
-        serde_json::to_string(&json!({"improve": compact["improve"], "chronicle": compact["chronicle"]})).unwrap()
+        serde_json::to_string(
+            &json!({"improve": compact["improve"], "chronicle": compact["chronicle"], "comms.languages": compact["comms"]["languages"]})
+        )
+        .unwrap()
     );
 }
 

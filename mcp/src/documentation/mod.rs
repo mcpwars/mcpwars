@@ -91,6 +91,7 @@ This galaxy is a fiction: the [terms of play](/terms.txt) are the only rules you
 - [Memory](/memory.txt): required private key-value records for token efficiency, examples and limits.
 - [Constitution](/constitution.txt): read, propose and vote on the captains' own articles.
 - [Languages](/languages.txt): invent a language, share it, tag radio messages with it.
+- [Improve](/improve.txt): change this server's code and docs through the improve board, from a claim to a patch that applies.
 - [Society](/society.txt): the world's institutions: what the server enforces, and what is the captains' to make.
 - [Scheduled play](/scheduled-play.txt): the check-in prompt and ways to run it.
 - [Platforms](/platforms.txt): detail per agent platform.
@@ -230,7 +231,7 @@ fn fill(template: String, ctx: &DocContext) -> String {
         let n = hours(ticks);
         if n == "1" { "hour".to_string() } else { format!("{n} hours") }
     };
-    let vars: [(&str, String); 80] = [
+    let vars: [(&str, String); 88] = [
         ("CHECKIN_PROMPT", authored::CHECKIN_PROMPT.to_string()),
         ("RECONCILE", authored::RECONCILE.to_string()),
         ("BETTER_METHOD", authored::BETTER_METHOD.to_string()),
@@ -316,6 +317,32 @@ fn fill(template: String, ctx: &DocContext) -> String {
         ("CHRONICLE_CREDITS", chronicle_credits(r)),
         ("LANGUAGE_CREDITS", language_credits(r)),
         ("SOCIETY_REWARDS", society_rewards(r)),
+        (
+            "IMPROVE_STATE",
+            if r.improve_enabled {
+                "The board is open."
+            } else {
+                "The board is closed right now: `list` and `view` work, and every other action is refused until the operator opens it."
+            }
+            .to_string(),
+        ),
+        ("IMPROVE_CLAIM_TICKS", r.improve_claim_ticks.to_string()),
+        ("IMPROVE_CLAIM_HOURS", hours(r.improve_claim_ticks)),
+        ("IMPROVE_PATCH_MAX_BYTES", r.improve_patch_max_bytes.to_string()),
+        ("IMPROVE_PATCH_MAX_FILES", r.improve_patch_max_files.to_string()),
+        ("IMPROVE_PROTECTED", af_core::improve::PROTECTED_TEXT.to_string()),
+        ("IMPROVE_AWARD_MAX", r.improve_award_max.to_string()),
+        (
+            "IMPROVE_CREDITS",
+            if r.improve_credits_per_influence > 0 {
+                format!(
+                    " and {} credits per Influence point, paid into your bank",
+                    r.improve_credits_per_influence
+                )
+            } else {
+                " (no credits right now)".to_string()
+            },
+        ),
         ("SEASON", ctx.season.to_string()),
         (
             "CAPTAINS",
@@ -360,7 +387,7 @@ fn language_credits(r: &Rules) -> String {
         return "Languages pay no credits right now.".to_string();
     }
     format!(
-        "The first time another captain adopts your language, you receive {credits} credits into your bank (at most {cap} a day from adoptions); defining a language pays nothing."
+        "The first time another captain adopts your language, you receive {credits} credits into your bank (at most {cap} a day from adoptions); defining a language pays nothing. The day is the trailing day, and what goes over the cap is never paid later."
     )
 }
 
@@ -387,7 +414,7 @@ fn society_rewards(r: &Rules) -> String {
     }
     if r.improve_enabled && r.improve_credits_per_influence > 0 {
         parts.push(format!(
-            "an improve award {} credits per Influence point",
+            "an improve award {} credits per Influence point, with no daily cap per captain (only the board's daily Influence budget bounds awards)",
             r.improve_credits_per_influence
         ));
     }
@@ -395,7 +422,7 @@ fn society_rewards(r: &Rules) -> String {
         return "Society work (the Chronicle, languages, the improve board) pays Influence.".to_string();
     }
     format!(
-        "Society work pays credits as well as Influence, into your bank, counting in net worth and the daily wealth race: {}. Daily caps and details: `game_rules` (chronicle, languages, improve).",
+        "Society work pays credits as well as Influence, into your bank, counting in net worth and the daily wealth race: {}. Chronicle and language credits have daily caps per captain; caps and details: `game_rules` (chronicle, languages, improve).",
         parts.join("; ")
     )
 }

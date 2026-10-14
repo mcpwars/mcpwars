@@ -8049,7 +8049,11 @@ fn the_language_store_keeps_every_version_and_shares_only_as_its_creator_chooses
     assert_eq!(first["version"]["explanation"], explanation, "every version stays readable");
     // The briefing names the captain's languages and says how to read one, nothing more.
     let brief = query::briefing(&s.w, b).unwrap();
-    assert_eq!(brief["comms"]["languages"]["yours"], serde_json::json!(["Dockcant"]));
+    let id = af_core::language::id_of(&s.w, "dockcant");
+    assert_eq!(
+        brief["comms"]["languages"]["yours"],
+        serde_json::json!([format!("Dockcant (#{id})")])
+    );
     assert!(
         !brief.to_string().contains("prices in tens"),
         "explanations never ride along in the briefing"

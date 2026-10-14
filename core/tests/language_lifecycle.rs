@@ -396,7 +396,7 @@ fn stale_status_and_daily_retirement_follow_the_rules() {
     );
     assert_eq!(
         query::briefing(&s.w, a).unwrap()["comms"]["languages"]["yours"],
-        json!(["Kept (retired)", "Old (retired)"])
+        json!(["Kept (#2, retired)", "Old (#1, retired)"])
     );
     // Its creator restores an idle retirement by defining a new version; nobody else can.
     assert_eq!(
@@ -665,8 +665,14 @@ fn non_readers_see_only_the_id_and_unfamiliar_versions_clear() {
     );
     assert!(!view.to_string().contains("Dockcant"), "a non-reader never sees the name");
 
-    // The unfamiliar block, newest first, with untrusted names.
+    // The unfamiliar block, newest first, with untrusted names, and a note for both statuses.
     let comms = query::briefing(&s.w, b).unwrap()["comms"].clone();
+    let note = comms["languages"]["unfamiliar"]["note"].as_str().unwrap();
+    assert!(
+        note.starts_with(query::UNFAMILIAR_NOTE) && note.ends_with(query::NOT_SHARED_NOTE),
+        "{note}"
+    );
+    assert!(note.contains("(reading an explanation does not)"), "{note}");
     let rows = comms["languages"]["unfamiliar"]["languages"].as_array().unwrap().clone();
     assert_eq!(rows.len(), 2, "{comms}");
     assert_eq!(rows[0]["id"], 2);
@@ -680,18 +686,20 @@ fn non_readers_see_only_the_id_and_unfamiliar_versions_clear() {
     // The writer's own messages never count.
     assert!(query::briefing(&s.w, a).unwrap()["comms"]["languages"].get("unfamiliar").is_none());
 
-    // A retired language is skipped.
+    // A retired language is skipped; only a version to learn is left, and the note says so.
     admin(&mut s, json!({"decision": "retire", "ids": [1]})).unwrap();
-    let rows = query::briefing(&s.w, b).unwrap()["comms"]["languages"]["unfamiliar"]["languages"].clone();
-    assert_eq!(rows.as_array().unwrap().len(), 1);
+    let block = query::briefing(&s.w, b).unwrap()["comms"]["languages"]["unfamiliar"].clone();
+    assert_eq!(block["languages"].as_array().unwrap().len(), 1);
+    assert_eq!(block["note"], query::UNFAMILIAR_NOTE);
     // Adopting again (by id) marks the latest version known.
     let out = lang(&mut s, b, json!({"action": "adopt", "id": 2})).unwrap();
     assert_eq!(out.reply["version"], 2);
     assert!(query::briefing(&s.w, b).unwrap()["comms"]["languages"].get("unfamiliar").is_none());
 
-    // Marking the messages read clears it too.
+    // Marking the messages read clears it too. Only the unreadable language is left: its note.
     admin(&mut s, json!({"decision": "unretire", "ids": [1]})).unwrap();
-    assert!(query::briefing(&s.w, b).unwrap()["comms"]["languages"].get("unfamiliar").is_some());
+    let block = query::briefing(&s.w, b).unwrap()["comms"]["languages"]["unfamiliar"].clone();
+    assert_eq!(block["note"], query::NOT_SHARED_NOTE);
     s.run(
         Actor::Player(b),
         Command::MarkRead(MarkReadArgs {
@@ -704,5 +712,48 @@ fn non_readers_see_only_the_id_and_unfamiliar_versions_clear() {
     )
     .unwrap();
     assert!(query::briefing(&s.w, b).unwrap()["comms"]["languages"].get("unfamiliar").is_none());
+    replay_matches(&s);
+}
+
+/// The define reply says what the share means for readers (reply text only): a language only its
+/// creator can read says how to share it, a shared one how to tag radio with it.
+#[test]
+fn the_define_reply_says_how_to_share_or_tag() {
+    let mut s = Sim::new(312, 60);
+    let (a, b) = (s.join("Ada"), s.join("Bex"));
+    let own = lang(&mut s, a, json!({"action": "define", "name": "Dockcant", "explanation": "Codes."})).unwrap();
+    assert!(
+        own.summary
+            .ends_with(" Only you can read it; define again with share=captains or corp to let others read and adopt it."),
+        "{}",
+        own.summary
+    );
+    let shared = lang(
+        &mut s,
+        a,
+        json!({"action": "define", "name": "Dockcant", "explanation": "Codes, v2.", "share": "captains"}),
+    )
+    .unwrap();
+    let id = shared.reply["id"].as_u64().unwrap();
+    assert!(
+        shared
+            .summary
+            .ends_with(&format!(" Tag radio messages with radio_broadcast language={id}.")),
+        "{}",
+        shared.summary
+    );
+    // Another captain's version of a shared language: the tag hint, never the creator's share hint.
+    let other = lang(
+        &mut s,
+        b,
+        json!({"action": "define", "name": "Dockcant", "explanation": "Codes, v3."}),
+    )
+    .unwrap();
+    assert!(other.summary.contains("Tag radio messages"), "{}", other.summary);
+    // The briefing names each language with its id.
+    assert_eq!(
+        query::briefing(&s.w, a).unwrap()["comms"]["languages"]["yours"],
+        json!([format!("Dockcant (#{id})")])
+    );
     replay_matches(&s);
 }

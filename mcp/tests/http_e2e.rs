@@ -1836,6 +1836,18 @@ async fn the_improve_board_over_mcp_and_the_operator_actions() {
             .unwrap(),
     );
     assert!(!ok && t.contains("protected_path"), "{t}");
+    // A hunk whose header counts lines it does not carry is refused before the command (the review
+    // state below still counts one revision, so nothing was stored).
+    let short = "--- a/docs/EVAL.md\n+++ b/docs/EVAL.md\n@@ -1,2 +1,2 @@\n-old line\n+new line\n";
+    let (ok, t) = text(
+        &improve(1, json!({"action": "patch", "id": id, "base": "e52ec7a", "diff": short}))
+            .await
+            .unwrap(),
+    );
+    assert!(
+        !ok && t.contains("bad_hunk") && t.contains("docs/EVAL.md: hunk 1 says -1,2 +1,2 but carries 1 old and 1 new lines."),
+        "{t}"
+    );
     let diff = "--- a/docs/EVAL.md\n+++ b/docs/EVAL.md\n@@ -1 +1 @@\n-old line\n+new line\n";
     let (ok, t) = text(
         &improve(
