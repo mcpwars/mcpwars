@@ -38,7 +38,7 @@ pub fn corp(ctx: &mut Ctx, pid: PlayerId, a: &CorpArgs) -> Res<Outcome> {
             if me.corp.is_some() {
                 return Err(Refusal::new("already_in_corp", "Leave your current corporation first."));
             }
-            let name = valid_corp_name(ctx.w, a.name.as_deref().unwrap_or(""), None)?;
+            let name = valid_corp_name(ctx.w, a.name.as_deref().unwrap_or(""), &[])?;
             let fee = crate::founding::charter_fee(ctx.w);
             if me.credits < fee {
                 return Err(ctx.no_credits(pid, "A corporate charter", fee));
@@ -298,7 +298,7 @@ fn corp_by_id(w: &World, id: CorpId) -> Res<Corp> {
         .ok_or_else(|| Refusal::new("unknown_corp", format!("No corporation #{id}.")))
 }
 
-fn valid_corp_name(w: &World, name: &str, except: Option<CorpId>) -> Res<String> {
+fn valid_corp_name(w: &World, name: &str, except: &[CorpId]) -> Res<String> {
     let name = player::sanitize(name, 24);
     if !player::valid_name(&name) {
         return Err(Refusal::new("invalid_name", "Corporation names are 2-24 letters/digits/spaces."));
@@ -306,7 +306,10 @@ fn valid_corp_name(w: &World, name: &str, except: Option<CorpId>) -> Res<String>
     // Engine 1.58: names are unique by `name_key` (case and punctuation ignored), and a
     // corporation may not take a captain's current or former call sign, so mentions resolve.
     let key = player::name_key(&name);
-    if w.corps.values().any(|c| Some(c.id) != except && player::name_key(&c.name) == key) {
+    if w.corps
+        .values()
+        .any(|c| !except.contains(&c.id) && player::name_key(&c.name) == key)
+    {
         return Err(Refusal::new("name_taken", "A corporation with that name exists."));
     }
     if crate::identity::captain_named(w, &name).is_some() {
@@ -316,6 +319,143 @@ fn valid_corp_name(w: &World, name: &str, except: Option<CorpId>) -> Res<String>
         ));
     }
     Ok(name)
+}
+
+/// The operator merges `from` into `into` (engine 1.60; see `AdminArgs::MergeCorps`). Everything is
+/// checked before anything changes. Returns the summary and the merged corporation's id.
+fn merge(ctx: &mut Ctx, from: CorpId, into: CorpId, message: &str, name: Option<&str>, ceo: Option<PlayerId>) -> Res<(String, CorpId)> {
+    if from == into {
+        return Err(Refusal::new("invalid_args", "A corporation cannot merge into itself."));
+    }
+    let a = corp_by_id(ctx.w, from)?;
+    let b = corp_by_id(ctx.w, into)?;
+    let message = message.replace('\0', "");
+    if message.trim().is_empty() {
+        return Err(Refusal::new(
+            "invalid_args",
+            "Explain the merger in message: every member of both corporations receives it.",
+        ));
+    }
+    if message.chars().count() > crate::constitution::OPERATOR_TEXT_MAX {
+        return Err(Refusal::new(
+            "too_long",
+            format!("The message holds at most {} characters.", crate::constitution::OPERATOR_TEXT_MAX),
+        ));
+    }
+    let new_name = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) if n != b.name => Some(valid_corp_name(ctx.w, n, &[from, into])?),
+        _ => None,
+    };
+    if let Some(c) = ceo
+        && !a.members.contains(&c)
+        && !b.members.contains(&c)
+    {
+        return Err(Refusal::new(
+            "invalid_args",
+            "The CEO must be a member of one of the two corporations.",
+        ));
+    }
+    // Members join `into`; invitations are pooled.
+    for m in &a.members {
+        ctx.player_mut(*m).corp = Some(into);
+    }
+    let bm = ctx.w.corps.get_mut(&into).unwrap();
+    bm.members.extend(a.members.iter().copied());
+    for i in &a.invites {
+        if !bm.invites.contains(i) {
+            bm.invites.push(*i);
+        }
+    }
+    let all = bm.members.clone();
+    bm.invites.retain(|i| !all.contains(i));
+    // Treaties and wars, while `from` still holds its treasury for returned bonds.
+    let d = crate::diplomacy::merge_corps(ctx, from, into);
+    let a = ctx.w.corps.remove(&from).unwrap();
+    let bm = ctx.w.corps.get_mut(&into).unwrap();
+    bm.treasury += a.treasury;
+    for (p, v) in &a.deposits {
+        *bm.deposits.entry(*p).or_insert(0) += v;
+    }
+    bm.record.absorb(&a.record);
+    bm.gov.founding_grant_season = bm.gov.founding_grant_season.max(a.gov.founding_grant_season);
+    if bm.seat.is_none() {
+        bm.seat = a.seat;
+        bm.seat_set_tick = a.seat_set_tick;
+    }
+    let old_name = bm.name.clone();
+    if let Some(n) = &new_name {
+        bm.name = n.clone();
+    }
+    let new_ceo = ceo.filter(|c| *c != bm.ceo);
+    if let Some(c) = new_ceo {
+        bm.ceo = c;
+    }
+    let (merged, treasury, members) = (bm.name.clone(), a.treasury, a.members.len());
+    if let Some(c) = new_ceo {
+        ctx.notify(c, "corp", format!("The Federation made you CEO of {merged}."));
+    }
+    // Market reports shared with `from` are now shared with the merged corporation.
+    for r in ctx.w.market_reports.iter_mut().filter(|r| r.corp == Some(from)) {
+        r.corp = Some(into);
+    }
+    let renamed = new_name.as_ref().map(|n| format!(", now named {n}")).unwrap_or_default();
+    let fact = format!("The Federation merged {} into {old_name}{renamed}.", a.name);
+    government::log_decision(
+        ctx,
+        into,
+        "merge",
+        format!("{fact} {members} member(s) and a treasury of {treasury} joined."),
+        SYSOP,
+        None,
+        0,
+        0,
+        treasury,
+    );
+    for m in &a.members {
+        let deposit = a.deposits.get(m).copied().unwrap_or(0);
+        let kept = if deposit > 0 {
+            format!(" Your deposit of {deposit} carried over.")
+        } else {
+            String::new()
+        };
+        ctx.notify(*m, "corp", format!("{fact} You are now a member of {merged}.{kept}"));
+    }
+    for m in &b.members {
+        ctx.notify(
+            *m,
+            "corp",
+            format!("{fact} Its {members} member(s) and treasury of {treasury} joined {merged}."),
+        );
+    }
+    // The operator's explanation, trusted, to every member of both.
+    let everyone: Vec<PlayerId> = b.members.iter().chain(a.members.iter()).copied().collect();
+    for m in &everyone {
+        ctx.notify(*m, "sysop", message.clone());
+    }
+    ctx.news(format!("The corporation {} merged into {old_name}{renamed}.", a.name));
+    ctx.event(
+        "corp_merged",
+        None,
+        everyone,
+        true,
+        format!("{} merged into {merged}.", a.name),
+        json!({"from": from, "into": into}),
+    );
+    let mut s = format!(
+        "Merged {} into {merged}: {members} member(s) and a treasury of {treasury} joined",
+        a.name
+    );
+    if d.treaties_moved + d.wars_moved > 0 {
+        s.push_str(&format!(
+            "; {} treaty(ies) and {} war(s) passed to it",
+            d.treaties_moved, d.wars_moved
+        ));
+    }
+    if d.treaties_ended + d.wars_ended > 0 {
+        s.push_str(&format!("; {} treaty(ies) and {} war(s) ended", d.treaties_ended, d.wars_ended));
+    }
+    s.push_str(&format!("; {} captain(s) told.", b.members.len() + a.members.len()));
+    Ok((s, into))
 }
 
 /// The operator's corporation commands. Membership changes follow the game's own rules
@@ -332,7 +472,7 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
             if p.corp.is_some() {
                 return Err(Refusal::new("already_in_corp", format!("{} is already in a corporation.", p.name)));
             }
-            let name = valid_corp_name(ctx.w, name, None)?;
+            let name = valid_corp_name(ctx.w, name, &[])?;
             let id = ctx.w.next_corp;
             ctx.w.next_corp += 1;
             let motto = motto.clone().unwrap_or_default();
@@ -381,7 +521,7 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
             let c = corp_by_id(ctx.w, *corp)?;
             let mut changed = vec![];
             let new_name = match name {
-                Some(n) if n.trim() != c.name => Some(valid_corp_name(ctx.w, n, Some(c.id))?),
+                Some(n) if n.trim() != c.name => Some(valid_corp_name(ctx.w, n, &[c.id])?),
                 _ => None,
             };
             if let Some(t) = ceo
@@ -508,6 +648,17 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
                 c.treasury,
                 ctx.w.player_name(c.ceo)
             );
+        }
+        AdminArgs::MergeCorps {
+            from,
+            into,
+            message,
+            name,
+            ceo,
+        } => {
+            let (summary_text, id) = merge(ctx, *from, *into, message, name.as_deref(), *ceo)?;
+            summary = summary_text;
+            corp_id = Some(id);
         }
         _ => return Err(Refusal::new("invalid_args", "Not a corporation command.")),
     }

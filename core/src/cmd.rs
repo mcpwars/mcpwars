@@ -330,6 +330,22 @@ pub enum AdminArgs {
     DisbandCorp {
         corp: CorpId,
     },
+    /// Merge `from` into `into` (engine 1.60): `from`'s members, treasury, deposits and record join
+    /// `into`, which keeps its id, government, laws and seat; `from` is removed. Their treaties and
+    /// wars with each other end (bonds returned); `from`'s others pass to `into` unless `into`
+    /// already has the same with that party. Every member of both gets `message`.
+    MergeCorps {
+        from: CorpId,
+        into: CorpId,
+        /// The operator's explanation: a trusted operator message to every member of both.
+        message: String,
+        /// A new name for the merged corporation (it may take `from`'s).
+        #[serde(default)]
+        name: Option<String>,
+        /// A new CEO for the merged corporation, from either corporation's members.
+        #[serde(default)]
+        ceo: Option<PlayerId>,
+    },
     /// Merge-patch the live rules (RFC 7386 style); refused if the result does not parse.
     SetRules {
         patch: serde_json::Value,

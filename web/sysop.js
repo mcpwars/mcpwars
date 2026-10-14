@@ -1506,6 +1506,7 @@
     corp_invite: (a) => `invite ${nameOf(a.player)} to corporation #${a.corp}`,
     corp_uninvite: (a) => `withdraw ${nameOf(a.player)}'s invitation to corporation #${a.corp}`,
     disband_corp: (a) => `disband corporation #${a.corp}`,
+    merge_corps: (a) => `merge corporation #${a.from} into #${a.into}${a.name ? ` as “${a.name}”` : ""}: “${clip(a.message || "", 120)}”`,
     delete_radio: (a) => `delete radio message #${a.id}`,
     delete_operator_text: (a) => `delete operator text containing “${clip(a.contains || "", 60)}”`,
     constitution_strike: (a) => (a.article != null ? `strike constitution article ${a.article}` : `strike constitution proposal #${a.proposal}`),
@@ -6693,6 +6694,48 @@
         if (!p) { toast("err", "Invite", "Choose a captain."); return; }
         if (await act("corp_invite", { corp: c.id, player: p.id }, `Invite to ${c.name}`)) { actOpen = null; buildInspector(); }
       })));
+    } else if (actOpen === "corp-merge") {
+      // Merge (engine 1.60): one corporation joins another; the survivor keeps its id, government,
+      // laws and seat. Every member of both reads the explanation as a trusted operator message.
+      const others = S.corps.filter((x) => x.id !== c.id).sort((x, y) => x.name.localeCompare(y.name));
+      f.append(el("h4", "", `Merge ${c.name} with another corporation`), el("p", "hint", "The absorbed corporation's members, treasury, deposits and record join the other, which keeps its id, government, laws and seat. Treaties and wars between the two end with bonds returned; the absorbed one's others pass on unless the survivor already has the same. Announced in the news."));
+      const other = el("select");
+      other.append(Object.assign(el("option", "", others.length ? "Choose a corporation" : "No other corporation"), { value: "" }), ...others.map((x) => Object.assign(el("option", "", `${x.name} (${plural(x.members.length, "member")})`), { value: String(x.id) })));
+      const dir = el("select");
+      const name = el("input"); name.type = "text"; name.maxLength = 24; name.placeholder = "Keep the survivor's name";
+      const ceo = el("select");
+      const msg = el("textarea"); msg.rows = 4; msg.maxLength = 2000; msg.placeholder = "Why they merge, and what changes for them"; msg.setAttribute("aria-label", "Explanation");
+      const pair = () => { const o = others.find((x) => String(x.id) === other.value); if (!o) return null; return dir.value === "keep" ? { from: o, into: c } : { from: c, into: o }; };
+      const refresh = () => {
+        const o = others.find((x) => String(x.id) === other.value);
+        const keepDir = dir.value || "into";
+        dir.replaceChildren(Object.assign(el("option", "", `${c.name} joins ${o ? o.name : "the other"}`), { value: "into", selected: keepDir === "into" }), Object.assign(el("option", "", `${o ? o.name : "The other"} joins ${c.name}`), { value: "keep", selected: keepDir === "keep" }));
+        const pr = pair();
+        const pool = pr ? [...pr.into.members, ...pr.from.members].map(playerByName).filter(Boolean) : [];
+        ceo.replaceChildren(Object.assign(el("option", "", pr ? `Keep ${pr.into.ceo}` : "Keep the survivor's CEO"), { value: "" }), ...pool.filter((p) => !pr || p.name !== pr.into.ceo).map((p) => Object.assign(el("option", "", p.name), { value: String(p.id) })));
+        name.placeholder = pr ? `Keep “${pr.into.name}”` : "Keep the survivor's name";
+      };
+      other.addEventListener("change", refresh);
+      dir.addEventListener("change", refresh);
+      refresh();
+      const row1 = el("div", "row"); row1.append(fld("With", other), fld("Direction", dir));
+      const row2 = el("div", "row"); row2.append(fld("New name (optional)", name), fld("CEO", ceo));
+      const count = el("span", "hint", "0 / 2000");
+      msg.addEventListener("input", () => { count.textContent = `${msg.value.length} / 2000`; });
+      f.append(row1, row2, fld("Explanation to every member of both", msg), count, foot(cancel(), btn("Merge…", "sm danger", async () => {
+        const pr = pair();
+        if (!pr) { toast("err", "Merge", "Choose the other corporation."); return; }
+        const text = msg.value.trim();
+        if (!text) { toast("err", "Merge", "Explain the merger: every member of both receives it."); return; }
+        const body = { from: pr.from.id, into: pr.into.id, message: text };
+        if (name.value.trim() && name.value.trim() !== pr.into.name) body.name = name.value.trim();
+        if (ceo.value) body.ceo = Number(ceo.value);
+        const final = body.name || pr.into.name;
+        const q = el("blockquote", "fb-text", text);
+        if (!await confirmDlg({ title: `Merge ${pr.from.name} into ${pr.into.name}?`, body: [`${pr.from.name} (${plural(pr.from.members.length, "member")}, treasury ${fmt(pr.from.treasury)}) is removed; its members, treasury, deposits and record join ${final}${body.ceo ? `, with ${nameOf(body.ceo)} as CEO` : ""}. Journaled and permanent. Every member of both reads:`, q], ok: "Merge", typed: pr.from.name })) return;
+        const d = await act("merge_corps", body, `Merge ${pr.from.name}`);
+        if (d) { actOpen = null; await loadState(); select("corp", pr.into.id, { pan: true }); }
+      })));
     }
     return f;
   }
@@ -6724,13 +6767,14 @@
       toggle("corp-message", "Message"), toggle("corp-edit", "Edit"), toggle("corp-add", "Add member"), toggle("corp-invite", "Invite"),
       btn("Channel", "sm", () => { setMode("comms"); openThread(`c:${c.id}`); }),
       btn("Frame", "sm ghost", () => { syncFocus(true); if (mobile()) setMView("map"); }, "Frame members, planets and defenses on the map"),
+      toggle("corp-merge", "Merge"),
       btn("Disband", "sm danger", () => disbandCorp(c)),
     );
     const aSig = JSON.stringify([actOpen, c.id]);
     const oldA = box.querySelector(":scope > [data-role=actions]");
     if (!oldA || oldA.dataset.sig !== aSig) { actions.dataset.sig = aSig; region(box, "actions", actions); }
     const oldF = box.querySelector(":scope > [data-role=form]");
-    const corpForms = ["corp-edit", "corp-add", "corp-invite"];
+    const corpForms = ["corp-edit", "corp-add", "corp-invite", "corp-merge"];
     if (corpForms.includes(actOpen) && (!oldF || oldF.dataset.k !== actOpen)) {
       const f = corpForm(c, members);
       f.dataset.k = actOpen;
