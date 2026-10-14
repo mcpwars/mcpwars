@@ -29,15 +29,29 @@ pub struct Args {
 }
 pub fn execute(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     let p = ctx.player(pid)?;
-    if !(1..=20).contains(&a.laps)
-        || a.buy_at == a.sell_at
-        || p.sector != a.buy_at
-        || a.quantity.is_some_and(|q| q <= 0)
-        || p.ship.cargo[a.commodity.idx()] != 0
-    {
+    if !(1..=20).contains(&a.laps) {
+        return Err(Refusal::new("invalid_args", format!("laps must be 1..=20 (got {}).", a.laps)));
+    }
+    if a.buy_at == a.sell_at {
+        return Err(Refusal::new("invalid_args", "buy_at and sell_at must be distinct sectors."));
+    }
+    if p.sector != a.buy_at {
         return Err(Refusal::new(
             "invalid_args",
-            "Start at buy_at with no cargo of this commodity; choose distinct ports, positive quantity and 1-20 laps.",
+            format!("The ship is in sector {}, not buy_at ({}).", p.sector, a.buy_at),
+        ));
+    }
+    if a.quantity.is_some_and(|q| q <= 0) {
+        return Err(Refusal::new("invalid_args", "quantity must be positive."));
+    }
+    if p.ship.cargo[a.commodity.idx()] != 0 {
+        return Err(Refusal::new(
+            "invalid_args",
+            format!(
+                "The ship already carries {} units of {} and trade_loop requires starting with 0.",
+                p.ship.cargo[a.commodity.idx()],
+                a.commodity.name()
+            ),
         ));
     }
     if a.max_toll.is_some_and(|t| t < 0) {
