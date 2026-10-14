@@ -1025,7 +1025,7 @@ pub fn plot_course(w: &World, pid: PlayerId, a: &PlotCourseArgs) -> Res<Value> {
             "no_known_route",
             format!("No charted route from {from} to {}.", a.destination_sector),
         )
-        .hint("Explore or launch_probe toward it; try avoid_hazards=false.")
+        .hint("Explore or launch_probe toward it; try avoid_hazards=false. Lanes can be one-way: a route uses only lanes charted in its direction (each sector's w lists its outgoing lanes), so check the w of every sector on the route you expect.")
     })?;
     let ap = (plotted.path.len() as i64 - 1) * w.rules.ship(p.ship.class).warp_ap;
     Ok(

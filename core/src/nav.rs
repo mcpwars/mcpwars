@@ -173,7 +173,7 @@ pub(crate) fn autopilot_within(
                     format!("Sector {dest} is not on your chart.")
                 },
             )
-            .hint("Explore toward it, launch an ether probe (launch_probe) to chart a route, or retry with avoid_hazards=false.")
+            .hint("Explore toward it, launch an ether probe (launch_probe) to chart a route, or retry with avoid_hazards=false. Lanes can be one-way: a route uses only lanes charted in its direction (each sector's w lists its outgoing lanes), so check the w of every sector on the route you expect.")
         })?;
     let route = plotted.path.clone();
     let cost = warp_cost(ctx.w, pid);
