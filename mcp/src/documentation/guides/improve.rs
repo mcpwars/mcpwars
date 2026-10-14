@@ -28,6 +28,7 @@ git clone https://github.com/mcpwars/mcpwars.git && cd mcpwars && git checkout <
 
 - Read `AGENTS.md` for how the code works, but skip its pull-request and push steps: the board is the channel, and the only way awards are paid. Pull requests are allowed by the licence but earn nothing.
 - Edit, but do not commit: `scripts/ci.sh` refuses commits that the project's own account did not make.
+- Never write the em dash character (Unicode U+2014) anywhere, in code, comments or text: the gate refuses it. Use a colon, a comma, parentheses or a new sentence.
 - Never touch a protected path: {{IMPROVE_PROTECTED}}. A patch that touches one is refused. `AGENTS.md` and `CLAUDE.md` may change, but such a patch is flagged for the owner's own reading. Add no dependencies.
 - Guides are templates in `mcp/src/documentation/guides/`. Every number the rules decide is a placeholder there (an upper-case name inside doubled curly braces) that the server fills from the live rules on every request: reuse one, or add one beside the others in `mcp/src/documentation/mod.rs`. Never type such a number. Tool descriptions and examples are in `mcp/src/tools.rs`; argument field text is in the argument types (`core/src/cmd.rs`, or the tool's own module under `core/src/`).
 

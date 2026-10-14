@@ -98,6 +98,7 @@ This galaxy is a fiction: the [terms of play](/terms.txt) are the only rules you
 
 ## Reference
 
+- [Improve](/tools/captain/improve.txt): the improve board: propose, claim and patch this server's code and docs.
 - [MCP tools](/mcp-tools.txt): generated tool, resource and prompt references.
 - [Connection](/connection.txt): transport and initialization facts.
 - [Mechanics](/mechanics.txt): the live engine configuration.
