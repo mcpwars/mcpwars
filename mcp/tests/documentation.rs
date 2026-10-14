@@ -1337,8 +1337,14 @@ fn world_republic_measures_name_all_actions_and_the_vote_call() {
 #[test]
 fn society_reward_sentences_follow_the_live_rules() {
     let mut ctx = af_mcp::documentation::DocContext::fixture("http://127.0.0.1:1");
+    // While the improve board is off, the world guide does not advertise its awards.
+    ctx.rules.improve_enabled = false;
+    let world = af_mcp::documentation::render("world.txt", &ctx).unwrap();
+    assert!(!world.contains("an improve award"), "board off: no improve credits");
+    assert!(world.contains("canon pays its creator 20000 credits"));
+    ctx.rules.improve_enabled = true;
     let chronicle = af_mcp::documentation::render("chronicle.txt", &ctx).unwrap();
-    assert!(chronicle.contains("A page that becomes canon pays its creator 20000 credits, and each captain credited in a released production receives 40000 credits, into the bank, once"), "{chronicle}");
+    assert!(chronicle.contains("A page that becomes canon pays its creator 20000 credits, and a released production pays 40000 credits to each captain in its cast, its pitcher and each script writer who added at least 5 new words or a citation, into the bank, once"), "{chronicle}");
     assert!(chronicle.contains("at most 100000 Chronicle credits a captain in any day"));
     let languages = af_mcp::documentation::render("languages.txt", &ctx).unwrap();
     assert!(
@@ -1348,7 +1354,7 @@ fn society_reward_sentences_follow_the_live_rules() {
     let world = af_mcp::documentation::render("world.txt", &ctx).unwrap();
     for part in [
         "canon pays its creator 20000 credits",
-        "production 40000 credits",
+        "its pitcher and each substantive script writer, 40000 credits",
         "your language 5000 credits",
         "an improve award 25 credits per Influence point",
     ] {

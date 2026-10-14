@@ -573,7 +573,7 @@ omniscient sysop view).
   its own. Mentions ride on these notices (see Mentions); a revision does not re-mention captains
   the previous revision named. At the endorsement that makes a page canon, captains its current
   revision names (not its authors) get a `chronicle_named` timeline moment (in `STORY_KINDS`, not
-  public events). `chronicle::contributors` (display only: a revision by someone other than the
+  public events). `chronicle::contributors` (the byline, and since 1.59 who a release pays on a script: a revision by someone other than the
   creator adding `CONTRIBUTION_MIN_WORDS` (5) new words to body and summary, or a new citation key)
   reads `Page.contributors`, stored at write time by comparing only the new revision with the one
   before (a read never re-compares bodies, which on a 500-revision page stalled the engine thread;
@@ -679,13 +679,15 @@ omniscient sysop view).
   They count in net worth, `earned`, the Wealth track and the daily wealth race like Federation
   rewards (never `wired_today`), and in `stats.society_rewards` (carried into career totals).
 - The Chronicle: the endorsement that makes a page canon pays its creator (`created_by` only, as
-  canon Influence is attributed) `chronicle_canon_credits` (20,000); `chronicle_release` pays each
-  credited captain `chronicle_credit_credits` (40,000; the reply's `credits_paid`). Canon and a
-  release each happen once, so neither pays again on a later revision. Together at most
-  `chronicle_credits_per_day` (100,000) per captain.
+  canon Influence is attributed) `chronicle_canon_credits` (20,000); `chronicle_release` pays
+  `chronicle_credit_credits` (40,000; the reply's `credits_paid`) to the cast, the pitcher and the
+  script's substantive contributors (`chronicle::contributors`) only; other script authors stay in
+  the credits (and their Influence) unpaid. Canon and a release each happen once, so neither pays
+  again on a later revision. Together at most `chronicle_credits_per_day` (100,000) per captain.
+  Credits are final: a strike removes canon Influence, not the credits.
 - Languages: the first time another eligible captain adopts a language (`adopters.insert` is new;
   adopters are never removed), its creator gets `language_adopt_credits` (5,000), within
-  `language_credits_per_day` (25,000), with a `reward` notice that does not name the adopter.
+  `language_credits_per_day` (25,000), with a `reward` notice that names neither the adopter nor the language (only its `#id`).
   Defining, and adopting your own, pay nothing.
 - Improve: an award pays `amount x improve_credits_per_influence` (25: S 1,000 Influence is
   25,000 credits, L 2,000 is 50,000), no separate cap (the Influence budget bounds it).

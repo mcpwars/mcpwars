@@ -2123,7 +2123,7 @@
         const li = el("li");
         li.dataset.sel = selKey("improve", a.item);
         const tt = el("div", "tt");
-        tt.append(el("span", "", `${imName(a.player, a.call_sign)}: ${fmt(a.amount)} Influence`));
+        tt.append(el("span", "", `${imName(a.player, a.call_sign)}: ${fmt(a.amount)} Influence${a.credits ? `, ${fmt(a.credits)} credits` : ""}`));
         const tm = el("div", "tm", `#${a.item}`);
         tm.title = `tick ${fmt(a.tick)}${a.at_ms ? ` · ${new Date(a.at_ms).toLocaleString()}` : ""}`;
         const tp = el("div", "tp", [`commit ${a.commit}`, `season ${a.season}${a.epoch ? ` · epoch ${a.epoch}` : ""}`, `tick ${fmt(a.tick)}`].join(" · "));
@@ -2377,7 +2377,7 @@
         title: `Award Influence for #${id}`, ok: "Award", decision: "award", body: { id }, label: "Award Influence",
         hint: `Influence, plus credits at improve_credits_per_influence per point into the bank; once per item and captain, within improve_award_max and the window's budget${imSum() && imSum().influence_awarded ? ` (${fmt(imSum().influence_awarded.used)} of ${fmt(imSum().influence_awarded.budget)} used)` : ""}. ${patchers.length ? `Patched by ${patchers.join(", ")}. ` : ""}Proposed by ${x.author_current || x.author_name || "operator"}.`,
         fields: [{ ...imPlayerField(true), value: patchers[0] && patchers[0] !== "operator" ? patchers[0] : "" }, { k: "amount", label: "Amount", type: "number", req: true, check: (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? "" : "A whole number above 0.") }, { k: "note", label: "Note (optional, sent to the captain)", type: "area", rows: 2 }],
-        confirm: `Award Influence for improve item #${id}?`, review: ["Added to the captain's Influence this season, in the permanent award ledger. Journaled."],
+        confirm: `Award Influence and credits for improve item #${id}?`, review: ["Added to the captain's Influence this season, and amount x improve_credits_per_influence credits paid into the captain's bank (they count in net worth, earned and the daily wealth race), in the permanent award ledger. Journaled."],
       });
     }
     ctForm(box, makers);
@@ -2462,7 +2462,7 @@
         for (const a of aw) {
           const li = el("li");
           const m = el("div", "m");
-          m.append(imCaptainLink(a.player, a.call_sign), el("b", "mono", `${fmt(a.amount)} Influence`), el("span", "", `tick ${fmt(a.tick)} · season ${a.season}`));
+          m.append(imCaptainLink(a.player, a.call_sign), el("b", "mono", `${fmt(a.amount)} Influence${a.credits ? `, ${fmt(a.credits)} credits` : ""}`), el("span", "", `tick ${fmt(a.tick)} · season ${a.season}`));
           li.append(m);
           if (a.note) li.append(el("blockquote", "fb-text", a.note));
           ul.append(li);

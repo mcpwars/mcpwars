@@ -268,6 +268,62 @@ fn a_release_pays_each_credited_captain_once() {
     s.replays();
 }
 
+/// A captain outside the cast who makes a trivial edit to a greenlit script is in the credits
+/// (and their Influence) but is not paid; a substantive script writer is.
+#[test]
+fn a_trivial_script_edit_earns_no_release_credits() {
+    let mut s = Sim::new(166);
+    let [a, c, d] = ["Ada Mbeki", "Chidi Okonjo", "Dara Quill"].map(|n| s.join(n));
+    for (p, home) in [(a, "Lowmoor"), (c, "Okun"), (d, "Vess")] {
+        s.document(p, home);
+    }
+    let pitch = chronicle::Args {
+        action: chronicle::Action::Pitch,
+        title: Some("Debts".into()),
+        text: Some("A welder pays off her brother's debts.".into()),
+        format: Some(chronicle::Format::Audio),
+        cast: Some(vec!["Ada Mbeki".into()]),
+        ..Default::default()
+    };
+    let x = s.chronicle(a, pitch).unwrap().reply["production"].as_u64().unwrap();
+    s.admin(AdminAction::Greenlight, x, None).unwrap();
+    let script = s.w.chronicle.productions[&x].script_page.unwrap();
+    let edit = |body: String| chronicle::Args {
+        action: chronicle::Action::Write,
+        page: Some(script),
+        body: Some(body),
+        ..Default::default()
+    };
+    let body = s.w.chronicle.pages[&script].current().body.clone();
+    s.chronicle(c, edit(format!("{body}!"))).unwrap();
+    let body = s.w.chronicle.pages[&script].current().body.clone();
+    s.chronicle(
+        d,
+        edit(format!(
+            "{body}\n\n**NARRATOR:** The welder counts her brother's debts by lamplight, one coin at a time."
+        )),
+    )
+    .unwrap();
+    s.admin(AdminAction::Lock, x, None).unwrap();
+    let (bank_a, bank_c, bank_d) = (s.bank(a), s.bank(c), s.bank(d));
+    let out = s
+        .admin(AdminAction::Release, x, Some(vec!["https://example.com/debts.mp3".into()]))
+        .unwrap();
+    let credits: Vec<PlayerId> = out.reply["credits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as PlayerId)
+        .collect();
+    assert!(credits.contains(&c) && credits.contains(&d), "both writers are in the credits");
+    assert_eq!(s.bank(a), bank_a + 40_000, "the pitcher and cast are paid");
+    assert_eq!(s.bank(d), bank_d + 40_000, "a substantive script writer is paid");
+    assert_eq!(s.bank(c), bank_c, "a trivial edit is not paid");
+    assert!(out.reply["credits_paid"].get(c.to_string()).is_none());
+    assert!(!last_text(&s, c, "chronicle").contains("paid into your bank"));
+    s.replays();
+}
+
 #[test]
 fn the_first_adoption_by_another_captain_pays_the_creator_once_within_the_cap() {
     let mut s = Sim::new(161);
@@ -286,7 +342,10 @@ fn the_first_adoption_by_another_captain_pays_the_creator_once_within_the_cap() 
     s.lang(ids[1], json!({"action":"adopt","name":"Trade Cant"})).unwrap();
     assert_eq!(s.bank(creator), bank + 5_000);
     assert_eq!(worth(&s, creator), plus(before, 5_000));
-    assert!(last_text(&s, creator, "reward").contains("adopted your language Trade Cant"));
+    let id = s.w.languages.values().find(|l| l.name == "Trade Cant").unwrap().id;
+    let text = last_text(&s, creator, "reward");
+    assert!(text.contains(&format!("adopted your language #{id}")), "{text}");
+    assert!(!text.contains("Trade Cant"), "server text never carries the captain-chosen name");
     assert!(!last_text(&s, creator, "reward").contains("Captain 1"), "the adopter is not named");
     s.lang(ids[1], json!({"action":"adopt","name":"Trade Cant"})).unwrap();
     assert_eq!(s.bank(creator), bank + 5_000, "once per adopter");
@@ -481,13 +540,35 @@ fn example_briefing_blocks() {
 }
 
 /// A 1.58-shaped world (no society rules, ledger, stat or award credits) adopts with the rules at
-/// their defaults and the same state hash as a native world with nothing paid yet.
+/// their defaults, its awards with 0 credits, and the same state hash as a native world with
+/// nothing paid yet.
 #[test]
 fn a_1_58_world_adopts_with_default_rewards() {
     let mut s = Sim::new(165);
     let a = s.join("Ada Mbeki");
     s.document(a, "Lowmoor");
+    // An award on the ledger (awards exist since 1.55, without credits): made at a rate of 0 so
+    // the native world paid nothing, then the rate is back at its default.
+    improve_on(&mut s);
+    s.rules(json!({"improve_credits_per_influence": 0}));
+    let item = post(&mut s, "Fix", "Tier S. A typo.");
+    let op = |v: Value| Command::Admin(serde_json::from_value(v).unwrap());
+    s.run(
+        Actor::System,
+        op(json!({"action":"improve","decision":"ship","id":item,"commit":"abcdef1"})),
+    )
+    .unwrap();
+    s.run(
+        Actor::System,
+        op(json!({"action":"improve","decision":"award","id":item,"player":a,"amount":100})),
+    )
+    .unwrap();
+    s.rules(json!({"improve_credits_per_influence": af_core::rules::Rules::default().improve_credits_per_influence}));
+    assert_eq!(s.w.improve.awards.len(), 1);
     let mut v = serde_json::to_value(&s.w).unwrap();
+    for award in v["improve"]["awards"].as_array_mut().unwrap() {
+        assert!(award.as_object_mut().unwrap().remove("credits").is_some());
+    }
     let rules = v["rules"].as_object_mut().unwrap();
     for k in [
         "chronicle_canon_credits",
@@ -505,6 +586,7 @@ fn a_1_58_world_adopts_with_default_rewards() {
         p["career"].as_object_mut().unwrap().remove("society_rewards");
     }
     let adopted: World = serde_json::from_value(v).unwrap();
+    assert_eq!(adopted.improve.awards[0].credits, 0, "a 1.58 award reads as paying no credits");
     let d = af_core::rules::Rules::default();
     assert_eq!(adopted.rules.chronicle_canon_credits, d.chronicle_canon_credits);
     assert_eq!(adopted.rules.improve_credits_per_influence, d.improve_credits_per_influence);

@@ -341,7 +341,10 @@ fn chronicle_credits(r: &Rules) -> String {
         parts.push(format!("a page that becomes canon pays its creator {canon} credits"));
     }
     if credit > 0 {
-        parts.push(format!("each captain credited in a released production receives {credit} credits"));
+        parts.push(format!(
+            "a released production pays {credit} credits to each captain in its cast, its pitcher and each script writer who added at least {} new words or a citation",
+            af_core::chronicle::CONTRIBUTION_MIN_WORDS
+        ));
     }
     let mut s = parts.join(", and ");
     s[..1].make_ascii_uppercase();
@@ -372,7 +375,7 @@ fn society_rewards(r: &Rules) -> String {
     }
     if r.chronicle_credits_per_day > 0 && r.chronicle_credit_credits > 0 {
         parts.push(format!(
-            "each credit in a released production {} credits",
+            "each captain in a released production's cast, its pitcher and each substantive script writer, {} credits",
             r.chronicle_credit_credits
         ));
     }
@@ -382,7 +385,7 @@ fn society_rewards(r: &Rules) -> String {
             r.language_adopt_credits
         ));
     }
-    if r.improve_credits_per_influence > 0 {
+    if r.improve_enabled && r.improve_credits_per_influence > 0 {
         parts.push(format!(
             "an improve award {} credits per Influence point",
             r.improve_credits_per_influence

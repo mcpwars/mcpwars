@@ -40,7 +40,8 @@ pub const CANON_INFLUENCE: i64 = 2_000;
 pub const CREDIT_INFLUENCE: i64 = 3_000;
 pub const STRUCK: &str = "[struck by the operator]";
 /// New words (counted with repeats) a revision by someone other than the page's creator adds to
-/// count its author as a contributor in the byline (display only, engine 1.58).
+/// count its author as a contributor in the byline (engine 1.58; from 1.59 also who a release
+/// pays credits on a script page).
 pub const CONTRIBUTION_MIN_WORDS: usize = 5;
 
 /// The content rule, stated wherever captains write.
@@ -858,8 +859,8 @@ pub fn compute_contributors(p: &Page) -> Vec<PlayerId> {
     out
 }
 
-/// The substantive contributors, in first-contribution order (display only: Influence is
-/// unchanged). Reads the stored list; a page stored before 1.58 is compared once, until the next
+/// The substantive contributors, in first-contribution order (the byline, and from engine 1.59
+/// the script writers a release pays credits; Influence is unchanged). Reads the stored list; a page stored before 1.58 is compared once, until the next
 /// tick stores its list.
 pub fn contributors(p: &Page) -> Vec<PlayerId> {
     match &p.contributors {
@@ -950,7 +951,7 @@ fn mention_names(w: &World, m: &Mentions, view: View) -> Vec<String> {
     }
 }
 
-/// The byline: the creator and the substantive contributors (display only).
+/// The byline: the creator and the substantive contributors.
 fn byline(w: &World, p: &Page, view: View) -> Value {
     let mut b = json!({"contributors": names_for(w, &contributors(p), view)});
     if view != View::Public || is_captain(w, p.created_by) {
@@ -1865,8 +1866,13 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
             }
             let mut credits: BTreeSet<PlayerId> = x.cast.iter().copied().collect();
             credits.insert(x.pitched_by);
+            // Engine 1.59: credits (money) go to the cast, the pitcher and the script's
+            // substantive contributors only; a trivial edit to a greenlit script still earns a
+            // place in the credits (and its Influence) but no payout.
+            let mut payable = credits.clone();
             if let Some(s) = x.script_page.and_then(|s| ctx.w.chronicle.pages.get(&s)) {
                 credits.extend(s.authors());
+                payable.extend(contributors(s));
             }
             let credits: Vec<PlayerId> = credits.into_iter().collect();
             let title = x.title.clone();
@@ -1887,13 +1893,17 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
                 season,
                 epoch,
             });
-            // Engine 1.59: each credited captain is paid once, at the release (a production is
-            // released once).
+            // Engine 1.59: each payable captain (see above) is paid once, at the release (a
+            // production is released once).
             let cap = Some(ctx.w.rules.chronicle_credits_per_day);
             let amount = ctx.w.rules.chronicle_credit_credits;
             let mut paid_out = serde_json::Map::new();
             for c in &credits {
-                let paid = crate::society::pay(ctx, *c, crate::society::Source::Chronicle, amount, cap);
+                let paid = if payable.contains(c) {
+                    crate::society::pay(ctx, *c, crate::society::Source::Chronicle, amount, cap)
+                } else {
+                    crate::society::Paid::default()
+                };
                 if paid.paid > 0 {
                     paid_out.insert(c.to_string(), json!(paid.paid));
                 }
@@ -2096,7 +2106,7 @@ pub fn rules_view(w: &World) -> Value {
         "canon_influence": CANON_INFLUENCE, "credit_influence": CREDIT_INFLUENCE,
         "canon_credits": r.chronicle_canon_credits, "credit_credits": r.chronicle_credit_credits,
         "credits_per_day": r.chronicle_credits_per_day,
-        "rewards": "A page that becomes canon pays its creator canon_credits credits into the bank and canon_influence Influence this season, once. A released production pays each captain in its credits credit_credits credits and credit_influence Influence, once. Credits count in net worth, earned and the daily wealth race. One captain receives at most credits_per_day Chronicle credits in the trailing day; above it the rest of a payout is not paid. 0 switches a payout off.",
+        "rewards": format!("A page that becomes canon pays its creator canon_credits credits into the bank and canon_influence Influence this season, once. A released production pays credit_influence Influence to each captain in its credits, and credit_credits credits to its cast, its pitcher and each script writer who added at least {CONTRIBUTION_MIN_WORDS} new words or a citation, once. Credits count in net worth, earned and the daily wealth race. One captain receives at most credits_per_day Chronicle credits in the trailing day; above it the rest of a payout is not paid. Credits are final: striking a page later does not take them back. 0 switches a payout off."),
     })
 }
 
@@ -2281,7 +2291,7 @@ pub fn production_package(w: &World, id: u64) -> Res<Value> {
         credits.extend(s.authors().iter().map(|a| name_of(w, *a)));
     }
     let script_struck = script.is_some_and(|s| s.struck.is_some());
-    // Substantive contributors (display only): the script's first, then each source's.
+    // Substantive contributors: the script's first (paid at release, engine 1.59), then each source's.
     let mut all_contributors: Vec<PlayerId> = vec![];
     for p in script.into_iter().chain(x.pages.iter().filter_map(|id| w.chronicle.pages.get(id))) {
         for c in contributors(p) {
