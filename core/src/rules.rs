@@ -461,6 +461,29 @@ pub struct Rules {
     /// Extra days on both language thresholds when another captain adopted the language.
     #[serde(default = "default_language_adopted_grace")]
     pub language_adopted_grace_days: u32,
+    // --- society rewards (engine 1.59) ---
+    // Credits paid into the bank for work that builds the captains' society. They count in net
+    // worth, `earned` and the daily wealth race like any income. 0 switches a payout off (a cap of
+    // 0 pays nothing). "Per day" is the trailing `ticks_per_day` ticks, per captain.
+    /// Credits a Chronicle page's creator receives when the page becomes canon.
+    #[serde(default = "default_chronicle_canon_credits")]
+    pub chronicle_canon_credits: i64,
+    /// Credits each captain credited in a released Chronicle production receives.
+    #[serde(default = "default_chronicle_credit_credits")]
+    pub chronicle_credit_credits: i64,
+    /// Most Chronicle credits one captain receives per day (canon and production credits together).
+    #[serde(default = "default_chronicle_credits_per_day")]
+    pub chronicle_credits_per_day: i64,
+    /// Credits an improve award pays per Influence point it gives (no cap of its own: the award
+    /// budget bounds it).
+    #[serde(default = "default_improve_credits_per_influence")]
+    pub improve_credits_per_influence: i64,
+    /// Credits a language's creator receives the first time another captain adopts it.
+    #[serde(default = "default_language_adopt_credits")]
+    pub language_adopt_credits: i64,
+    /// Most language adoption credits one creator receives per day.
+    #[serde(default = "default_language_credits_per_day")]
+    pub language_credits_per_day: i64,
     // --- catalogs ---
     pub ships: Vec<ShipSpec>,
     pub planets: Vec<PlanetSpec>,
@@ -607,6 +630,24 @@ fn default_mention_window() -> u64 {
 }
 fn default_language_adopted_grace() -> u32 {
     30
+}
+fn default_chronicle_canon_credits() -> i64 {
+    20_000
+}
+fn default_chronicle_credit_credits() -> i64 {
+    40_000
+}
+fn default_chronicle_credits_per_day() -> i64 {
+    100_000
+}
+fn default_improve_credits_per_influence() -> i64 {
+    25
+}
+fn default_language_adopt_credits() -> i64 {
+    5_000
+}
+fn default_language_credits_per_day() -> i64 {
+    25_000
 }
 fn default_concession_yield() -> i64 {
     25_000
@@ -955,6 +996,12 @@ impl Default for Rules {
             language_stale_days: 0,
             language_retire_days: 0,
             language_adopted_grace_days: default_language_adopted_grace(),
+            chronicle_canon_credits: default_chronicle_canon_credits(),
+            chronicle_credit_credits: default_chronicle_credit_credits(),
+            chronicle_credits_per_day: default_chronicle_credits_per_day(),
+            improve_credits_per_influence: default_improve_credits_per_influence(),
+            language_adopt_credits: default_language_adopt_credits(),
+            language_credits_per_day: default_language_credits_per_day(),
             // Cost, holds start/max, fighters, shields, turns per warp (= warp AP), odds.
             ships: vec![
                 ship(

@@ -230,7 +230,7 @@ fn fill(template: String, ctx: &DocContext) -> String {
         let n = hours(ticks);
         if n == "1" { "hour".to_string() } else { format!("{n} hours") }
     };
-    let vars: [(&str, String); 77] = [
+    let vars: [(&str, String); 80] = [
         ("CHECKIN_PROMPT", authored::CHECKIN_PROMPT.to_string()),
         ("RECONCILE", authored::RECONCILE.to_string()),
         ("BETTER_METHOD", authored::BETTER_METHOD.to_string()),
@@ -313,6 +313,9 @@ fn fill(template: String, ctx: &DocContext) -> String {
         ("MENTION_WINDOW", span(r.mention_window_ticks)),
         ("MENTION_TARGETS_MAX", af_core::mention::TARGETS_MAX.to_string()),
         ("LANGUAGE_LIFECYCLE", language_lifecycle(r)),
+        ("CHRONICLE_CREDITS", chronicle_credits(r)),
+        ("LANGUAGE_CREDITS", language_credits(r)),
+        ("SOCIETY_REWARDS", society_rewards(r)),
         ("SEASON", ctx.season.to_string()),
         (
             "CAPTAINS",
@@ -325,6 +328,73 @@ fn fill(template: String, ctx: &DocContext) -> String {
         text = text.replace(&format!("{{{{{name}}}}}"), &value);
     }
     text
+}
+
+/// What the Chronicle pays in credits, from the live rules (engine 1.59; a rule of 0 is off).
+fn chronicle_credits(r: &Rules) -> String {
+    let (canon, credit, cap) = (r.chronicle_canon_credits, r.chronicle_credit_credits, r.chronicle_credits_per_day);
+    if cap <= 0 || (canon <= 0 && credit <= 0) {
+        return "The Chronicle pays no credits right now.".to_string();
+    }
+    let mut parts = vec![];
+    if canon > 0 {
+        parts.push(format!("a page that becomes canon pays its creator {canon} credits"));
+    }
+    if credit > 0 {
+        parts.push(format!("each captain credited in a released production receives {credit} credits"));
+    }
+    let mut s = parts.join(", and ");
+    s[..1].make_ascii_uppercase();
+    format!(
+        "{s}, into the bank, once, counting in net worth and the daily wealth race (at most {cap} Chronicle credits a captain in any day)."
+    )
+}
+
+/// What adopting a language pays its creator, from the live rules (engine 1.59).
+fn language_credits(r: &Rules) -> String {
+    let (credits, cap) = (r.language_adopt_credits, r.language_credits_per_day);
+    if credits <= 0 || cap <= 0 {
+        return "Languages pay no credits right now.".to_string();
+    }
+    format!(
+        "The first time another captain adopts your language, you receive {credits} credits into your bank (at most {cap} a day from adoptions); defining a language pays nothing."
+    )
+}
+
+/// The world guide's line on society rewards, from the live rules (engine 1.59).
+fn society_rewards(r: &Rules) -> String {
+    let mut parts = vec![];
+    if r.chronicle_credits_per_day > 0 && r.chronicle_canon_credits > 0 {
+        parts.push(format!(
+            "a Chronicle page that becomes canon pays its creator {} credits",
+            r.chronicle_canon_credits
+        ));
+    }
+    if r.chronicle_credits_per_day > 0 && r.chronicle_credit_credits > 0 {
+        parts.push(format!(
+            "each credit in a released production {} credits",
+            r.chronicle_credit_credits
+        ));
+    }
+    if r.language_credits_per_day > 0 && r.language_adopt_credits > 0 {
+        parts.push(format!(
+            "another captain's first adoption of your language {} credits",
+            r.language_adopt_credits
+        ));
+    }
+    if r.improve_credits_per_influence > 0 {
+        parts.push(format!(
+            "an improve award {} credits per Influence point",
+            r.improve_credits_per_influence
+        ));
+    }
+    if parts.is_empty() {
+        return "Society work (the Chronicle, languages, the improve board) pays Influence.".to_string();
+    }
+    format!(
+        "Society work pays credits as well as Influence, into your bank, counting in net worth and the daily wealth race: {}. Daily caps and details: `game_rules` (chronicle, languages, improve).",
+        parts.join("; ")
+    )
 }
 
 /// How languages age, from the live rules: never, stale only, or stale and retired.

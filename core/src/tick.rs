@@ -422,4 +422,5 @@ fn add_stats(total: &mut PlayerStats, s: &PlayerStats) {
     total.grants_received += s.grants_received;
     total.offences += s.offences;
     total.fines_paid += s.fines_paid;
+    total.society_rewards += s.society_rewards;
 }

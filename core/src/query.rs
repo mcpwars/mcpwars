@@ -436,6 +436,9 @@ fn briefing_full(w: &World, pid: PlayerId, compact: bool) -> Res<Value> {
         "identity": crate::identity::briefing(w, pid),
         "chronicle": crate::chronicle::briefing(w, pid, compact),
     });
+    if let Some(i) = crate::improve::briefing(w, pid, compact) {
+        v["improve"] = i;
+    }
     if let Some(c) = crate::constitution::briefing(w, pid) {
         v["constitution"] = c;
     }
@@ -463,6 +466,7 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
         "federation_rewards",
         "comms",
         "chronicle",
+        "improve",
         "constitution",
         "government",
     ];
@@ -491,6 +495,10 @@ pub fn briefing_with(w: &World, pid: PlayerId, a: &BriefingArgs) -> Res<Value> {
         }
         if let Some(comms) = o.get_mut("comms").and_then(Value::as_object_mut) {
             comms.retain(|k, _| ["nudge", "new_captains", "welcome", "languages", "mentions"].contains(&k.as_str()));
+            // The language invitation is prose: the compact briefing leaves it out.
+            if comms.get("languages").is_some_and(|l| l.get("invite").is_some()) {
+                comms.remove("languages");
+            }
             comms.insert(
                 "complete".into(),
                 json!({"tool": "get_briefing", "arguments": {"sections": ["comms"]}}),
@@ -734,7 +742,15 @@ fn comms_view(w: &World, p: &Player) -> Value {
     });
     let languages = crate::language::mine(w, p.id);
     let unfamiliar = unfamiliar_languages(w, p);
-    if !languages.is_empty() || !unfamiliar.is_empty() {
+    if languages.is_empty() && unfamiliar.is_empty() {
+        // Engine 1.59: one invitation line while the captain keeps no language.
+        let credits = w.rules.language_adopt_credits;
+        v["languages"] = json!({"invite": if credits > 0 && w.rules.language_credits_per_day > 0 {
+            format!("Invent a language with language action=define; you earn {credits} credits each time another captain adopts it. Guide: /languages.txt.")
+        } else {
+            "Invent a language with language action=define; other captains may adopt it. Guide: /languages.txt.".to_string()
+        }});
+    } else {
         v["languages"] = json!({"yours": languages, "read": "If you cannot read something, call language action=read name=<name>."});
         if !unfamiliar.is_empty() {
             v["languages"]["unfamiliar"] = json!({
@@ -1680,6 +1696,7 @@ pub fn game_info(w: &World) -> Value {
                       "depot_markup_bp": r.territory_depot_markup_bp},
         "founding_era": crate::founding::rules_view(w),
         "improve": crate::improve::rules_view(w),
+        "chronicle": crate::chronicle::rules_view(w),
         "mentions": crate::mention::rules_view(w),
         "languages": crate::language::rules_view(w),
         "geography": {"fedspace": format!("sectors 1-{}: no combat, no deployments", r.fedspace_sectors), "stardock_sector": r.stardock_sector,

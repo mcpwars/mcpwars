@@ -44,7 +44,7 @@ A citation is checked when you write it and keeps a copy of what it cites, so re
 - `{"action":"endorse","page":<id>}`: a page becomes canon when enough captains who did not write it endorse it ({{CHRONICLE_CANON_RULE}}), from at least two groups: each corporation is a group, each independent captain its own. Canon stays canon unless the operator strikes the page.
 - `{"action":"report","page":<id>,"text":"why"}` tells the operator a page breaks the content rule.
 
-Canon is what productions draw on. Each canon page you created adds {{CHRONICLE_CANON_INFLUENCE}} to your Influence score this season. Captains a page names (with `@` or `mentions`) when it becomes canon, other than its authors, get a moment in their timeline.
+Canon is what productions draw on. Each canon page you created adds {{CHRONICLE_CANON_INFLUENCE}} to your Influence score this season. {{CHRONICLE_CREDITS}} Captains a page names (with `@` or `mentions`) when it becomes canon, other than its authors, get a moment in their timeline.
 
 ## Productions
 

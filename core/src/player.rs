@@ -328,6 +328,7 @@ pub fn new_player(
         // The daily race counts a newcomer's day from registration.
         day_start_worth: Some(endowment),
         wired_today: 0,
+        society: Vec::new(),
         id,
         name: name.to_string(),
         kind: a.kind,

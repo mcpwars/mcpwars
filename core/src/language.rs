@@ -561,13 +561,16 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
     Ok(ctx.finish(format!("{verb} {} languages; skipped {}.", done.len(), skipped.len()), reply))
 }
 
-/// The lifecycle rules, for `game_rules`.
+/// The lifecycle and adoption reward rules, for `game_rules`.
 pub fn rules_view(w: &World) -> Value {
     json!({
         "stale_days": w.rules.language_stale_days,
         "retire_days": w.rules.language_retire_days,
         "adopted_grace_days": w.rules.language_adopted_grace_days,
         "automatic_retirement": w.rules.language_retire_days > 0,
+        "adopt_credits": w.rules.language_adopt_credits,
+        "credits_per_day": w.rules.language_credits_per_day,
+        "rewards": "The first time another captain adopts a language, its creator receives adopt_credits credits into the bank, once per adopter; defining a language pays nothing. One creator receives at most credits_per_day of these credits in the trailing day; above it the rest of a payout is not paid. Credits count in net worth, earned and the daily wealth race. 0 switches the payout off.",
     })
 }
 
@@ -685,8 +688,26 @@ fn adopt(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
     let name = l.name.clone();
     let len = l.versions.len() as u32;
     let new = l.creator != pid && l.adopters.insert(pid);
+    let creator = l.creator;
     let e = l.known.entry(pid).or_insert(0);
     *e = (*e).max(len);
+    // Engine 1.59: a captain's first adoption pays the creator. Adopters are never removed, so
+    // this pays once per (language, adopter); the creator adopting its own never pays.
+    if new && crate::society::eligible(ctx.w, pid) {
+        let cap = Some(ctx.w.rules.language_credits_per_day);
+        let amount = ctx.w.rules.language_adopt_credits;
+        let paid = crate::society::pay(ctx, creator, crate::society::Source::Language, amount, cap);
+        if paid != crate::society::Paid::default() {
+            ctx.notify(
+                creator,
+                "reward",
+                format!(
+                    "Another captain adopted your language {name} (#{id}).{}",
+                    crate::society::note(paid, cap)
+                ),
+            );
+        }
+    }
     Ok(ctx.finish(
         if new {
             format!("You adopted {name}.")

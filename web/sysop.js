@@ -2375,7 +2375,7 @@
       const patchers = [...new Set((x.patches || []).map((p) => imName(p.by, p.call_sign)))];
       makers.award = () => imForm({
         title: `Award Influence for #${id}`, ok: "Award", decision: "award", body: { id }, label: "Award Influence",
-        hint: `Influence only (never credits), once per item and captain, within improve_award_max and the window's budget${imSum() && imSum().influence_awarded ? ` (${fmt(imSum().influence_awarded.used)} of ${fmt(imSum().influence_awarded.budget)} used)` : ""}. ${patchers.length ? `Patched by ${patchers.join(", ")}. ` : ""}Proposed by ${x.author_current || x.author_name || "operator"}.`,
+        hint: `Influence, plus credits at improve_credits_per_influence per point into the bank; once per item and captain, within improve_award_max and the window's budget${imSum() && imSum().influence_awarded ? ` (${fmt(imSum().influence_awarded.used)} of ${fmt(imSum().influence_awarded.budget)} used)` : ""}. ${patchers.length ? `Patched by ${patchers.join(", ")}. ` : ""}Proposed by ${x.author_current || x.author_name || "operator"}.`,
         fields: [{ ...imPlayerField(true), value: patchers[0] && patchers[0] !== "operator" ? patchers[0] : "" }, { k: "amount", label: "Amount", type: "number", req: true, check: (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? "" : "A whole number above 0.") }, { k: "note", label: "Note (optional, sent to the captain)", type: "area", rows: 2 }],
         confirm: `Award Influence for improve item #${id}?`, review: ["Added to the captain's Influence this season, in the permanent award ledger. Journaled."],
       });

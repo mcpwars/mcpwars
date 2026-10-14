@@ -1494,10 +1494,23 @@ fn endorse(ctx: &mut Ctx, pid: PlayerId, name: String, a: &Args) -> Res<Outcome>
                 json!({"page": id}),
             );
         }
+        // Engine 1.59: the creator alone is paid, as canon Influence is attributed (`influence`).
+        // Canon is reached once per page, so this pays once; a later revision changes nothing.
+        let cap = Some(ctx.w.rules.chronicle_credits_per_day);
+        let paid = crate::society::pay(
+            ctx,
+            creator,
+            crate::society::Source::Chronicle,
+            ctx.w.rules.chronicle_canon_credits,
+            cap,
+        );
         ctx.notify(
             creator,
             "chronicle",
-            format!("Your Chronicle page {id} ({title}) is canon: it may now be used in productions."),
+            format!(
+                "Your Chronicle page {id} ({title}) is canon: it may now be used in productions.{}",
+                crate::society::note(paid, cap)
+            ),
         );
     }
     Ok(ctx.finish(
@@ -1874,11 +1887,23 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
                 season,
                 epoch,
             });
+            // Engine 1.59: each credited captain is paid once, at the release (a production is
+            // released once).
+            let cap = Some(ctx.w.rules.chronicle_credits_per_day);
+            let amount = ctx.w.rules.chronicle_credit_credits;
+            let mut paid_out = serde_json::Map::new();
             for c in &credits {
+                let paid = crate::society::pay(ctx, *c, crate::society::Source::Chronicle, amount, cap);
+                if paid.paid > 0 {
+                    paid_out.insert(c.to_string(), json!(paid.paid));
+                }
                 ctx.notify(
                     *c,
                     "chronicle",
-                    format!("\"{title}\" (production {id}) is released, and you are in its credits."),
+                    format!(
+                        "\"{title}\" (production {id}) is released, and you are in its credits.{}",
+                        crate::society::note(paid, cap)
+                    ),
                 );
             }
             let line = format!("Released from the Chronicle: {title}.");
@@ -1886,7 +1911,7 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
             ctx.event("chronicle_released", None, credits.clone(), true, line, json!({"production": id}));
             Ok(ctx.finish(
                 format!("Production {id} released with {} credit(s).", credits.len()),
-                json!({"production": id, "status": Status::Released, "credits": credits, "links": links}),
+                json!({"production": id, "status": Status::Released, "credits": credits, "links": links, "credits_paid": paid_out}),
             ))
         }
     }
@@ -2051,6 +2076,30 @@ fn unwritten(w: &World, pid: PlayerId, tpd: u64) -> Option<Value> {
     Some(json!({"fact": fact, "record": record, "id": id}))
 }
 
+/// The briefing's `how` (and the compact briefing's, which adds no reward prose).
+const HOW: &str = "chronicle action=list; write pages (0 AP), cite the record, endorse others' pages into canon, pitch productions. Guide: /chronicle.txt.";
+
+/// "N credits and M Influence", or only the Influence while the credit payout is off.
+fn reward_text(credits: i64, cap: i64, influence: i64) -> String {
+    if credits > 0 && cap > 0 {
+        format!("{credits} credits and {influence} Influence")
+    } else {
+        format!("{influence} Influence")
+    }
+}
+
+/// The `game_rules` block: what the Chronicle pays, from the live rules (engine 1.59).
+pub fn rules_view(w: &World) -> Value {
+    let r = &w.rules;
+    json!({
+        "tool": "chronicle", "ap": 0, "guide": "/chronicle.txt",
+        "canon_influence": CANON_INFLUENCE, "credit_influence": CREDIT_INFLUENCE,
+        "canon_credits": r.chronicle_canon_credits, "credit_credits": r.chronicle_credit_credits,
+        "credits_per_day": r.chronicle_credits_per_day,
+        "rewards": "A page that becomes canon pays its creator canon_credits credits into the bank and canon_influence Influence this season, once. A released production pays each captain in its credits credit_credits credits and credit_influence Influence, once. Credits count in net worth, earned and the daily wealth race. One captain receives at most credits_per_day Chronicle credits in the trailing day; above it the rest of a payout is not paid. 0 switches a payout off.",
+    })
+}
+
 /// The briefing's line: counts and what changed for you. Pages others revised in the last game
 /// day that mention you or your corporation, cite a record you were part of, or were revised
 /// since you last worked on them (`for_you`, at most two, and the full count); and one record
@@ -2063,12 +2112,30 @@ pub fn briefing(w: &World, pid: PlayerId, compact: bool) -> Value {
         .filter(|x| x.status == Status::Greenlit && (x.cast.contains(&pid) || x.pitched_by == pid))
         .map(|x| x.id)
         .collect();
+    let canon = c.pages.values().filter(|p| p.canon_tick.is_some()).count();
     let mut v = json!({
         "pages": c.pages.len(),
-        "canon": c.pages.values().filter(|p| p.canon_tick.is_some()).count(),
+        "canon": canon,
         "your_open_productions": mine_open,
-        "how": "chronicle action=list; write pages (0 AP), cite the record, endorse others' pages into canon, pitch productions. Guide: /chronicle.txt.",
+        "how": HOW,
     });
+    // Engine 1.59: the full briefing states the live rewards (compact keeps the counts only).
+    if !compact {
+        let r = &w.rules;
+        let (canon_pay, credit_pay) = (
+            reward_text(r.chronicle_canon_credits, r.chronicle_credits_per_day, CANON_INFLUENCE),
+            reward_text(r.chronicle_credit_credits, r.chronicle_credits_per_day, CREDIT_INFLUENCE),
+        );
+        if canon == 0 {
+            v["reward"] = json!(format!(
+                "The Chronicle has no canon page yet: the first pages endorsed into canon pay their creators {canon_pay} each."
+            ));
+        } else {
+            v["how"] = json!(format!(
+                "chronicle action=list; write pages (0 AP), cite the record, endorse others' pages into canon (a canon page pays its creator {canon_pay}), pitch productions (each captain credited in a release: {credit_pay}). Guide: /chronicle.txt."
+            ));
+        }
+    }
     let tpd = crate::player::ticks_per_day(&w.rules).max(1) as u64;
     let corp = w.players.get(&pid).and_then(|p| p.corp);
     let mine = Mine::of(w, pid);

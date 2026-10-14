@@ -8964,9 +8964,10 @@ mod improve_board {
         replays(&s);
     }
 
-    // 6. Awards: exact Influence and nothing else; refusals.
+    // 6. Awards: exact Influence, plus credits at the live rate into the bank (engine 1.59);
+    // refusals.
     #[test]
-    fn awards_are_influence_only_capped_and_idempotent() {
+    fn awards_pay_influence_and_credits_capped_and_idempotent() {
         let mut s = Sim::new(60, 60);
         let a = s.join("Alder");
         let b = s.join("Birch");
@@ -8989,15 +8990,27 @@ mod improve_board {
             op(json!({"decision":"award","id":id,"player":a,"amount":1500,"note":"Clean fix."})),
         )
         .unwrap();
+        let rate = s.w.rules.improve_credits_per_influence;
+        assert_eq!(rate, 25, "the default rate");
+        let paid = 1500 * rate;
         let after = af_core::careers::scores_json(&s.w, s.p(a));
         assert_eq!(after["influence"].as_i64().unwrap(), scores["influence"].as_i64().unwrap() + 1500);
-        assert_eq!(after["wealth"], scores["wealth"]);
+        assert_eq!(after["wealth"].as_i64().unwrap(), scores["wealth"].as_i64().unwrap() + paid);
         assert_eq!(after["conquest"], scores["conquest"]);
         assert_eq!(after["exploration"], scores["exploration"]);
-        assert_eq!(af_core::public::earned(&s.w, s.p(a)), earned);
-        assert_eq!((s.p(a).credits, s.p(a).bank, s.p(a).endowment), (p.credits, p.bank, p.endowment));
-        assert_eq!(s.p(a).stats, p.stats);
-        assert!(s.p(a).inbox.last().unwrap().text.contains("1500 Influence"));
+        assert_eq!(af_core::public::earned(&s.w, s.p(a)), earned + paid);
+        assert_eq!(
+            (s.p(a).credits, s.p(a).bank, s.p(a).endowment),
+            (p.credits, p.bank + paid, p.endowment),
+            "credits go into the bank; the endowment is unchanged"
+        );
+        assert_eq!(s.p(a).stats.society_rewards, p.stats.society_rewards + paid);
+        assert_eq!(s.w.improve.awards[0].credits, paid);
+        let text = &s.p(a).inbox.last().unwrap().text;
+        assert!(
+            text.contains("1500 Influence") && text.contains(&format!("{paid} credits")),
+            "{text}"
+        );
         let r = refuse(
             &mut s,
             Actor::System,
@@ -9029,6 +9042,37 @@ mod improve_board {
         assert_eq!(s.w.improve.awards.len(), 2);
         assert_eq!(s.w.improve.awards[0].key, format!("improve:{id}:{a}"));
         assert_eq!(s.w.improve.awards[0].commit, "abcdef1");
+        replays(&s);
+    }
+
+    // 6b. The credit rate is a live rule: 0 switches the credits off (Influence still counts).
+    #[test]
+    fn award_credits_follow_the_live_rate() {
+        let mut s = Sim::new(68, 60);
+        let a = s.join("Alder");
+        let b = s.join("Birch");
+        on(&mut s);
+        let id = submit(&mut s, a, "Fix");
+        patch(&mut s, a, id).unwrap();
+        s.run(Actor::System, op(json!({"decision":"ship","id":id,"commit":"abcdef1"})))
+            .unwrap();
+        set(&mut s, json!({"improve_credits_per_influence": 40}));
+        let bank = s.p(a).bank;
+        let out = s
+            .run(Actor::System, op(json!({"decision":"award","id":id,"player":a,"amount":1000})))
+            .unwrap();
+        assert_eq!(out.reply["credits"], 40_000);
+        assert_eq!(s.p(a).bank, bank + 40_000);
+        set(&mut s, json!({"improve_credits_per_influence": 0}));
+        let bank = s.p(b).bank;
+        let out = s
+            .run(Actor::System, op(json!({"decision":"award","id":id,"player":b,"amount":500})))
+            .unwrap();
+        assert_eq!((out.reply["credits"].as_i64(), s.p(b).bank), (Some(0), bank));
+        assert_eq!(influence(&s, b), 500);
+        assert!(!s.p(b).inbox.last().unwrap().text.contains("credits"));
+        let view = read(&s, a, json!({"action":"view","id":id}));
+        assert_eq!(view["item"]["awards"][0]["credits"], 40_000);
         replays(&s);
     }
 
@@ -9346,7 +9390,7 @@ fn game_rules_lists_every_improve_rule() {
     let rules = serde_json::to_value(&s.w.rules).unwrap();
     let view = af_core::query::game_info(&s.w)["improve"].clone();
     let keys: Vec<&String> = rules.as_object().unwrap().keys().filter(|k| k.starts_with("improve_")).collect();
-    assert_eq!(keys.len(), 20, "{keys:?}");
+    assert_eq!(keys.len(), 21, "{keys:?}");
     for k in keys {
         assert_eq!(view[&k["improve_".len()..]], rules[k], "game_rules improve lacks {k}");
     }
@@ -9369,7 +9413,11 @@ fn game_rules_lists_every_mention_and_language_rule() {
     let s = Sim::new(68, 60);
     let rules = serde_json::to_value(&s.w.rules).unwrap();
     let info = af_core::query::game_info(&s.w);
-    for (prefix, block, n) in [("mention_", "mentions", 2), ("language_", "languages", 3)] {
+    for (prefix, block, n) in [
+        ("mention_", "mentions", 2),
+        ("language_", "languages", 5),
+        ("chronicle_", "chronicle", 3),
+    ] {
         let view = info[block].clone();
         let keys: Vec<&String> = rules.as_object().unwrap().keys().filter(|k| k.starts_with(prefix)).collect();
         assert_eq!(keys.len(), n, "{keys:?}");

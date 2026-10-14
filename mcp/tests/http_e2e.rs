@@ -1919,11 +1919,14 @@ async fn the_improve_board_over_mcp_and_the_operator_actions() {
     .unwrap();
     assert!(r["summary"].as_str().is_some(), "{r}");
     assert_eq!(game.read(move |w| af_core::improve::influence(w, bo)).await, 500);
+    // Engine 1.59: the award also pays credits at the live rate into the bank.
+    let rate = game.read(|w| w.rules.improve_credits_per_influence).await;
     assert_eq!(
         game.read(move |w| (w.players[&bo].credits, w.players[&bo].bank)).await,
-        credits,
-        "awards are Influence only"
+        (credits.0, credits.1 + 500 * rate),
+        "awards pay Influence and credits"
     );
+    assert_eq!(r["result"]["credits"].as_i64(), Some(500 * rate), "{r}");
     let r = action(
         "improve",
         json!({"decision": "award", "id": id, "player": "Nobody Here", "amount": 10}),

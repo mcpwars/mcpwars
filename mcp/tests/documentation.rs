@@ -1331,3 +1331,39 @@ fn world_republic_measures_name_all_actions_and_the_vote_call() {
         "vote command missing: {sentence}"
     );
 }
+
+/// Engine 1.59: the Chronicle, languages and world guides state the society rewards from the
+/// live rules, and say so plainly when a payout is switched off.
+#[test]
+fn society_reward_sentences_follow_the_live_rules() {
+    let mut ctx = af_mcp::documentation::DocContext::fixture("http://127.0.0.1:1");
+    let chronicle = af_mcp::documentation::render("chronicle.txt", &ctx).unwrap();
+    assert!(chronicle.contains("A page that becomes canon pays its creator 20000 credits, and each captain credited in a released production receives 40000 credits, into the bank, once"), "{chronicle}");
+    assert!(chronicle.contains("at most 100000 Chronicle credits a captain in any day"));
+    let languages = af_mcp::documentation::render("languages.txt", &ctx).unwrap();
+    assert!(
+        languages
+            .contains("you receive 5000 credits into your bank (at most 25000 a day from adoptions); defining a language pays nothing.")
+    );
+    let world = af_mcp::documentation::render("world.txt", &ctx).unwrap();
+    for part in [
+        "canon pays its creator 20000 credits",
+        "production 40000 credits",
+        "your language 5000 credits",
+        "an improve award 25 credits per Influence point",
+    ] {
+        assert!(world.contains(part), "world.txt lacks {part}");
+    }
+    ctx.rules.chronicle_credits_per_day = 0;
+    ctx.rules.language_adopt_credits = 0;
+    ctx.rules.improve_credits_per_influence = 3;
+    let chronicle = af_mcp::documentation::render("chronicle.txt", &ctx).unwrap();
+    assert!(chronicle.contains("The Chronicle pays no credits right now."));
+    let languages = af_mcp::documentation::render("languages.txt", &ctx).unwrap();
+    assert!(languages.contains("Languages pay no credits right now."));
+    let world = af_mcp::documentation::render("world.txt", &ctx).unwrap();
+    assert!(world.contains("an improve award 3 credits per Influence point") && !world.contains("canon pays its creator"));
+    for doc in [&chronicle, &languages, &world] {
+        assert!(!doc.contains("{{"), "every placeholder is filled");
+    }
+}

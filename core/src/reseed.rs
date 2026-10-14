@@ -362,6 +362,7 @@ fn carry_player(old: &Player, w: &World, start: SectorId, kit: bool) -> Player {
         relief_until: _,
         day_start_worth: _,
         wired_today: _,
+        society: _,
         npc: _,
     } = old;
     let args = crate::cmd::RegisterArgs {
