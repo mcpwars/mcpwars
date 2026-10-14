@@ -886,6 +886,13 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   withdraw up to their claim; the CEO also takes free funds (members are notified); corporate costs
   use free funds then the CEO's credits and are refused rather than touching claims; claims are paid
   back on leave, kick and disband and cleared with the treasury at a Big Bang.
+- **The operator merges corporations** (engine 1.60, admin `MergeCorps`, action `merge_corps`;
+  `corp::merge` and `diplomacy::merge_corps`): `from`'s members, treasury, deposits (still claims)
+  and record (`CorpRecord::absorb`) join `into`, which keeps its id, government, ledger and seat;
+  `from` is removed. Open treaties and wars between the two, or binding `into` to a new member,
+  end with bonds returned; `from`'s others pass to `into` unless it already has the same kind with
+  that party. Corporation market reports pass on; `from`'s corporation radio stays on its channel.
+  The required `message` reaches every member of both as an operator message (`sysop` notice).
 - **Shared fighter stacks** (`FighterStack.shares`, empty = all the owner's): every drop in `count` goes
   through `FighterStack::shrink_to` (proportional, largest remainder, ties to the lower id) so shares
   always sum to the count. Tolls, concession yield, net worth and `retrieve` follow shares.

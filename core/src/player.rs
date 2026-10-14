@@ -569,7 +569,8 @@ pub fn admin(ctx: &mut Ctx, a: &AdminArgs) -> Res<Outcome> {
         | AdminArgs::CorpRemoveMember { .. }
         | AdminArgs::CorpInvite { .. }
         | AdminArgs::CorpUninvite { .. }
-        | AdminArgs::DisbandCorp { .. } => crate::corp::admin(ctx, a),
+        | AdminArgs::DisbandCorp { .. }
+        | AdminArgs::MergeCorps { .. } => crate::corp::admin(ctx, a),
         AdminArgs::ResolveFeedback { id, note, reopen } => crate::feedback::resolve(ctx, *id, note, *reopen),
         AdminArgs::Chronicle(c) => crate::chronicle::admin(ctx, c),
         AdminArgs::Improve(i) => crate::improve::admin(ctx, i),

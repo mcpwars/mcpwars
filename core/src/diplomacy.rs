@@ -358,6 +358,111 @@ fn same_side(w: &World, me: Party, other: Party) -> Option<&'static str> {
     }
 }
 
+/// What a merger did to treaties and wars (engine 1.60).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Merged {
+    pub treaties_moved: usize,
+    pub treaties_ended: usize,
+    pub wars_moved: usize,
+    pub wars_ended: usize,
+}
+
+/// The operator merges corporation `from` into `into` (engine 1.60). Called after `from`'s members
+/// have joined `into` and before `from` is removed, so bonds returned to `from` reach its treasury
+/// and move with it. Open treaties (proposed, active, ending) that `from` is a party to pass to
+/// `into`, except one that would bind `into` to itself (a treaty between the two, or with a captain
+/// who is now a member) or repeat a kind `into` already has with the same party: those end with
+/// both bonds returned. `into`'s own treaties with a captain who just joined it end the same way.
+/// Open wars between the two end; `from`'s others pass to `into` unless it already fights that
+/// corporation, when they end. Ended treaties and wars keep their original sides on the record.
+pub fn merge_corps(ctx: &mut Ctx, from: CorpId, into: CorpId) -> Merged {
+    let t = ctx.w.tick;
+    let mut n = Merged::default();
+    let open = |s: TreatyStatus| matches!(s, TreatyStatus::Proposed | TreatyStatus::Active | TreatyStatus::Ending);
+    let ours = |x: &Treaty, c: CorpId| side_a(x) == Party::Corp(c) || side_b(x) == Party::Corp(c);
+    // `into`'s own first, so a repeat is always `from`'s copy that ends.
+    let mut ids: Vec<(u64, bool)> = ctx
+        .w
+        .treaties
+        .values()
+        .filter(|x| open(x.status) && ours(x, into) && !ours(x, from))
+        .map(|x| (x.id, false))
+        .collect();
+    ids.extend(
+        ctx.w
+            .treaties
+            .values()
+            .filter(|x| open(x.status) && ours(x, from))
+            .map(|x| (x.id, true)),
+    );
+    for (id, absorbed) in ids {
+        let x = ctx.w.treaties[&id].clone();
+        let mut moved = x.clone();
+        if moved.a_player.is_none() && moved.a == from {
+            moved.a = into;
+        }
+        if moved.b_player.is_none() && moved.b == from {
+            moved.b = into;
+        }
+        let (a, b) = (side_a(&moved), side_b(&moved));
+        let repeat = absorbed
+            && ctx.w.treaties.values().any(|o| {
+                o.id != id
+                    && open(o.status)
+                    && o.kind == moved.kind
+                    && !ours(o, from)
+                    && ((side_a(o) == a && side_b(o) == b) || (side_a(o) == b && side_b(o) == a))
+            });
+        if a == b || same_side(ctx.w, a, b).is_some() || repeat {
+            refund(ctx, &x);
+            let e = ctx.w.treaties.get_mut(&id).unwrap();
+            e.status = if x.status == TreatyStatus::Proposed {
+                TreatyStatus::Rejected
+            } else {
+                TreatyStatus::Ended
+            };
+            e.ends_tick = Some(t);
+            n.treaties_ended += 1;
+        } else if absorbed {
+            ctx.w.treaties.insert(id, moved);
+            n.treaties_moved += 1;
+        }
+    }
+    let wars: Vec<u64> = ctx
+        .w
+        .wars
+        .values()
+        .filter(|x| x.status != WarStatus::Ended && (x.attacker == from || x.defender == from))
+        .map(|x| x.id)
+        .collect();
+    for id in wars {
+        let x = ctx.w.wars[&id].clone();
+        let (att, def) = (
+            if x.attacker == from { into } else { x.attacker },
+            if x.defender == from { into } else { x.defender },
+        );
+        let repeat = ctx.w.wars.values().any(|o| {
+            o.id != id
+                && o.status != WarStatus::Ended
+                && o.attacker != from
+                && o.defender != from
+                && ((o.attacker == att && o.defender == def) || (o.attacker == def && o.defender == att))
+        });
+        let e = ctx.w.wars.get_mut(&id).unwrap();
+        if att == def || repeat {
+            e.status = WarStatus::Ended;
+            e.ends_tick = e.ends_tick.min(t);
+            e.outcome = Some("ended by a merger".into());
+            n.wars_ended += 1;
+        } else {
+            e.attacker = att;
+            e.defender = def;
+            n.wars_moved += 1;
+        }
+    }
+    n
+}
+
 // ---------- commands ----------
 
 pub fn treaty(ctx: &mut Ctx, pid: PlayerId, a: &TreatyArgs) -> Res<Outcome> {

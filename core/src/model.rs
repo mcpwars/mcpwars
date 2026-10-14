@@ -895,6 +895,39 @@ impl CorpRecord {
     pub fn is_empty(&self) -> bool {
         *self == CorpRecord::default()
     }
+
+    /// Add another corporation's record (a merger, engine 1.60): every count is a fact about the
+    /// merged corporation's parts.
+    pub fn absorb(&mut self, o: &CorpRecord) {
+        let CorpRecord {
+            treaties_signed,
+            treaties_kept,
+            treaties_broken,
+            bonds_forfeited,
+            toll_bonus_total,
+            tax_collected,
+            grants_paid,
+            elections,
+            measures_passed,
+            offences,
+            fines_collected,
+            pardons,
+            concession_bonus_total,
+        } = o;
+        self.treaties_signed += treaties_signed;
+        self.treaties_kept += treaties_kept;
+        self.treaties_broken += treaties_broken;
+        self.bonds_forfeited += bonds_forfeited;
+        self.toll_bonus_total += toll_bonus_total;
+        self.tax_collected += tax_collected;
+        self.grants_paid += grants_paid;
+        self.elections += elections;
+        self.measures_passed += measures_passed;
+        self.offences += offences;
+        self.fines_collected += fines_collected;
+        self.pardons += pardons;
+        self.concession_bonus_total += concession_bonus_total;
+    }
 }
 
 impl Corp {

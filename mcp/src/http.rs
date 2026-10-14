@@ -1501,6 +1501,55 @@ pub async fn run_admin(game: &Game, cfg: &HttpConfig, action: &str, b: Value) ->
                     .map(|o| json!({"summary": o.summary, "corp": o.reply["corp"]})),
             }
         }
+        "merge_corps" => {
+            // Merge `from` into `into` (engine 1.60): corporations by id or name, the CEO by call
+            // sign or id; `message` explains it to every member of both.
+            let (from_q, into_q, ceo_q) = (b["from"].clone(), b["into"].clone(), b["ceo"].clone());
+            let (from, into, ceo) = game
+                .read(move |w| {
+                    let corp = |v: &Value| {
+                        v.as_u64().map(|c| c as u32).filter(|c| w.corps.contains_key(c)).or_else(|| {
+                            let n = v.as_str()?.trim();
+                            w.corps
+                                .values()
+                                .find(|c| c.name.eq_ignore_ascii_case(n) || n.trim_start_matches('#').parse::<u32>().ok() == Some(c.id))
+                                .map(|c| c.id)
+                        })
+                    };
+                    let ceo = ceo_q
+                        .as_u64()
+                        .map(|p| p as u32)
+                        .filter(|p| w.players.contains_key(p))
+                        .or_else(|| ceo_q.as_str().and_then(|n| w.player_by_name(n.trim())).map(|p| p.id));
+                    (corp(&from_q), corp(&into_q), ceo)
+                })
+                .await;
+            let (Some(from), Some(into)) = (from, into) else {
+                let which = if from.is_none() { "from" } else { "into" };
+                return Some(Err(af_core::Refusal::new(
+                    "unknown_corp",
+                    format!("No corporation with that id or name for {which}."),
+                )));
+            };
+            if !b["ceo"].is_null() && b["ceo"] != "" && ceo.is_none() {
+                return Some(Err(af_core::Refusal::new(
+                    "unknown_player",
+                    "No captain with that id or name for ceo.",
+                )));
+            }
+            game.exec(
+                Actor::System,
+                Command::Admin(AdminArgs::MergeCorps {
+                    from,
+                    into,
+                    message: b["message"].as_str().unwrap_or("").to_string(),
+                    name: b["name"].as_str().map(String::from),
+                    ceo,
+                }),
+            )
+            .await
+            .map(|o| json!({"summary": o.summary, "corp": o.reply["corp"]}))
+        }
         "corp_radio" => {
             // The operator posts on one corporation's channel (by id or name); members answer there.
             let corp = b["corp"].as_u64().map(|c| c as u32);
