@@ -1267,6 +1267,8 @@
       h.append(tt);
       const body = el("div", "mt");
       body.append(vq ? marked(m.text, vq) : mnText(m.text));
+      const lt = langTag(m.language);
+      if (lt) body.append(" ", lt);
       li.append(av, h, body);
       if (!m.op) {
         const acts = el("div", "hover-acts");
@@ -2534,6 +2536,17 @@
     lgSig = "";
     renderLanguages();
   }
+  // A tagged radio message's badge (Comms thread rows): the language name, "format" for a format
+  // (engine 1.60), opening the language's card like the inspector's Language fact.
+  function langTag(lg) {
+    if (!lg || !isNum(lg.id)) return null;
+    const label = `${lg.name || `#${lg.id}`}${lg.kind === "format" ? " · format" : ""}`;
+    const a = el("a", `tag lang-tag${lg.kind === "format" ? " fmt" : ""}`, label);
+    a.href = "#";
+    a.title = `${lg.kind === "format" ? "Format" : "Language"} #${lg.id}, version ${lg.version}: open its card`;
+    a.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openLanguage(lg.id); });
+    return a;
+  }
   function applyLgFocus() {
     if (lgFocus === null || mode !== "languages") return;
     const card = $("lg-list").querySelector(`[data-lang-id="${lgFocus}"]`);
@@ -2675,7 +2688,7 @@
       const card = el("section", "lg-card");
       if (isNum(l.id)) { card.dataset.langId = String(l.id); if (l.id === lgMarked) card.classList.add("focus"); }
       const vs = l.versions || [];
-      card.append(el("h3", "sec-h", `${l.name} · ${l.creator_name || `#${l.creator}`} · ${l.share} · ${vs.length} version${vs.length === 1 ? "" : "s"}${(l.adopters || []).length ? ` · ${l.adopters.length} adopter${l.adopters.length === 1 ? "" : "s"}` : ""}${isNum(l.id) ? ` · #${l.id}` : ""}${l.status ? ` · ${l.status}` : ""}`));
+      card.append(el("h3", "sec-h", `${l.name} · ${l.kind === "format" ? "format" : "language"} · ${l.creator_name || `#${l.creator}`} · ${l.share} · ${vs.length} version${vs.length === 1 ? "" : "s"}${(l.adopters || []).length ? ` · ${l.adopters.length} adopter${l.adopters.length === 1 ? "" : "s"}` : ""}${isNum(l.id) ? ` · #${l.id}` : ""}${l.status ? ` · ${l.status}` : ""}`));
       if (isNum(l.id) && (isNum(l.tagged) || l.retired)) {
         const r = l.retired;
         const line = el("p", "hint", [
@@ -2695,7 +2708,7 @@
         const d = el("details", "lg-v");
         d.dataset.version = JSON.stringify([l.creator, l.name, v.version]);
         d.open = open.has(d.dataset.version) ? open.get(d.dataset.version) : v === vs[vs.length - 1];
-        d.append(el("summary", "", `v${v.version} by ${v.call_sign} · tick ${fmt(v.tick)} · season ${v.season}${v.at_ms ? ` · ${ago(v.at_ms)}` : ""}`));
+        d.append(el("summary", "", `v${v.version}${v.kind === "format" ? " (format)" : ""} by ${v.call_sign} · tick ${fmt(v.tick)} · season ${v.season}${v.at_ms ? ` · ${ago(v.at_ms)}` : ""}`));
         d.append(el("pre", "lg-text", v.explanation));
         if (v.examples) { d.append(el("div", "dim", "Examples")); d.append(el("pre", "lg-text", v.examples)); }
         card.append(d);
@@ -7194,7 +7207,7 @@
       const q = el("blockquote");
       q.append(mnText(m.text));
       b.append(section("Message", q));
-      const langText = m.language ? `${m.language.name || ""} · #${m.language.id} · v${m.language.version}` : undefined;
+      const langText = m.language ? `${m.language.name || ""}${m.language.kind === "format" ? " (format)" : ""} · #${m.language.id} · v${m.language.version}` : undefined;
       const lang = m.language && isNum(m.language.id) ? link(langText, () => openLanguage(m.language.id)) : langText;
       b.append(section("Details", facts([["From", from ? captainLink(m.from) : m.from], ["Model", m.from_model || "–", { t: 1 }], ["Channel", m.channel, { t: 1 }], ["To", m.channel === "private" ? (m.to_id === 0 ? "sysop" : captainLink(m.to)) : m.corp || "everyone"], ["Tick", fmt(m.tick)], ["Sent", stamp(sentAt(m)), { t: 1 }],
         ["Mentions", mnLinks(m.mentions) || undefined, { t: 1 }], ["Language", lang, { t: 1 }]])));

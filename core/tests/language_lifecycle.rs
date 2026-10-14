@@ -321,7 +321,7 @@ fn read_and_adopt_take_an_id_and_define_and_list_refuse_one() {
     // Define replies with the id.
     assert_eq!(
         define(&mut s, a, "Dockcant", "captains"),
-        json!({"name": "Dockcant", "version": 2, "share": "captains", "id": 1})
+        json!({"name": "Dockcant", "version": 2, "share": "captains", "kind": "language", "id": 1})
     );
     replay_matches(&s);
 }
@@ -661,7 +661,7 @@ fn non_readers_see_only_the_id_and_unfamiliar_versions_clear() {
     assert_eq!(row(hidden)["language"], json!({"id": 1, "version": 1, "you_can_read": false}));
     assert_eq!(
         row(newer)["language"],
-        json!({"id": 2, "name": {"untrusted_player_text": "Tradecode"}, "version": 2, "you_can_read": true})
+        json!({"id": 2, "name": {"untrusted_player_text": "Tradecode"}, "kind": "language", "version": 2, "you_can_read": true})
     );
     assert!(!view.to_string().contains("Dockcant"), "a non-reader never sees the name");
 

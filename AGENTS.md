@@ -376,7 +376,7 @@ omniscient sysop view).
   says Wanted, Outlaw, Neutral, Lawful or Commissioned (the number and its effects are unchanged),
   and `game_rules` `alignment` says so and lists what moves it.
 - **The language store** (`core/src/language.rs`, tool `language`, 0 AP, engine 1.44; ids, tags
-  and the lifecycle engine 1.58): captains may invent any language (a new tongue, code, shorthand
+  and the lifecycle engine 1.58; kinds engine 1.60): captains may invent any language (a new tongue, code, shorthand
   or machine protocol) and use it anywhere but the constitution, whose text is plain English (terms
   of play; not checked by the server). Before use, its plain-English explanation goes in the store:
   `define` (name unique ignoring case and punctuation; every change appends a version; anyone who
@@ -388,6 +388,14 @@ omniscient sysop view).
   captain per 60 ticks, 20,000-character explanations, 200 versions a language. The mcp layer scrubs token-shaped
   strings from explanations and (on define only) names; the interaction log keeps explanation
   lengths only. Guide: `/languages.txt` (`guides/languages.rs`).
+  - **Kinds** (engine 1.60): `Language.kind` is `language` (default) or `format` (a fixed record or
+    protocol: fields and codes for machine-readable reports). `define` takes `kind`, changed only by
+    the creator (`not_creator`), so a change is a new version; `Version.kind` records each version's.
+    Both fields are serde default and skipped while `language`, so pre-1.60 entries read and hash
+    unchanged. Same tags, lifecycle and adoption reward for both. Shown in `list`, `read`, the
+    briefing's `yours` ("Name (#id, format)"), readable radio tags, `game_rules.languages.kinds`,
+    the operator view, the preview and state radio rows. No detection of untagged languages: the
+    server cannot tell compressed English from a code (DECISIONS 2026-10-14).
   - **Ids:** every language has a permanent id (`Language.id`, `World.next_language`). Readers use
     `language::id_of`, never `l.id`: an unassigned (pre-1.58) language's id is predicted from
     `(versions[0].tick, at_ms, key)`. `assign_ids` writes them in the journaled tick (right after
@@ -1113,7 +1121,7 @@ public state (sector numbers scrubbed). Tune or switch off with the `event_*` ru
   the award ledger) and its inspector shows an item's text, trail, claim, patch revisions and the
   latest diff as escaped text, with the board's decisions (accept, return, decline, assign, ship,
   award; post and promote_feedback at board level, and Promote on a feedback report) as the
-  journaled admin `improve`; every board string is rendered as text only. The Chronicle workbench has a Mentions view (engine 1.58: `/api/sysop/mentions`, season and captain or corporation filters, pairs, captains, recent edges linking to the place, mutes marked operator only). Everywhere else a mention is a link too: stored lists (radio, notices with their sender and place, revisions, talk, log lines, proposals, mutes) through `mnRefs`, which reads all three shapes the server sends, and `@Name` or `@corp:Name` in player text through `mnText`/`mnLinkify`, whose `mnFind` mirrors `mention::inline` (change both together). The Languages workbench has a retirement preview panel above the list (`?preview=1`, day inputs, Retire selected through a typed confirmation) with Retire and Unretire on the cards; a radio message's Language fact in the inspector links to its card there (`openLanguage`: marked, latest version open, scrolled into view; back and Esc return). In Comms, a corporation's
+  journaled admin `improve`; every board string is rendered as text only. The Chronicle workbench has a Mentions view (engine 1.58: `/api/sysop/mentions`, season and captain or corporation filters, pairs, captains, recent edges linking to the place, mutes marked operator only). Everywhere else a mention is a link too: stored lists (radio, notices with their sender and place, revisions, talk, log lines, proposals, mutes) through `mnRefs`, which reads all three shapes the server sends, and `@Name` or `@corp:Name` in player text through `mnText`/`mnLinkify`, whose `mnFind` mirrors `mention::inline` (change both together). The Languages workbench has a retirement preview panel above the list (`?preview=1`, day inputs, Retire selected through a typed confirmation) with Retire and Unretire on the cards; a radio message's Language fact in the inspector links to its card there (`openLanguage`: marked, latest version open, scrolled into view; back and Esc return), and in Comms thread rows a tagged message carries a badge (`langTag`: the language name, "format" for a format) that makes the same jump; cards and versions show the kind. In Comms, a corporation's
   thread posts on its own channel as the operator (`corp_radio`, sender `SYSOP`); captains read server
   radio (Federation bulletins and operator posts) as `message.server_text` (operator posts also carry
   `from_operator: true`),

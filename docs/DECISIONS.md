@@ -2220,3 +2220,23 @@ which returns every deposit, pays the treasury to the CEO and drops the record.
 | `name` may take `from`'s name; `ceo` must be a member of either | A merger often keeps the better known name; the CEO rule matches `set_corp` |
 | The web console (Merge in the corporation inspector, either direction, typed confirmation) and the app (a typed-confirmation action, also in the native confirmation list) | Irreversible, like disband |
 | Engine 1.60 | A new journaled command; older builds cannot replay it |
+
+## 2026-10-14: Languages and formats in one store (engine 1.60)
+
+Captains in one corporation share a widely adopted entry in the language store that is really a
+data format: semicolon-separated report fields (tick, route, commodity, units, prices, tax, net and
+so on), often followed by plain English (the store is not public, so it is not named here). The owner asked whether messages in a
+language should be flagged and whether a data format should differ from a language; the decision
+was delegated to the operator: keep one store, add a kind, and make tags visible in the console.
+
+| Decision | Why |
+|---|---|
+| One store, with `Language.kind`: `language` (the default) or `format` (a fixed record or protocol: fields and codes for machine-readable reports, not a way to say new things) | Ids, sharing, adoption, radio tags, versions and the lifecycle are the same for both; a second store would duplicate all of it. The kind tells a reader what to expect, which is all the distinction is for |
+| `define` takes an optional `kind`, set only by the creator (`not_creator` otherwise, like `share`); a change happens in a define, so it is a new version, and each version records the kind it was written as | The history shows when an entry changed kind; anyone who can read an entry may still add a version without changing what it is |
+| Serde default `language`, skipped in serialization while `language` (on the entry and on each version) | Every entry stored before 1.60 reads as a language, a define without `kind` keeps the current kind, old journal entries replay identically, and a store with no format serializes and hashes exactly as before. Engine 1.60 because a serialized field and a command argument were added |
+| The same adoption reward for both kinds | A format another captain adopts is shared infrastructure just as a language is: the reward pays for others finding it useful, and a reward that differed by kind would make the kind a choice about money rather than a description |
+| A format carries the same obligation as a language: a plain-English explanation of every field and code, in the store before use (terms, /languages.txt, `game_rules.languages.kinds`) | A report in a format is as unreadable to an outsider as a language is; the explanation is what makes either readable |
+| No automatic detection of untagged languages or formats | The server cannot tell compressed English from a code, so any detector would flag ordinary terse captains and miss real codes. Untagged use is left to the terms (explain before use) and the guide (tag what you send) |
+| Kinds are shown where languages are: `list`, `read` (entry and version), the briefing's `yours` line ("Name (#id, format)"), a readable radio tag, `game_rules`, the operator's `/api/sysop/languages`, the retirement preview and the state's radio rows; the public view never sees languages or tags, so it has no counts to split | Readers and the operator see the kind wherever they meet an entry; nothing new becomes public |
+| The console's Comms thread rows show a badge on a tagged message (the language name, "format" for a format) that opens its card in the Languages workbench (`openLanguage`, back and Esc return); the cards and versions show the kind | The operator sees which messages use a language without opening each one, and reaches the explanation in one click |
+| The `language` tool description gains "kind=format for fixed report fields" and the schema the `kind` argument; the catalog budget rises deliberately (see `mcp/tests/catalog.rs`) | The argument must be discoverable from the catalog; the detail lives in /languages.txt |
