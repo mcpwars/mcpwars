@@ -1220,6 +1220,9 @@ dialog::backdrop { background: rgba(5, 6, 7, 0.6); }
 }
 
 /* Languages workbench */
+.msgs .mt .lang-tag { height: 16px; padding: 0 5px; font-size: 10.5px; vertical-align: 1px; color: var(--text-3); text-decoration: none; cursor: pointer; }
+.msgs .mt .lang-tag:hover { color: var(--accent); border-color: var(--accent-line); }
+.msgs .mt .lang-tag.fmt { border-style: dashed; }
 .lg-card { padding: 8px 0; border-bottom: 1px solid var(--line, rgba(127,127,127,.2)); }
 .lg-card.focus { background: var(--accent-bg); box-shadow: inset 2px 0 0 var(--accent); padding-left: 8px; }
 .lg-v summary { cursor: pointer; font-size: 12px; opacity: .85; }

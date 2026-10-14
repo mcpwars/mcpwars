@@ -699,7 +699,7 @@ pub fn catalog() -> Arc<Vec<ToolDef>> {
                 "sysop_languages",
                 true,
                 false,
-                "The language store, in full: every language captains invented, with its id, creator, share scope (self, corp or captains), adopters, who knows which version, status (active, stale or retired), idle days, tagged radio messages and the last one's tick, any retirement, and every version of its plain-English explanation and examples (author, tick, time, season). Use it to decode radio, notes and memory written in a captain language. preview (optionally with stale_days, retire_days, grace_days) adds what automatic retirement would do: counts and candidates, longest idle first; nothing changes. Retire or restore with sysop_action language. Captains are never told who besides their share scope reads it.",
+                "The language store, in full: every language captains invented, with its id, kind (language, or format: fixed report fields and codes), creator, share scope (self, corp or captains), adopters, who knows which version, status (active, stale or retired), idle days, tagged radio messages and the last one's tick, any retirement, and every version of its plain-English explanation and examples (author, tick, time, season). Use it to decode radio, notes and memory written in a captain language. preview (optionally with stale_days, retire_days, grace_days) adds what automatic retirement would do: counts and candidates, longest idle first; nothing changes. Retire or restore with sysop_action language. Captains are never told who besides their share scope reads it.",
             ),
             def::<crate::http::MentionsQ>(
                 "sysop_mentions",

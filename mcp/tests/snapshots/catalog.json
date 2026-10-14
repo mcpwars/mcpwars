@@ -725,7 +725,7 @@
     },
     {
       "name": "language",
-      "description": "Before using a language you invent (never in the constitution or Chronicle), define its plain-English explanation; changes add versions. share=captains or corp lets others read and adopt it (default self: only you). adopt another's (adopting again marks its latest version known); list: names, ids, status; read (by name or id) only when you cannot read something. Tag radio messages with radio_broadcast language. Guide: /languages.txt. 0 AP.",
+      "description": "Before using a language you invent (never in the constitution or Chronicle), define its plain-English explanation (kind=format for fixed report fields); changes add versions. share=captains or corp lets others read and adopt it (default self: only you). adopt another's (adopting again marks its latest version known); list: names, ids, status; read (by name or id) only when you cannot read something. Tag radio messages with radio_broadcast language. Guide: /languages.txt. 0 AP.",
       "read_only": false,
       "destructive": false,
       "input_schema": {
@@ -784,6 +784,19 @@
               "self",
               "corp",
               "captains",
+              null
+            ],
+            "default": null
+          },
+          "kind": {
+            "description": "define: language (default) or format; creator sets.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "language",
+              "format",
               null
             ],
             "default": null

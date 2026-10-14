@@ -158,8 +158,8 @@ fn radio_json(w: &World, m: &RadioMsg) -> Value {
         });
     }
     if let Some(t) = &m.language {
-        let name = crate::language::by_ref(w, &crate::language::LangRef::Id(t.id)).map(|(_, l)| l.name.clone());
-        v["language"] = json!({"id": t.id, "name": name, "version": t.version});
+        let l = crate::language::by_ref(w, &crate::language::LangRef::Id(t.id)).map(|(_, l)| l);
+        v["language"] = json!({"id": t.id, "name": l.map(|l| l.name.clone()), "kind": l.map(|l| l.kind), "version": t.version});
     }
     v
 }
@@ -211,7 +211,7 @@ mod tests {
         let r = state(&w)["radio"][0].clone();
         assert_eq!(r["mentions"]["captains"], json!([{"id": 9_998, "name": "#9998"}]));
         assert_eq!(r["mentions"]["corps"], json!([{"id": 77, "name": "Iron Tide"}]));
-        assert_eq!(r["language"], json!({"id": 5, "name": null, "version": 2}));
+        assert_eq!(r["language"], json!({"id": 5, "name": null, "kind": null, "version": 2}));
         assert!(state(&w)["radio"][1].get("mentions").is_none());
         for i in 0..300 {
             w.radio.push(msg(10 + i, 1, "A", Channel::Public));
