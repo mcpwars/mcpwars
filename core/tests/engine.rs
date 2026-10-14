@@ -9777,3 +9777,117 @@ mod bounds {
         .unwrap();
     }
 }
+
+#[test]
+fn the_operator_merges_corporations_and_replay_matches() {
+    let mut s = Sim::new(29, 150);
+    let (a, b, c, d, e) = (s.join("Ada"), s.join("Bex"), s.join("Cyr"), s.join("Dov"), s.join("Eli"));
+    corp_create(&mut s, a, "Alpha Line");
+    corp_create(&mut s, b, "Beta Guild");
+    corp_create(&mut s, c, "Gamma Works");
+    corp_create(&mut s, e, "Delta Yard");
+    let (alpha, beta, gamma, delta) = (
+        s.p(a).corp.unwrap(),
+        s.p(b).corp.unwrap(),
+        s.p(c).corp.unwrap(),
+        s.p(e).corp.unwrap(),
+    );
+    let admin = |s: &mut Sim, x: AdminArgs| s.run(Actor::System, Command::Admin(x));
+    admin(&mut s, AdminArgs::CorpAddMember { corp: beta, player: d }).unwrap();
+    corp_cmd(&mut s, d, CorpAction::Deposit, None, None, Some(1_000)).unwrap();
+    // A bonded pact between the two (ends), one with Gamma (passes to Alpha) and Delta's war on
+    // Beta (passes to Alpha).
+    let propose = |s: &mut Sim, by: PlayerId, to: &str| {
+        let mut t = treaty_args(TreatyAction::Propose);
+        t.kind = Some(TreatyKind::Nap);
+        t.corp = Some(to.into());
+        t.bond = Some(500);
+        s.run(Actor::Player(by), Command::Treaty(t)).unwrap().reply["treaty_id"]
+            .as_u64()
+            .unwrap()
+    };
+    let accept = |s: &mut Sim, by: PlayerId, id: u64| {
+        let mut t = treaty_args(TreatyAction::Accept);
+        t.treaty_id = Some(id);
+        s.run(Actor::Player(by), Command::Treaty(t)).unwrap();
+    };
+    let ab = propose(&mut s, a, "Beta Guild");
+    accept(&mut s, b, ab);
+    let bg = propose(&mut s, b, "Gamma Works");
+    accept(&mut s, c, bg);
+    let war = s
+        .run(
+            Actor::Player(e),
+            Command::War(WarArgs {
+                action: WarAction::Declare,
+                corp: Some("Beta Guild".into()),
+                war_id: None,
+                objective: Some("ore".into()),
+                tribute: None,
+            }),
+        )
+        .unwrap()
+        .reply["war_id"]
+        .as_u64()
+        .unwrap();
+    let merge = |from, into, message: &str, name: Option<&str>, ceo| AdminArgs::MergeCorps {
+        from,
+        into,
+        message: message.into(),
+        name: name.map(String::from),
+        ceo,
+    };
+    // Refused before anything changes.
+    assert!(admin(&mut s, merge(beta, beta, "why", None, None)).is_err(), "not into itself");
+    assert!(
+        admin(&mut s, merge(beta, alpha, "  ", None, None)).is_err(),
+        "an explanation is required"
+    );
+    assert!(
+        admin(&mut s, merge(beta, alpha, "why", None, Some(c))).is_err(),
+        "the CEO is a member of one of them"
+    );
+    assert!(
+        admin(&mut s, merge(beta, alpha, "why", Some("Gamma Works"), None)).is_err(),
+        "names stay unique"
+    );
+    assert!(s.w.corps.contains_key(&beta) && s.p(b).corp == Some(beta));
+
+    let (ta, tb) = (s.w.corps[&alpha].treasury, s.w.corps[&beta].treasury);
+    let why = "Beta Guild asked to join Alpha Line after the ore war.";
+    let out = admin(&mut s, merge(beta, alpha, why, Some("Beta Guild"), Some(b))).unwrap();
+    assert!(out.summary.contains("Merged Beta Guild"), "{}", out.summary);
+    assert!(!s.w.corps.contains_key(&beta), "the absorbed corporation is gone");
+    let k = &s.w.corps[&alpha];
+    assert_eq!(k.name, "Beta Guild", "the merged corporation may take the absorbed one's name");
+    assert_eq!(k.ceo, b);
+    for p in [a, b, d] {
+        assert_eq!(s.p(p).corp, Some(alpha));
+        assert!(k.members.contains(&p));
+    }
+    // Both treasuries plus the two bonds the ended pact returned; Dov's deposit carried over.
+    assert_eq!(k.treasury, ta + tb + 1_000);
+    assert_eq!(k.deposits.get(&d), Some(&1_000));
+    assert_eq!(k.record.treaties_signed, 3, "records add up: Alpha signed one pact, Beta two");
+    assert_eq!(s.w.treaties[&ab].status, TreatyStatus::Ended, "a pact between the two ends");
+    let moved = &s.w.treaties[&bg];
+    assert_eq!(
+        (moved.status, moved.a, moved.b),
+        (TreatyStatus::Active, alpha, gamma),
+        "Beta's pact passes to the merged corporation"
+    );
+    let w = &s.w.wars[&war];
+    assert_eq!((w.attacker, w.defender, w.status), (delta, alpha, WarStatus::Declared));
+    assert!(k.gov.ledger.iter().any(|x| x.kind == "merge"));
+    // Every member of both reads the operator's explanation as a trusted operator message.
+    for p in [a, b, d] {
+        assert!(s.p(p).inbox.iter().any(|n| n.kind == "sysop" && n.text == why), "member {p} told");
+    }
+    assert!(!s.p(c).inbox.iter().any(|n| n.text == why), "outsiders are not");
+    assert!(s.w.news.iter().any(|n| n.headline.contains("merged into")));
+    assert!(
+        admin(&mut s, merge(beta, alpha, why, None, None)).is_err(),
+        "the absorbed corporation no longer exists"
+    );
+    replay_matches(&s);
+}

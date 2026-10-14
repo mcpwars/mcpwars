@@ -1103,7 +1103,7 @@ fn apply_change(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn log_decision(
+pub(crate) fn log_decision(
     ctx: &mut Ctx,
     corp: CorpId,
     kind: &str,

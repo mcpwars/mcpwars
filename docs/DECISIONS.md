@@ -2203,3 +2203,20 @@ and load it correctly, in the web console and the apps. The console listed menti
 | `checkin_minutes` moves with the store | A core rule refuses rules whose store does not refill in exactly one check-in interval: the first deploy with only `ap_max` changed was refused at startup and the old server kept the universe |
 | `render.yaml` mirrors the live `AF_RULES_PATCH` exactly | The live variable is edited in Render (the Blueprint does not sync from this repository); the file had drifted (`contract_stake_bp`, never live) |
 
+## 2026-10-14: The operator merges corporations (engine 1.60)
+
+The owner asked for a merge of corporations in the sysop MCP, API, web console and app, with a
+message explaining it. Until now the operator could only disband one and move captains one by one,
+which returns every deposit, pays the treasury to the CEO and drops the record.
+
+| Decision | Why |
+|---|---|
+| A journaled admin command `MergeCorps {from, into, message, name?, ceo?}`; `into` survives with its id, government (form, tax, laws, term), ledger and seat; `from` is removed | One id keeps every reference to the survivor valid; the survivor's institutions are the ones its members built. The operator picks the direction |
+| `from`'s members join at once; its treasury and each member's reserved deposit move over; the two records add up; invitations are pooled | Nothing is paid out or lost: deposits stay claims on the merged treasury, and reputation counts facts about both parts |
+| Treaties and wars between the two end (bonds returned, no breach); `into`'s treaties with a captain who just joined it end; `from`'s other open treaties and wars pass to `into` unless `into` already has the same kind with that party, when `from`'s copy ends with bonds returned; ended ones keep their original sides on the record | A corporation cannot have a pact or a war with itself or one of its members, and two copies of one pact would double bonds; a merged corporation inherits its parts' obligations and enemies |
+| `from`'s open measures, elections and warrants lapse; the survivor's founding-grant season is the later of the two; `from`'s seat is taken only when the survivor has none | Votes and laws belong to the corporation that held them; the grant must not pay twice; a seat the survivor chose stays |
+| Corporation-shared market reports pass to the survivor; `from`'s corporation radio stays on its own channel (operator only) | Market reports are shared working data for the corporation; old corporation radio was written for a smaller audience and is not re-shared |
+| `message` is required (at most 2,000 characters, `OPERATOR_TEXT_MAX`) and reaches every member of both as a trusted operator message; each also gets a corporation notice with the facts, the survivor's ledger a `merge` entry by `SYSOP`, the news a line | The owner wants every captain affected to know why; the facts and the reason are separate so the reason is the operator's own words |
+| `name` may take `from`'s name; `ceo` must be a member of either | A merger often keeps the better known name; the CEO rule matches `set_corp` |
+| The web console (Merge in the corporation inspector, either direction, typed confirmation) and the app (a typed-confirmation action, also in the native confirmation list) | Irreversible, like disband |
+| Engine 1.60 | A new journaled command; older builds cannot replay it |
