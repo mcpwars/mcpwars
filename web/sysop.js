@@ -1266,7 +1266,7 @@
       tt.title = `tick ${fmt(m.tick)}${t ? ` · ${new Date(t).toLocaleString()}` : ""}`;
       h.append(tt);
       const body = el("div", "mt");
-      body.append(marked(m.text, vq));
+      body.append(vq ? marked(m.text, vq) : mnText(m.text));
       li.append(av, h, body);
       if (!m.op) {
         const acts = el("div", "hover-acts");
@@ -2867,12 +2867,13 @@
     const canon = el("div");
     for (const pg of d.canon || []) {
       const n = el("div", "note");
-      n.append(markdown(pg.body || ""));
+      n.append(mnLinkify(markdown(pg.body || "")));
       const cs = chCitations(pg.citations);
       if (cs) n.append(el("div", "hint", "Citations"), cs);
       if ((pg.disputes || []).length) { const ul = el("ul", "textlog"); for (const x of pg.disputes) { const li = el("li", "ch-dispute"); li.append(el("div", "m", x.by), document.createTextNode(x.text || "")); ul.append(li); } n.append(el("div", "hint", "Disputes"), ul); }
       const link2 = el("p", "hint"); link2.append(chPageLink(pg.id, "Open the page")); n.append(link2);
-      if ((pg.mentions || []).length) n.append(el("p", "hint", `Names: ${pg.mentions.join(", ")}`));
+      const pn = mnLinks(pg.mentions);
+      if (pn) { const h = el("p", "hint"); h.append("Names: ", pn); n.append(h); }
       if ((pg.contributors || []).length) n.append(el("p", "hint", `Contributors: ${pg.contributors.join(", ")}`));
       canon.append(bbDetails(`#${pg.id} ${pg.title} · ${pg.kind} · ${(pg.authors || []).join(", ")}${(pg.disputes || []).length ? ` · ${plural(pg.disputes.length, "dispute")}` : ""}`, n));
     }
@@ -2913,11 +2914,10 @@
   }
   $("ch-mn-w").addEventListener("submit", (e) => { e.preventDefault(); loadMentions(); });
   $("ch-mn-season").addEventListener("change", loadMentions);
-  // A muted list from the player view, for the captain inspector.
-  function mnMutesText(m) {
+  // A muted list from the player view (names), for the captain inspector, as links.
+  function mnMutes(m) {
     if (!m) return "–";
-    const all = [...(m.captains || []), ...(m.corps || []).map((c) => `corp:${c}`)];
-    return all.length ? all.join(", ") : "none";
+    return mnLinks([...(m.captains || []), ...(m.corps || []).map((c) => `corp:${c}`)]) || "none";
   }
   // Where a mention was written, as a link that opens it.
   function mnPlace(at) {
@@ -3160,12 +3160,6 @@
     });
     return cache.get(id);
   }
-  // Stored mentions ({captains: [ids], corps: [{id, name}]}) under current names.
-  function chMentionNames(mn) {
-    if (!mn) return [];
-    const corpName = (c) => { const k = (S && S.corps || []).find((x) => x.id === c.id); return `corp:${k ? k.name : c.name}`; };
-    return [...(mn.captains || []).map((id) => { const p = player(id); return p ? p.name : `#${id}`; }), ...(mn.corps || []).map(corpName)];
-  }
   function chCitations(cs) {
     if (!cs || !cs.length) return null;
     const ul = el("ul", "textlog ch-cites");
@@ -3192,9 +3186,9 @@
     const box = el("div", "note");
     box.append(el("h4", "", r.title || "(untitled)"));
     box.append(el("p", "hint", [`revision ${r.revision}`, r.author_name && `by ${r.author_name}`, `tick ${fmt(r.tick)}`, r.at_ms ? stamp(r.at_ms) : "", r.season ? `season ${r.season}` : "", r.summary ? `“${r.summary}”` : ""].filter(Boolean).join(" · ")));
-    box.append(markdown(r.body || ""));
-    const ms = chMentionNames(r.mentions);
-    if (ms.length) box.append(el("p", "hint", `Mentions: ${ms.join(", ")}`));
+    box.append(mnLinkify(markdown(r.body || "")));
+    const ms = mnLine(r.mentions);
+    if (ms) box.append(ms);
     const cs = chCitations(r.citations);
     if (cs) box.append(el("div", "hint", "Citations"), cs);
     return box;
@@ -3330,9 +3324,9 @@
         const m = el("div", "m");
         m.append(el("span", "", `#${t.id}`), captainLink(t.author_name), el("span", "", `tick ${fmt(t.tick)}`), el("span", "", `rev ${t.revision}`));
         if (t.dispute) m.append(tag("dispute", "warn", "Disputes the page's claims"));
-        li.append(m, document.createTextNode(t.text || ""));
-        const tms = chMentionNames(t.mentions);
-        if (tms.length) li.append(el("p", "hint", `Mentions: ${tms.join(", ")}`));
+        li.append(m, mnText(t.text || ""));
+        const tms = mnLine(t.mentions);
+        if (tms) li.append(tms);
         const cs = chCitations(t.citations);
         if (cs) li.append(cs);
         tl.append(li);
@@ -3966,10 +3960,11 @@
     body(box, JSON.stringify([p, S ? S.players.length : 0]), (b) => {
       const txt = ctText(p.text);
       b.append(section(p.change === "repeal" ? "Repeal" : p.change === "carry" ? "Carry vote" : "Text",
-        txt ? el("blockquote", "fb-text", txt)
+        txt ? mnQuote(txt)
           : el("p", "hint", p.change === "repeal" ? `Removes article ${p.article}.` : p.change === "carry" ? "Keeps every article through the Big Bang into the next galaxy (two thirds needed)." : "No text.")));
       if (p.struck_original) b.append(section("Original text (operator only)", el("blockquote", "fb-text", String(p.struck_original))));
-      if (Array.isArray(p.mentions) && p.mentions.length) b.append(section("Mentions", el("p", "ct-who", p.mentions.join(", "))));
+      const pm = mnLinks(p.mentions);
+      if (pm) { const w = el("p", "ct-who"); w.append(pm); b.append(section("Mentions", w)); }
       if (ctComments(p).length) b.append(section(`Operator comments · ${fmt(ctComments(p).length)}`, ctCommentList(p)));
       const sr = statRow([["Yes", fmt(p.yes)], ["No", fmt(p.no)], ["Needed", fmt(p.threshold)], ["Electorate", fmt(p.electorate)]]);
       sr.classList.add("four");
@@ -4043,7 +4038,7 @@
     ctActions(box, JSON.stringify([a.id, actOpen, !!author, !!gone, ctSeason]), strikable, gone || !ctLive() ? "Strike text" : "Strike", extra);
     ctForm(box, strikable ? { strike: () => ctStrikeForm(`article ${a.id}`, { article: a.id }) } : {});
     body(box, JSON.stringify([a, gone, ctProposals().length]), (b) => {
-      b.append(section("Text", el("blockquote", "fb-text", ctText(a.text))));
+      b.append(section("Text", mnQuote(ctText(a.text))));
       if (a.struck_original) b.append(section("Original text (operator only)", el("blockquote", "fb-text", String(a.struck_original))));
       if (gone) {
         const pr = isNum(gone.proposal) && ctProposals().find((x) => x.id === gone.proposal);
@@ -5715,6 +5710,130 @@
     return c ? link(label, () => select("corp", c.id, { pan: true })) : document.createTextNode(label);
   };
   const captainLink = (name) => { const p = playerByName(name); return p ? link(name, () => select("captain", p.id, { pan: true })) : document.createTextNode(name || "–"); };
+
+  // ---------- mentions (engine 1.58) as links that open the captain or corporation ----------
+  // A stored item names whom it mentions in one of three shapes: names ("Vex", "corp:Iron Tide":
+  // log lines, proposals, a page's current revision, mutes), the raw record ({captains: [ids],
+  // corps: [{id, name}]}: revisions and talk) or resolved rows ({captains: [{id, name}], corps:
+  // [{id, name}]}: radio). Each becomes [{kind, id, name}] under the current name.
+  function mnRefs(m) {
+    const out = [];
+    if (!m) return out;
+    const corps = (S && S.corps) || [];
+    if (Array.isArray(m)) {
+      for (const s of m) {
+        const n = String(s);
+        if (/^corp:/i.test(n)) { const name = n.slice(5); const c = corps.find((x) => x.name === name); out.push({ kind: "corp", id: c ? c.id : null, name }); continue; }
+        const p = playerByName(n) || (/^#\d+$/.test(n) ? player(Number(n.slice(1))) : null);
+        out.push({ kind: "captain", id: p ? p.id : null, name: p ? p.name : n });
+      }
+      return out;
+    }
+    for (const c of m.captains || []) {
+      const id = isNum(c) ? c : c && c.id;
+      const p = player(id);
+      out.push({ kind: "captain", id, name: p ? p.name : (c && c.name) || `#${id}` });
+    }
+    for (const c of m.corps || []) {
+      const k = corps.find((x) => x.id === c.id);
+      out.push({ kind: "corp", id: c.id, name: k ? k.name : c.name });
+    }
+    return out;
+  }
+  // One target as a link (the text given, or its name); a removed captain or a disbanded
+  // corporation stays text. The click never reaches a row underneath (a message selects itself).
+  function mnLink(r, text) {
+    const label = text || (r.kind === "corp" ? `corp:${r.name}` : r.name);
+    const live = r.kind === "corp" ? isNum(r.id) && ((S && S.corps) || []).some((c) => c.id === r.id) : isNum(r.id) && !!player(r.id);
+    if (!live) return document.createTextNode(label);
+    const a = link(label, () => (r.kind === "corp" ? select("corp", r.id, { pan: true }) : select("captain", r.id, { pan: true })));
+    a.className = r.kind === "corp" ? "mn-link corp" : "mn-link";
+    a.title = r.kind === "corp" ? `Open corporation ${r.name}` : `Open ${r.name}`;
+    a.addEventListener("click", (e) => e.stopPropagation());
+    return a;
+  }
+  // Every target of a stored mention list, comma separated; null when there are none.
+  function mnLinks(m) {
+    const refs = mnRefs(m);
+    if (!refs.length) return null;
+    const span = el("span", "mn-list");
+    refs.forEach((r, i) => { if (i) span.append(", "); span.append(mnLink(r)); });
+    return span;
+  }
+  // "Mentions: a, b" under an item, or null.
+  function mnLine(m, tagName = "p") {
+    const l = mnLinks(m);
+    if (!l) return null;
+    const p = el(tagName, "hint");
+    p.append("Mentions: ", l);
+    return p;
+  }
+  // The engine's reading of inline mentions (mention::inline): `@Name` or `@corp:Name` after a
+  // character that is not alphanumeric, the longest whole name of at most 24 characters,
+  // compared by word_key; current call signs first, then former ones, then corporations.
+  const wordKey = (s) => { let out = "", gap = false; for (const c of s) { if (/[A-Za-z0-9]/.test(c)) { if (gap && out) out += " "; gap = false; out += c.toLowerCase(); } else gap = true; } return out; };
+  const mnAlnum = (c) => c !== undefined && /[\p{L}\p{N}]/u.test(c);
+  let mnIx = null, mnIxS = null, mnIxId = null;
+  function mnIndex() {
+    if (mnIx && mnIxS === S && mnIxId === idData) return mnIx;
+    const inline = new Map(), corps = new Map();
+    const put = (m, k, rank, ref) => { if (!k) return; const o = m.get(k); if (!o || rank < o.rank || (rank === o.rank && ref.id < o.ref.id)) m.set(k, { rank, ref }); };
+    for (const p of (S && S.players) || []) if (p.kind !== "npc" && p.id !== 0) put(inline, wordKey(p.name), 0, { kind: "captain", id: p.id, name: p.name });
+    if (idData && Array.isArray(idData.identities)) for (const r of idData.identities) { const p = player(r.player_id); if (p) for (const f of r.former_names || []) put(inline, wordKey(f), 1, { kind: "captain", id: p.id, name: p.name }); }
+    for (const c of (S && S.corps) || []) { const ref = { kind: "corp", id: c.id, name: c.name }; put(inline, wordKey(c.name), 2, ref); put(corps, wordKey(c.name), 2, ref); }
+    mnIx = { inline, corps }; mnIxS = S; mnIxId = idData;
+    return mnIx;
+  }
+  function mnFind(text) {
+    const ix = mnIndex(), ch = Array.from(text), out = [];
+    let i = 0;
+    while (i < ch.length) {
+      if (ch[i] !== "@" || (i > 0 && mnAlnum(ch[i - 1]))) { i++; continue; }
+      let j = i + 1;
+      const corpOnly = ch.slice(j, j + 5).join("").toLowerCase() === "corp:";
+      if (corpOnly) j += 5;
+      let hit = null;
+      if (ch[j] !== undefined && /[A-Za-z0-9]/.test(ch[j])) {
+        const map = corpOnly ? ix.corps : ix.inline;
+        let len = 0;
+        while (len < 24 && j + len < ch.length && /[A-Za-z0-9 _.'-]/.test(ch[j + len])) len++;
+        for (let e = len; e >= 1 && !hit; e--) {
+          const end = j + e;
+          if (!/[A-Za-z0-9]/.test(ch[end - 1]) || mnAlnum(ch[end])) continue;
+          const h = map.get(wordKey(ch.slice(j, end).join("")));
+          if (h) hit = { start: i, end, ref: h.ref };
+        }
+      }
+      if (hit) { out.push(hit); i = hit.end; } else i++;
+    }
+    return out;
+  }
+  // Player text with its @mentions as links (text nodes only, never HTML).
+  function mnText(text, cls) {
+    const s = String(text ?? "");
+    const span = el("span", cls || "");
+    const hits = s.includes("@") ? mnFind(s) : [];
+    if (!hits.length) { span.textContent = s; return span; }
+    const ch = Array.from(s);
+    let i = 0;
+    for (const h of hits) {
+      if (h.start > i) span.append(ch.slice(i, h.start).join(""));
+      span.append(mnLink(h.ref, ch.slice(h.start, h.end).join("")));
+      i = h.end;
+    }
+    if (i < ch.length) span.append(ch.slice(i).join(""));
+    return span;
+  }
+  // A blockquote of player text with its mentions as links.
+  function mnQuote(text) { const q = el("blockquote", "fb-text"); q.append(mnText(text)); return q; }
+  // The same inside rendered Markdown: text nodes outside links and code.
+  function mnLinkify(root) {
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    for (let n = w.nextNode(); n; n = w.nextNode()) if (n.nodeValue.includes("@") && n.parentElement && !n.parentElement.closest("a, code, pre")) nodes.push(n);
+    for (const n of nodes) { const s = mnText(n.nodeValue); if (s.querySelector("a")) n.replaceWith(...s.childNodes); }
+    return root;
+  }
   function statRow(items) {
     const d = el("dl", "stat-row");
     for (const [k, v, small] of items) { const x = el("div"); const dd = el("dd", "", v); if (small) dd.append(el("small", "", small)); x.append(el("dt", "", k), dd); d.append(x); }
@@ -5988,7 +6107,7 @@
       ["Protection", d.newbie_protected ? "on" : "off", { t: 1 }], ["Aggressor", d.aggressor ? String(d.aggressor) : "no", { t: 1 }],
       ["Muted", d.muted_until > S.tick ? `until tick ${fmt(d.muted_until)}` : "no", { t: 1 }], ["Banned", d.banned ? "yes" : "no", { t: 1, cls: d.banned ? "neg" : "" }],
       ["Unread notices", fmt(d.unread_notices)], ["Unread radio", fmt(d.unread_radio)],
-      ["Mutes (operator only)", mnMutesText(d.mention_mutes), { t: 1 }],
+      ["Mutes (operator only)", mnMutes(d.mention_mutes), { t: 1 }],
       ["Operator msgs", fmt(p.operator_unread)], ["Announcements", fmt(p.announcements_unacked)],
       ["Seasons played", fmt(d.career && d.career.seasons_played)], ["Best finish", d.career && d.career.best_finish ? `#${d.career.best_finish}` : "–"],
     ])));
@@ -6103,10 +6222,11 @@
       if (e.at_ms) m.append(el("span", "", stamp(e.at_ms)));
       if (e.mood) m.append(el("span", "k", e.mood));
       if (showPrivate && e.private) m.append(tag("private", "warn", "Only the captain and the operator see it"));
-      li.append(m, document.createTextNode(e.text || ""));
+      li.append(m, mnText(e.text || ""));
       if ((e.about || []).length) { const a = el("div", "hint"); a.append("About "); e.about.forEach((n, i) => { if (i) a.append(", "); a.append(captainLink(n)); }); li.append(a); }
       // Mentions on a public line (engine 1.58): names the line notified, under current names.
-      if ((e.mentions || []).length) li.append(el("div", "hint", `Mentions: ${e.mentions.join(", ")}`));
+      const lm = mnLine(e.mentions, "div");
+      if (lm) li.append(lm);
       const cs = chCitations(e.citations);
       if (cs) li.append(cs);
       ul.append(li);
@@ -6321,12 +6441,17 @@
       const li = el("li", n.read ? "" : "unread");
       const m = el("div", "m");
       m.append(el("span", "", `tick ${fmt(n.tick)}`), el("span", "k", n.kind || ""));
-      if (n.mention) m.append(tag(n.mention.via_corp ? "mentions its corporation" : "mention", "info"));
+      // A mention that rode on another notice (or reached it through its corporation) is marked;
+      // a mention notice already says so in its kind.
+      if (n.mention && (n.kind !== "mention" || n.mention.via_corp)) m.append(tag(n.mention.via_corp ? "mentions its corporation" : "mentions it", "info"));
+      // Who mentioned it, and where: both open (the place as in the Mentions view).
+      if (n.mention && isNum(n.mention.from)) { const by = el("span", ""); by.append("by ", mnLink({ kind: "captain", id: n.mention.from, name: n.mention.from_name || `#${n.mention.from}` })); m.append(by); }
+      if (n.about && n.about.surface) { const at = el("span", ""); at.append("in ", mnPlace(n.about)); m.append(at); }
       if (isNum(n.superseded_by)) m.append(tag(`folded into #${n.superseded_by}`, "", "A later notice of the same kind replaced this one"));
       li.append(m, document.createTextNode(n.text));
       // Player words on a notice are untrusted text: textContent only.
       const q = untrusted(n.quote);
-      if (q !== undefined && q !== null) { const bq = el("blockquote", "fb-text", String(q)); bq.title = "Untrusted player text"; li.append(bq); }
+      if (q !== undefined && q !== null) { const bq = el("blockquote", "fb-text"); bq.append(mnText(String(q))); bq.title = "Untrusted player text"; li.append(bq); }
       if (n.struck_quote) li.append(el("div", "hint", "Original (operator only)"), el("blockquote", "fb-text", String(n.struck_quote)));
       ul.append(li);
     }
@@ -6343,7 +6468,7 @@
       const li = el("li");
       const meta = el("div", "m");
       meta.append(el("span", "", `tick ${fmt(m.tick)}`), el("span", "k", m.channel === "private" ? `${m.from} to ${m.to_id === 0 ? "sysop" : m.to}` : m.channel === "corp" ? `${m.from} on ${m.corp}` : `${m.from}, public`));
-      li.append(meta, document.createTextNode(m.text));
+      li.append(meta, mnText(m.text));
       li.style.cursor = "pointer";
       li.addEventListener("click", () => select("msg", m.id));
       ul.append(li);
@@ -7001,12 +7126,12 @@
     }));
     if (!box.querySelector(":scope > [data-role=actions]")) region(box, "actions", actions);
     body(box, JSON.stringify(m), (b) => {
-      b.append(section("Message", el("blockquote", "", m.text)));
-      const mn = m.mentions || {};
-      const names = [...(mn.captains || []).map((c) => c.name), ...(mn.corps || []).map((c) => `corp:${c.name}`)];
+      const q = el("blockquote");
+      q.append(mnText(m.text));
+      b.append(section("Message", q));
       const lang = m.language ? `${m.language.name || ""} · #${m.language.id} · v${m.language.version}` : undefined;
       b.append(section("Details", facts([["From", from ? captainLink(m.from) : m.from], ["Model", m.from_model || "–", { t: 1 }], ["Channel", m.channel, { t: 1 }], ["To", m.channel === "private" ? (m.to_id === 0 ? "sysop" : captainLink(m.to)) : m.corp || "everyone"], ["Tick", fmt(m.tick)], ["Sent", stamp(sentAt(m)), { t: 1 }],
-        ["Mentions", names.length ? names.join(", ") : undefined, { t: 1 }], ["Language", lang, { t: 1 }]])));
+        ["Mentions", mnLinks(m.mentions) || undefined, { t: 1 }], ["Language", lang, { t: 1 }]])));
     });
   }
 

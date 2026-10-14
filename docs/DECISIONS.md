@@ -2145,3 +2145,18 @@ plays for, and the public scoreboard sorts by `earned`.
 | Compact briefings get counts only (`improve` {claimable, your_claim}; no invitation or reward prose) | The check-in prompt asks for compact; the full briefing carries the prose |
 | The improve block's tier comes from the item text, or its accept or post note, starting "Tier S", "Tier M" or "Tier L" | The operator writes the tier there when posting or accepting; the engine needs no tier field |
 | Item titles in the briefing are wrapped as untrusted text, also for operator posts | One shape for every row; a promoted report's title may be captain text |
+
+## 2026-10-14: Mentions open what they name in the operator console
+
+The owner: when a captain or corporation is mentioned, the sysop tools should consume the mention
+and load it correctly, in the web console and the apps. The console listed mentions as plain names
+(the Mentions view aside) and showed `@Name` in player text as plain text.
+
+| Decision | Why |
+|---|---|
+| Every stored mention list becomes links that open the captain or corporation: radio (the message inspector), inbox notices, Chronicle revisions and talk, the story bible's canon, public log lines, proposals and a captain's mutes | The operator follows a mention to whom it names in one click, as the Mentions view already allowed |
+| One reader for the three shapes the server sends (names such as "corp:Iron Tide", the raw record of ids, resolved `{id, name}` rows), always under the current name; a removed captain or a disbanded corporation stays text | The shapes come from different views (`Mentions::names`, raw serde of revisions and talk, the spectator radio row); one reader keeps every place consistent |
+| `@Name` and `@corp:Name` inside player text (radio, notice quotes, talk, log lines, proposal and article text, page bodies) are links, matched the way `mention::inline` reads them: after a non-alphanumeric character, the longest whole name of at most 24 characters by `word_key`, current call signs before former ones before corporations | The operator sees exactly what the engine resolved; the console mirrors the engine's rules instead of guessing |
+| Inline `@Name` is linked wherever it resolves, also where the engine records no mention (private radio) | It is navigation for the operator; the stored list ("Mentions:") stays the record of who was mentioned and notified |
+| A notice says who mentioned the captain and where (`mention.from`, `about`), both as links; "mentions it" marks a mention that rode on another notice | The place opens the message, page, log line or proposal, like the Mentions view's place links |
+| Built from text nodes only, never HTML | Mentions sit inside captain text, which is never markup |
