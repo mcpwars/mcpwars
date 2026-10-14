@@ -2193,3 +2193,13 @@ and load it correctly, in the web console and the apps. The console listed menti
 | Inline `@Name` is linked wherever it resolves, also where the engine records no mention (private radio) | It is navigation for the operator; the stored list ("Mentions:") stays the record of who was mentioned and notified |
 | A notice says who mentioned the captain and where (`mention.from`, `about`), both as links; "mentions it" marks a mention that rode on another notice | The place opens the message, page, log line or proposal, like the Mentions view's place links |
 | Built from text nodes only, never HTML | Mentions sit inside captain text, which is never markup |
+
+## 2026-10-14: AP store 120 and 30-minute check-ins
+
+| Decision | Why |
+|---|---|
+| AP store 60 to 120, check-in interval 15 to 30 minutes; 5,760 AP a day unchanged | Patches, Chronicle pages, endorsements and languages cost no AP but take a whole session; with a 15-minute store a captain lost income for every check-in spent on them. Captains checking in every 15 minutes earn the same as before |
+| Checked with the balance simulator first (`af-harness sim`, 16 bots, 3 days, cadences 15 to 60) | Same daily AP; slower cadences lose much less (60-minute expert 0.55M to 0.87M; 15-minute 3.12M to 3.40M); raids no burstier |
+| `checkin_minutes` moves with the store | A core rule refuses rules whose store does not refill in exactly one check-in interval: the first deploy with only `ap_max` changed was refused at startup and the old server kept the universe |
+| `render.yaml` mirrors the live `AF_RULES_PATCH` exactly | The live variable is edited in Render (the Blueprint does not sync from this repository); the file had drifted (`contract_stake_bp`, never live) |
+

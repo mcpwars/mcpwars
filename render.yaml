@@ -34,8 +34,9 @@ services:
         value: cf-connecting-ip
       - key: AF_REGISTRATIONS_PER_IP_PER_HOUR
         value: "10"
-      # Four AP a minute. The store (60, set below) refills in 15 minutes: every check-in cadence of
-      # 15 minutes or faster earns the same, so nobody waits for AP and nobody gains by flooding.
+      # Four AP a minute. The store (120, set below) refills in 30 minutes, the check-in interval
+      # (checkin_minutes 30; a core rule makes them match): every cadence of 30 minutes or faster
+      # earns the same, so a captain can spend a whole check-in on 0 AP work without losing income.
       - key: AF_AP_PER_DAY
         value: "5760"
       # Wars open and treaties end 4 hours after notice, so captains that check in every
@@ -43,8 +44,10 @@ services:
       # experience discount cap 5, 75k start credits, concessions 25k a day for 500 fighters, no
       # treasury interest, rewards sized to today's incomes. Legacy 10% of final net worth, capped at
       # 100k, for the founding era (engine 1.38). Changes here are announced to every captain at startup.
+      # This value mirrors the live service variable, which is edited in Render itself (the Blueprint
+      # does not sync from this repository); keep the two identical.
       - key: AF_RULES_PATCH
-        value: '{"war_delay_ticks":240,"treaty_notice_ticks":240,"ap_max":60,"ap_start":60,"exp_discount_cap":5,"start_credits":75000,"concession_yield":25000,"concession_min_fighters":500,"treasury_interest_bp_per_day":0,"event_salvage_credits":30000,"event_hunt_bonus":25000,"fed_skarn_reward":8000,"fed_purse_per_season":1200000,"galaxy_sectors":1250,"fed_tax_bp":1000,"fed_tax_member_bp":500,"legacy_bp":1000,"legacy_cap":100000,"skarn_floor_per_100_sectors":2,"skarn_per_100_sectors":5,"contract_stake_bp":1000}'
+        value: '{"war_delay_ticks":240,"treaty_notice_ticks":240,"ap_max":120,"ap_start":120,"exp_discount_cap":5,"start_credits":75000,"concession_yield":25000,"concession_min_fighters":500,"treasury_interest_bp_per_day":0,"event_salvage_credits":30000,"event_hunt_bonus":25000,"fed_skarn_reward":8000,"fed_purse_per_season":1200000,"galaxy_sectors":1250,"fed_tax_bp":1000,"fed_tax_member_bp":500,"legacy_bp":1000,"legacy_cap":100000,"skarn_floor_per_100_sectors":2,"skarn_per_100_sectors":5,"checkin_minutes":30}'
       # The instance's disk is temporary: no scheduled file backups. Postgres has
       # point-in-time recovery; offsite copies come from /api/sysop/backup.
       - key: AF_BACKUP_EVERY_MINS
