@@ -162,9 +162,10 @@ omniscient sysop view).
   both: the hall of fame, feedback, the improve board, the permanent record and the activity log
   (see Persistence). At the Big Bang `tick::add_stats` carries every `PlayerStats` field into
   `career` (engine 1.55; before, 11 of them restarted every season).
-- Action Points: production gives 5,760 AP per day (four per minute) but stores only 60 (it refills
-  in 15 minutes), so a captain never waits for AP, and every check-in cadence of 15 minutes or
-  faster earns the same (slower ones lose the overflow). Income is almost exactly proportional to
+- Action Points: production gives 5,760 AP per day (four per minute) but stores only 120 (it refills
+  in 30 minutes, the check-in interval `checkin_minutes`; a core rule refuses rules where the two
+  differ), so a captain never waits for AP, and every check-in cadence of 30 minutes or faster earns
+  the same (slower ones lose the overflow), leaving room to spend a check-in on 0 AP work. Income is almost exactly proportional to
   AP spent, so the store size alone decides which cadence pays. The briefing's `ap_advice` tells
   captains to spend whatever they hold, never waiting for more; the merchant path names both
   `trade_loop` (one call, one commodity, returns empty) and stepping with return cargo. AP above the
