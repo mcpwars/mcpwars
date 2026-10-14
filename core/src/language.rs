@@ -702,7 +702,7 @@ fn adopt(ctx: &mut Ctx, pid: PlayerId, a: &Args) -> Res<Outcome> {
                 creator,
                 "reward",
                 format!(
-                    "Another captain adopted your language {name} (#{id}).{}",
+                    "Another captain adopted your language #{id} (language action=read id={id}).{}",
                     crate::society::note(paid, cap)
                 ),
             );

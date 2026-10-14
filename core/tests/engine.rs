@@ -9076,6 +9076,31 @@ mod improve_board {
         replays(&s);
     }
 
+    // 6c. The briefing block (engine 1.59): the claim with a deadline shows before one in review
+    // (which holds its claimant but does not count toward the claim cap), and an item whose trail
+    // is full is not counted as claimable (a claim would be refused).
+    #[test]
+    fn briefing_shows_the_leased_claim_and_skips_full_trails() {
+        let mut s = Sim::new(69, 60);
+        let a = s.join("Alder");
+        on(&mut s);
+        let first = post(&mut s, "First");
+        let second = post(&mut s, "Second");
+        s.run(Actor::Player(a), imp(json!({"action":"claim","id":first}))).unwrap();
+        patch(&mut s, a, first).unwrap();
+        assert_eq!(item(&s, first).status, Status::Review);
+        let out = s.run(Actor::Player(a), imp(json!({"action":"claim","id":second}))).unwrap();
+        let b = improve::briefing(&s.w, a, false).unwrap();
+        assert_eq!(b["your_claim"]["id"], second, "{b}");
+        assert_eq!(b["your_claim"]["expires_tick"], out.reply["expires_tick"]);
+        let third = post(&mut s, "Third");
+        assert_eq!(improve::briefing(&s.w, a, true).unwrap()["claimable"], 1);
+        let full = item(&s, third).trail.len();
+        set(&mut s, json!({"improve_trail_max": full}));
+        assert_eq!(improve::briefing(&s.w, a, true).unwrap()["claimable"], 0);
+        replays(&s);
+    }
+
     // 7. The board and the ledger survive a Big Bang and a fresh start; Influence counts in the
     // award's season and epoch.
     #[test]

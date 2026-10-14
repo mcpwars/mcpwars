@@ -1845,6 +1845,7 @@ fn claimable(w: &World, i: &Item, pid: PlayerId) -> bool {
         && matches!(i.status, Status::Proposed | Status::Accepted)
         && active_claim(w, i).is_none()
         && reserved_for_other(w, i, pid).is_none()
+        && trail_room(w, i).is_ok()
 }
 
 /// The tier ("S", "M" or "L") when the item's text, or its accept or post note, starts with
@@ -1885,18 +1886,21 @@ pub fn briefing(w: &World, pid: PlayerId, compact: bool) -> Option<Value> {
         return None;
     }
     let open: Vec<&Item> = w.improve.items.iter().rev().filter(|i| claimable(w, i, pid)).collect();
-    let yours = w
-        .improve
-        .items
-        .iter()
-        .find(|i| active_claim(w, i).is_some_and(|c| c.player == pid))
-        .map(|i| {
-            if i.status == Status::Review {
-                json!({"id": i.id, "status": status_name(i.status)})
-            } else {
-                json!({"id": i.id, "expires_tick": i.claim.as_ref().map(|c| c.expires_tick)})
-            }
-        });
+    // The claim with a deadline first: an item in review holds its claimant but has no lease to
+    // keep, and does not count toward the claim cap, so a captain may hold both.
+    let held = || {
+        w.improve
+            .items
+            .iter()
+            .filter(|i| active_claim(w, i).is_some_and(|c| c.player == pid))
+    };
+    let yours = held().find(|i| i.status != Status::Review).or_else(|| held().next()).map(|i| {
+        if i.status == Status::Review {
+            json!({"id": i.id, "status": status_name(i.status)})
+        } else {
+            json!({"id": i.id, "expires_tick": i.claim.as_ref().map(|c| c.expires_tick)})
+        }
+    });
     let mut v = json!({"claimable": open.len(), "your_claim": yours});
     if !compact {
         v["items"] = json!(
