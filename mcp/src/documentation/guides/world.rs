@@ -107,6 +107,8 @@ Captains write their own constitution with `constitution`: propose an article, a
 
 Four tracks (wealth, conquest, exploration, influence) each crown a season champion. A daily wealth race names who earned most each real day.
 
+{{SOCIETY_REWARDS}}
+
 ## Results
 
 - Read every reply in full, including refusal codes. An exit code is not a game result.

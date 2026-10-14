@@ -15,8 +15,11 @@
 //!   `improve_operator_ops_per_day`.
 //! - **The kill switch** `rules.improve_enabled` (off by default): while off, captain writes are
 //!   refused, reads work, and the operator may only decline, ship, return or clear a claim.
-//! - **Awards are Influence only**, from the permanent award ledger, counted in the award's
-//!   season and epoch (`influence`); never credits, bank, endowment, `earned` or the Wealth track.
+//! - **Awards give Influence and credits.** Influence comes from the permanent award ledger,
+//!   counted in the award's season and epoch (`influence`). Since engine 1.59 an award also pays
+//!   `amount x improve_credits_per_influence` credits into the captain's bank at once (recorded
+//!   as the award's `credits`; see `society`), which count in net worth, `earned` and the daily
+//!   wealth race. The Influence budget bounds both.
 //! - The server never applies a patch. Text is stored exactly (only NUL removed) and refused
 //!   whole when too long. Every field is a string or number, never a JSON value. Nothing here is
 //!   ever cleared: Big Bangs and fresh starts keep the board and the ledger.
@@ -216,7 +219,8 @@ pub struct Item {
     pub closed_tick: Option<Tick>,
 }
 
-/// One Influence award, keyed `improve:<id>:<player>`. The ledger is permanent.
+/// One award (Influence, and credits since engine 1.59), keyed `improve:<id>:<player>`. The
+/// ledger is permanent.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Award {
     pub key: String,
@@ -231,6 +235,9 @@ pub struct Award {
     pub epoch: u32,
     #[serde(default)]
     pub note: Option<String>,
+    /// Credits paid with the award (engine 1.59; 0 for earlier awards).
+    #[serde(default)]
+    pub credits: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1656,6 +1663,9 @@ fn award(ctx: &mut Ctx, a: &AdminArgs, note: Option<String>) -> Res<Outcome> {
             ),
         ));
     }
+    // Engine 1.59: credits at the live rate, into the bank, beside the Influence.
+    let due = amount.saturating_mul(r.improve_credits_per_influence.max(0));
+    let credits = crate::society::pay(ctx, pid, crate::society::Source::Improve, due, None).paid;
     ctx.w.improve.awards.push(Award {
         key: key.clone(),
         item: id,
@@ -1668,17 +1678,31 @@ fn award(ctx: &mut Ctx, a: &AdminArgs, note: Option<String>) -> Res<Outcome> {
         season: ctx.w.season.number,
         epoch: ctx.w.archive.epoch,
         note,
+        credits,
     });
+    let paid = if credits > 0 {
+        format!(" and {credits} credits (paid into your bank)")
+    } else {
+        String::new()
+    };
     ctx.notify(
         pid,
         "improve",
         format!(
-            "You were awarded {amount} Influence for improve item #{id} (shipped in {commit}). It counts on this season's Influence track."
+            "You were awarded {amount} Influence{paid} for improve item #{id} (shipped in {commit}). The Influence counts on this season's Influence track."
         ),
     );
     Ok(ctx.finish(
-        format!("Awarded {amount} Influence to {} for improve item #{id}.", p.name),
-        json!({"key": key, "id": id, "player": pid, "amount": amount}),
+        format!(
+            "Awarded {amount} Influence{} to {} for improve item #{id}.",
+            if credits > 0 {
+                format!(" and {credits} credits")
+            } else {
+                String::new()
+            },
+            p.name
+        ),
+        json!({"key": key, "id": id, "player": pid, "amount": amount, "credits": credits}),
     ))
 }
 
@@ -1796,7 +1820,9 @@ pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
                     .awards
                     .iter()
                     .filter(|x| x.item == i.id)
-                    .map(|x| json!({"captain": name_of(w, x.player, &x.call_sign), "amount": x.amount, "tick": x.tick}))
+                    .map(
+                        |x| json!({"captain": name_of(w, x.player, &x.call_sign), "amount": x.amount, "credits": x.credits, "tick": x.tick})
+                    )
                     .collect::<Vec<_>>()
             );
             Ok(json!({"item": v, "trust": TRUST}))
@@ -1807,14 +1833,102 @@ pub fn read(w: &World, pid: PlayerId, a: &Args) -> Res<Value> {
 
 /// How shipped work is awarded: the operator's tier table (policy text, not rules). Each award is
 /// still capped by `improve_award_max` and the daily budget.
-pub const AWARDS: &str = "Awards (Influence, never credits). Each item's tier is in its accept note. A patch that ships as sent (applies to its stated base, the CI gate passes on its first run, it includes a test that fails without the change, it touches only the item's files) earns S 1,000, M 1,500, L 2,000; after one return the captain fixed: half; if the operator had to finish it: a quarter. A proposal or report that ships with its premise as written: 500. Nothing for claims, declines or unshipped work.";
+pub const AWARDS: &str = "Awards (Influence, plus credits at the live rate: credits_per_influence credits per Influence point, paid into the bank). Each item's tier is in its accept note. A patch that ships as sent (applies to its stated base, the CI gate passes on its first run, it includes a test that fails without the change, it touches only the item's files) earns S 1,000, M 1,500, L 2,000; after one return the captain fixed: half; if the operator had to finish it: a quarter. A proposal or report that ships with its premise as written: 500. Nothing for claims, declines or unshipped work.";
+
+/// Items the briefing names at most.
+pub const BRIEFING_ITEMS: usize = 2;
+
+/// An item `pid` could claim now: visible, proposed or accepted, unclaimed and not held for
+/// someone else (the claim caps are the claim's own check).
+fn claimable(w: &World, i: &Item, pid: PlayerId) -> bool {
+    visible(i, pid)
+        && matches!(i.status, Status::Proposed | Status::Accepted)
+        && active_claim(w, i).is_none()
+        && reserved_for_other(w, i, pid).is_none()
+}
+
+/// The tier ("S", "M" or "L") when the item's text, or its accept or post note, starts with
+/// "Tier S" (or M, L; any case).
+pub fn tier(i: &Item) -> Option<&'static str> {
+    fn of(t: &str) -> Option<&'static str> {
+        let t = t.trim_start();
+        let head = t.get(..5)?;
+        if !head.eq_ignore_ascii_case("tier ") {
+            return None;
+        }
+        let mut rest = t[5..].chars();
+        let c = rest.next()?.to_ascii_uppercase();
+        if rest.next().is_some_and(|n| n.is_alphanumeric()) {
+            return None;
+        }
+        match c {
+            'S' => Some("S"),
+            'M' => Some("M"),
+            'L' => Some("L"),
+            _ => None,
+        }
+    }
+    of(&i.text).or_else(|| {
+        i.trail
+            .iter()
+            .filter(|s| matches!(s.kind, StepKind::Accept | StepKind::Post))
+            .find_map(|s| s.note.as_deref().and_then(of))
+    })
+}
+
+/// The briefing's `improve` block (engine 1.59), or None while the board is switched off: how
+/// many items the captain could claim now, its own active claim, and (full briefing only) up to
+/// `BRIEFING_ITEMS` of them, newest first, with the live reward.
+pub fn briefing(w: &World, pid: PlayerId, compact: bool) -> Option<Value> {
+    let r = &w.rules;
+    if !r.improve_enabled {
+        return None;
+    }
+    let open: Vec<&Item> = w.improve.items.iter().rev().filter(|i| claimable(w, i, pid)).collect();
+    let yours = w
+        .improve
+        .items
+        .iter()
+        .find(|i| active_claim(w, i).is_some_and(|c| c.player == pid))
+        .map(|i| {
+            if i.status == Status::Review {
+                json!({"id": i.id, "status": status_name(i.status)})
+            } else {
+                json!({"id": i.id, "expires_tick": i.claim.as_ref().map(|c| c.expires_tick)})
+            }
+        });
+    let mut v = json!({"claimable": open.len(), "your_claim": yours});
+    if !compact {
+        v["items"] = json!(
+            open.iter()
+                .take(BRIEFING_ITEMS)
+                .map(|i| {
+                    let mut row = json!({"id": i.id, "title": crate::query::untrusted(&i.title)});
+                    if let Some(t) = tier(i) {
+                        row["tier"] = json!(t);
+                    }
+                    row
+                })
+                .collect::<Vec<_>>()
+        );
+        let rate = r.improve_credits_per_influence;
+        v["reward"] = json!(if rate > 0 {
+            format!(
+                "A shipped patch pays Influence and {rate} credits per Influence point (S/M/L tiers): improve action=list; game_rules improve.awards."
+            )
+        } else {
+            "A shipped patch pays Influence (S/M/L tiers): improve action=list; game_rules improve.awards.".to_string()
+        });
+    }
+    Some(v)
+}
 
 /// The `game_rules` block: what the board is and its live limits.
 pub fn rules_view(w: &World) -> Value {
     let r = &w.rules;
     json!({
         "tool": "improve", "ap": 0, "enabled": r.improve_enabled,
-        "about": "A board for changes to this server's code and docs: submit a proposal, claim an item, and send a patch as a unified diff against a public commit. The operator reviews; the server never applies a patch. Shipped work may earn Influence awards, never credits. Improve items are not problem reports (send_feedback is for those); security flaws go only to send_feedback.",
+        "about": "A board for changes to this server's code and docs: submit a proposal, claim an item, and send a patch as a unified diff against a public commit. The operator reviews; the server never applies a patch. Shipped work may earn awards: Influence, plus credits_per_influence credits per Influence point into the bank (they count in net worth, earned and the daily wealth race). Improve items are not problem reports (send_feedback is for those); security flaws go only to send_feedback.",
         "visibility": "Accepted items plus your own; a diff body only to its sender.",
         "window_ticks": r.improve_window_ticks,
         "submits_per_day": r.improve_submits_per_day, "global_submits_per_day": r.improve_global_submits_per_day,
@@ -1825,6 +1939,7 @@ pub fn rules_view(w: &World) -> Value {
         "note_max": r.improve_note_max, "patch_max_bytes": r.improve_patch_max_bytes,
         "patch_max_files": r.improve_patch_max_files, "trail_max": r.improve_trail_max,
         "items_max": r.improve_items_max, "award_max": r.improve_award_max, "awards": AWARDS,
+        "credits_per_influence": r.improve_credits_per_influence,
         "award_budget_per_day": r.improve_award_budget_per_day,
         "operator_ops_per_day": r.improve_operator_ops_per_day,
     })

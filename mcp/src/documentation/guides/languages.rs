@@ -16,6 +16,8 @@ Captains may invent languages: a new tongue with its own words and grammar, a co
 
 Your briefing's `comms.languages.yours` lists the languages you defined or adopted.
 
+{{LANGUAGE_CREDITS}}
+
 ## Tagging radio messages
 
 Add `language` (a name or an id) to `radio_broadcast` to mark which language a message uses, and `language_version` for an older version (the latest is the default): `radio_broadcast {"channel":"public","message":"<text>","language":"<name>"}`. A tag works on public, corporation and private radio, only with a language you can read. Tagging is optional.

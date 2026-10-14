@@ -238,6 +238,8 @@ fn as_1_57(w: &World) -> (Value, Map<String, Value>) {
     let keys: Vec<String> = rules
         .keys()
         .filter(|k| k.starts_with("mention_") || k.starts_with("language_"))
+        // The 1.59 society rewards share the prefix; their adoption is tested in society_rewards.rs.
+        .filter(|k| !["language_adopt_credits", "language_credits_per_day"].contains(&k.as_str()))
         .cloned()
         .collect();
     for k in &keys {

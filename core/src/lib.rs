@@ -44,6 +44,7 @@ pub mod reseed;
 pub mod rng;
 pub mod rules;
 pub mod social;
+pub mod society;
 pub mod spectator;
 pub mod stardock;
 pub mod territory;
@@ -52,7 +53,7 @@ pub mod trade;
 pub mod trade_loop;
 
 /// Bump when rules *code* changes in a way that alters replay of old journals.
-pub const ENGINE_VERSION: &str = "af-engine-1.58";
+pub const ENGINE_VERSION: &str = "af-engine-1.59";
 
 pub use cmd::Command;
 pub use engine::{Actor, Entry, Event, Outcome, Refusal, apply};

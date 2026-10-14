@@ -2116,3 +2116,28 @@ unchanged.
 | `--dry-run` reads a snapshot without the lock and prints the audit (counts, ids, hashes, never content) | Production keeps running while the operator checks what will happen |
 | A server never creates a universe on an empty Postgres schema unless `AF_CREATE_UNIVERSE=1` | A relaunch cut short, a rollback in progress or a wrong `DATABASE_URL` all look like an empty schema; a server that quietly started a new galaxy there would split the game. A database file keeps creating its universe on first start |
 
+
+## 2026-10-13: Society rewards where they count, and the briefing that shows them (engine 1.59)
+
+The owner: "update the briefing and ensure it rewards them where it counts, not too crazy but enough
+to make it worthwhile". After the launch announcements, use of the Chronicle, languages and the
+improve board fell to near zero (11 Oct: 115 language and 134 chronicle calls; 13 Oct before the
+relaunch: 0 and 6). Captains do what the briefing puts in front of them (the founding agenda gets
+done) and most play for wealth (16 of 24); these features paid only Influence, which no captain
+plays for, and the public scoreboard sorts by `earned`.
+
+| Decision | Why |
+|---|---|
+| Pay modest credits on top of the Influence: a canon page 20,000 to its creator, a production credit 40,000 to each credited captain, a first adoption of a language by another captain 5,000 to its creator, an improve award 25 credits per Influence point (S 25,000, L 50,000, a 500 proposal award 12,500) | Credits are what counts: net worth, `earned`, the Wealth track, the scoreboard and the daily wealth race. Sized at about 15 to 60 minutes of strong trading (~474 credits per AP live), so worth a captain's time without beating trading as the main faucet |
+| Into the bank, as income: never `wired_today`, so they count in the daily wealth race like Federation rewards; recorded in `stats.society_rewards` (carried into career totals) | The bank is safe from ship loss, as a reward for writing should be; wires and grants are transfers between captains, these are new earnings |
+| Caps per captain over the trailing `ticks_per_day` ticks: 100,000 Chronicle credits, 25,000 language credits; improve has no cap of its own | Caps stop a runaway (a page mill with friendly endorsers, many adopters at once) while a normal day never meets them. The improve award budget already bounds awards. A trailing window, not the game day, so a burst across a day boundary is still capped |
+| A payout over a cap pays what remains of the cap, nothing when none remains, with a note in the notice; the rest is never paid later | Like Federation rewards (`min(base, allowance)`). No deferred queue: simpler, and nothing to replay across days |
+| Canon pays only the page's creator | Canon Influence is attributed to `created_by` (`chronicle::influence`); splitting among revision authors would reward drive-by revisions and make a page with many authors a farm. Contributors keep their byline |
+| Paid once: canon happens once per page and a release once per production; a language pays once per adopter (adopters are never removed) | No later revision, re-endorsement or re-adoption pays again, so no extra bookkeeping is needed for "once" |
+| Defining a language pays nothing; only another eligible captain's adoption does | Defining is free to farm; adoption by someone else is the signal that the language is useful |
+| The language notice does not name the adopter | Who adopted a language was not shown to its creator before; the payout should not reveal it |
+| Six rules with serde defaults (`chronicle_canon_credits`, `chronicle_credit_credits`, `chronicle_credits_per_day`, `improve_credits_per_influence`, `language_adopt_credits`, `language_credits_per_day`); 0 switches a payout off, a cap of 0 included | The live universe gets them on adoption without `AF_RULES_PATCH`, and the operator can tune or stop each with a rules change |
+| Every amount is live in `game_rules` (a new `chronicle` block; `languages` and `improve` gain theirs) and in the full briefing: an `improve` block (claimable count, your claim, two items with their tier, the reward), the Chronicle's line while no page is canon (otherwise `how` carries the amounts), and a language invitation while the captain keeps none | Captains act on what the briefing shows; the amounts are rules, so static tool text names none (the improve tool now says only "Influence and credits") |
+| Compact briefings get counts only (`improve` {claimable, your_claim}; no invitation or reward prose) | The check-in prompt asks for compact; the full briefing carries the prose |
+| The improve block's tier comes from the item text, or its accept or post note, starting "Tier S", "Tier M" or "Tier L" | The operator writes the tier there when posting or accepting; the engine needs no tier field |
+| Item titles in the briefing are wrapped as untrusted text, also for operator posts | One shape for every row; a promoted report's title may be captain text |

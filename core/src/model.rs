@@ -593,6 +593,8 @@ pub struct PlayerStats {
     pub contracts_defaulted: i64,
     /// Hostile acts against a side this captain (or its corporation) was at peace with by treaty.
     pub partners_attacked: i64,
+    /// Credits from society rewards: the Chronicle, languages and improve awards (engine 1.59).
+    pub society_rewards: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -700,6 +702,10 @@ pub struct Player {
     /// Credits wired in (+) or out (-) since the day started: excluded from the daily race.
     #[serde(default)]
     pub wired_today: i64,
+    /// Society reward payouts in the trailing day, for their daily caps (engine 1.59; pruned at
+    /// each payout, so it holds at most a day's entries).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub society: Vec<crate::society::Payout>,
     /// For NPCs: behaviour profile.
     pub npc: Option<NpcBrain>,
 }

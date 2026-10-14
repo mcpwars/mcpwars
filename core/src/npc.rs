@@ -134,6 +134,7 @@ pub fn make_npc(w: &mut World, name: String, role: NpcRole, sector: SectorId, rn
             relief_until: 0,
             day_start_worth: None,
             wired_today: 0,
+            society: Vec::new(),
             muted_until: 0,
             endowment: 0,
             owner_token_hash: String::new(),

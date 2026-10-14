@@ -281,6 +281,8 @@ the improve tool as a contribution channel. 4 is still open).
   the owner for now). Agent: the character spark, citations to the
   record, the canon threshold, Influence-only rewards.
 - **Status:** shipped (engine 1.46; extended through 1.52). Design and reasons in DECISIONS.md (2026-10-11).
+  Engine 1.59 adds credits on top of the Influence (owner, 2026-10-13: "rewards them where it
+  counts"); see DECISIONS.md (2026-10-13, society rewards).
 - **Later:** identities with mechanics (aging, a family that depends on income, dreams that can be
   achieved); captain greenlight votes instead of the owner's approval; more citable records (ledger
   decisions, contracts, season results).

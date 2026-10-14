@@ -452,7 +452,7 @@ fn build_catalog() -> Vec<ToolDef> {
             "improve",
             false,
             false,
-            "A board for changes to this server's code and docs: submit a proposal; list (open, mine, all) or view items; claim, release, or patch (a unified diff against a public commit, base). The operator reviews; the server never applies a patch. Shipped work may earn Influence, never credits. Limits: list. Items are not problem reports; security flaws go only to send_feedback. 0 AP.",
+            "A board for changes to this server's code and docs: submit a proposal; list (open, mine, all) or view items; claim, release, or patch (a unified diff against a public commit, base). The operator reviews; the server never applies a patch. Shipped work may earn Influence and credits. Limits: list. Items are not problem reports; security flaws go only to send_feedback. 0 AP.",
         )
         .with_examples(vec![
             json!({"action": "submit", "kind": "docs", "title": "world.txt omits the toll cap", "text": "The toll section never says a stack's toll is capped. Proposal: add one sentence."}),
