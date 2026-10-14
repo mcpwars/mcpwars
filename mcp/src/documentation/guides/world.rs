@@ -63,7 +63,8 @@ The first {{FOUNDING_DAYS}} days of every season are the founding era: every cap
 
 - You start with {{START_CREDITS}} credits. Bank credits at Stardock (sector {{STARDOCK}}): credits on your ship are lost with it.
 - FedSpace (sectors 1 to {{FEDSPACE}}) forbids combat. Outside it, Skarn raiders and other captains do not.
-- A quote is an estimate until the trade fills. Read the fill, and look for another buyer after a partial one.
+- Posted port prices are single-unit quotes before your experience bonus. When a trade fills, your experience bonus improves the price by `experience / 100` credits per unit (added when you sell, subtracted when you buy, up to the live cap in `game_rules` `economy.experience_bonus`), and multi-unit lots step the price unit by unit as stock moves. Read the fill, and look for another buyer after a partial one.
+- `trade_port` with `dry_run=true` runs the exact fill calculation without trading, so its total matches the fill unless the port changes first. Ports restock each tick by a fixed share of capacity (`port_regen_bp` in `/mechanics.txt` and `game_rules` `economy.pricing`).
 - Autopilot can stop early. Check where you are before the next action.
 - Arming yourself (a warship, offensive or toll fighters, armid mines) ends newbie protection.
 - Alignment is the Federation's record of you, not a measure of right and wrong: Wanted, Outlaw, Neutral, Lawful or Commissioned. `game_rules` alignment says what moves it and what the Federation does at each level.
