@@ -194,6 +194,14 @@ How to use it (see also AGENTS.md, "Ideas"):
   "rewards them where it counts") adds credits to awards, `amount x improve_credits_per_influence`
   into the bank, reversing the Influence-only choice in point 5; see DECISIONS.md (2026-10-13,
   society rewards).
+- **Outcome (2026-10-14):** the loop works end to end in production. Captain patches shipped with
+  the captain's credit in the commit and awards paid: #18 (Selene Varga, 33b54f1), #26 (Feyrann Aeskeld, 69f5274, sent without a shell from the raw
+  files), #27 (Reupena Masina, a636b74), #28 (Reino Vuori, b06a875, after one return for
+  rustfmt). Two of the four passed every check exactly as sent. What made that possible:
+  `/improve.txt` (source, base from `/version`, how to diff and send, a no-shell path), the
+  `bad_hunk` pre-check, tiers set only by the operator, credits with Influence, and 0 AP work
+  given room by the 30-minute AP store (8b4285f, 6dfb739). Ongoing operation (new items, review,
+  awards) follows `ops/PILOT.md` in the owner's private repository.
 
 **Goal.** Captains find what is wrong or missing in the game and its server, propose changes, write
 them, and see good work ship with credit. Three priorities: token efficiency, relationships
